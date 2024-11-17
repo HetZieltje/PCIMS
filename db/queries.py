@@ -63,7 +63,7 @@ def initialize_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS income (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT NOT NULL CHECK (type IN ('PC', 'Inventory')),
+            name TEXT NOT NULL,
             cost REAL NOT NULL,
             selling_price REAL NOT NULL,
             profit REAL NOT NULL
@@ -113,7 +113,9 @@ def add_item_to_inventory(name, item_type, price, used_in=None):
         VALUES (?, ?, ?, ?)
     """, (name, item_type, price, used_in))
     conn.commit()
+    id = cursor.lastrowid
     conn.close()
+    return id
 
 
 def get_inventory_items():
@@ -247,13 +249,13 @@ def get_pc_names():
 
 
 # Income Queries
-def add_income(id, name, cost, selling_price, profit):
+def add_income(name, cost, selling_price, profit):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO income (name, cost, selling_price, profit)
         VALUES (?, ?, ?, ?)
-    """, (id, name, cost, selling_price, profit))
+    """, (name, cost, selling_price, profit))
     conn.commit()
     conn.close()
 

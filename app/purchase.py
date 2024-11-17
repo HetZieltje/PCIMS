@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import add_item_to_inventory
+from db.queries import add_item_to_inventory, add_expense
 
 class PurchaseTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -110,67 +110,34 @@ class PurchaseTab(ctk.CTkFrame):
         return rounded_price
     
     def add_bundle(self):
-        if not self.current_purchase_items:
-            # Check if the current form has valid data
-            if self.validate_form():
-                # Add the contents of the form directly into the inventory
-                name = self.name_entry.get()
-                item_type = self.type_var.get()
-                price = float(self.price_entry.get())
-                percentage = float(self.percent_entry.get()) if self.percent_entry.get() else 100.0  # Default to 100.0 if empty
+        # Validate form if no items are in the current purchase list
+        if not self.current_purchase_items and not self.validate_form():
+            messagebox.showerror("Error", "Please enter valid data.")
+            return
 
-                 # Calculate the price after applying the percentage
-                price_after_percentage = self.calc_price(price, percentage)
+        # Add the form entry if valid
+        if self.validate_form():
+            name = self.name_entry.get()
+            type = self.type_var.get()
+            price = float(self.price_entry.get())
+            percentage = float(self.percent_entry.get()) if self.percent_entry.get() else 100.0
+            price_after_percentage = self.calc_price(price, percentage)
+            id = add_item_to_inventory(name, type, price_after_percentage)
+            add_expense(id, name, type, price_after_percentage)
 
-                # Add the item to the inventory
-                add_item_to_inventory(name, item_type, price_after_percentage)
-        
-            else:
-                # Show an error message or take any other necessary action
-                messagebox.showerror("Error", "Please enter valid data.")
-                return
+        # Add items from the current purchase list
+        for item in self.current_purchase_items:            
+            id = add_item_to_inventory(item['name'], item['component_type'], item['price'])
+            add_expense(id, item['name'], item['component_type'], item['price'])
 
-        # Check if the current purchase list has data
-        if self.current_purchase_items:
-            # Check if the current form has valid data
-            if self.validate_form():
-                # Add the contents of the form directly into the inventory
-                name = self.name_entry.get()
-                item_type = self.type_var.get()
-                price = float(self.price_entry.get())
-                percentage = float(self.percent_entry.get()) if self.percent_entry.get() else 100.0  # Default to 100.0 if empty
-
-                # Calculate the price after applying the percentage
-                price_after_percentage = self.calc_price(price, percentage)
-
-                # Add the item to the inventory
-                add_item_to_inventory(name, item_type, price_after_percentage)
-
-            # Iterate through each purchase and add the item to the inventory
-            for item in self.current_purchase_items:
-                name = item['name']
-                item_type = item['component_type']
-                price = item['price']
-                add_item_to_inventory(name, item_type, price)
-
-        # Clear the current purchase list
+        # Clear the current purchase list and UI
         self.current_purchase_items = []
-
-        # Clear the Listbox
         self.current_purchase_listbox.delete(0, tk.END)
-
-        # Clear the entry fields
         self.name_entry.delete(0, tk.END)
-        self.type_dropdown.set("")  # Clear the selection
+        self.type_dropdown.set("")
         self.percent_entry.delete(0, tk.END)
-
-        # Enable the price entry field
         self.price_entry.configure(state="normal")
-
-        # Set the focus to the name entry field
         self.name_entry.focus_set()
-
-        # Clear the price entry field
         self.price_entry.delete(0, tk.END)
 
     def validate_form(self):

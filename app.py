@@ -5,8 +5,8 @@ from customtkinter import *
 
 # Import tab modules
 from app.inventory import InventoryTab
-from app.assemble import AssembleTab
 from app.purchase import PurchaseTab
+from app.assemble import AssembleTab
 from app.balance import BalanceTab
 
 from db.queries import initialize_database
@@ -22,8 +22,8 @@ class PCIMS(ctk.CTk):
 
         # Add all tabs
         self.notebook.add(InventoryTab(self.notebook, self), text="Inventory")
-        self.notebook.add(AssembleTab(self.notebook, self), text="Assemble")
-        self.notebook.add(PurchaseTab(self.notebook, self), text="Purchase")
+        self.notebook.add(PurchaseTab(self.notebook, self), text="Enter Purchase")
+        self.notebook.add(AssembleTab(self.notebook, self), text="Assemble PC")
         self.notebook.add(BalanceTab(self.notebook, self), text="Balance")
 
         self.notebook.pack(expand=1, fill="both")
@@ -64,5 +64,5 @@ if __name__ == "__main__":
     setup_database()
 
     app = PCIMS()
-    # app.protocol("WM_DELETE_WINDOW", app.on_closing)
+    app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop()
