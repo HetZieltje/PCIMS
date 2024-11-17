@@ -40,19 +40,6 @@ class PCIMS(ctk.CTk):
         if hasattr(selected_tab, "refresh"):
             selected_tab.refresh()
 
-    def switch_to_tab(self, tab_name):
-        """Switch to a specific tab by its name."""
-        tab_map = {
-            "Inventory": 0,
-            "Assemble": 1,
-            "Purchase": 2,
-            "Balance": 3,
-        }
-        if tab_name in tab_map:
-            self.notebook.select(tab_map[tab_name])
-        else:
-            raise ValueError(f"Tab '{tab_name}' does not exist.")
-
     def on_closing(self):
         """Handle the window close event."""
         db_path = os.path.join(os.path.dirname(__file__), 'db/pcims_db.db')

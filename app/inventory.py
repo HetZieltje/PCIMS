@@ -26,11 +26,11 @@ class InventoryTab(ctk.CTkFrame):
         self.left_tree.pack(side=tk.LEFT, expand=1, fill="both")
 
         # Right Treeview to display the assembled PCs (similar to the current assemble_tab)
-        self.right_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Price", "CPU", "Cooler", "Motherboard", "RAM", "SSD", "HDD", "GPU", "Case", "PSU", "Fan", "Extra"), show="headings", selectmode="browse")
+        self.right_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Price", "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"), show="headings", selectmode="browse")
         self.right_tree.heading("Name", text="Name")
         self.right_tree.heading("Price", text="Price")
 
-        component_types = ["CPU", "Cooler", "Motherboard", "RAM", "SSD", "HDD", "GPU", "Case", "PSU", "Fan", "Extra"]
+        component_types = ["CPU", "Cooler", "Motherboard", "GPU", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"]
         for component_type in component_types:
             self.right_tree.heading(component_type, text=component_type)
 
@@ -55,11 +55,11 @@ class InventoryTab(ctk.CTkFrame):
         self.right_tree.column("Price", minwidth=50, width=50)
         self.right_tree.column("CPU", minwidth=35, width=35)
         self.right_tree.column("Cooler", minwidth=45, width=45)
+        self.right_tree.column("GPU", minwidth=35, width=35)
         self.right_tree.column("Motherboard", minwidth=80, width=80)
         self.right_tree.column("RAM", minwidth=35, width=35)
         self.right_tree.column("SSD", minwidth=35, width=35)
         self.right_tree.column("HDD", minwidth=35, width=35)
-        self.right_tree.column("GPU", minwidth=35, width=35)
         self.right_tree.column("Case", minwidth=35, width=35)
         self.right_tree.column("PSU", minwidth=35, width=35)
         self.right_tree.column("Fan", minwidth=30, width=30)
@@ -108,7 +108,7 @@ class InventoryTab(ctk.CTkFrame):
 
         # Insert each assembled PC into the Treeview on the right
         for pc in assembled_pcs:
-            pc_info = pc[1], f"€{pc[2]}", f"{pc[3]} {pc[4]}", f"{pc[5]}{pc[6]}", pc[7], pc[8], f"{pc[9]} {pc[10]}", f"{pc[11]} {pc[12]}", f"{pc[13]} {pc[14]}", pc[15], pc[16], f"{pc[17]} {pc[18]} {pc[19]}", f"{pc[20]} {pc[21]} {pc[22]}"
+            pc_info = pc[1], f"€{pc[2]}", f"{pc[3]} {pc[4]}", f"{pc[5]}{pc[6]}", f"{pc[7]} {pc[8]}", pc[9], pc[10], f"{pc[11]} {pc[12]}", f"{pc[13]} {pc[14]}", pc[15], pc[16], f"{pc[17]} {pc[18]} {pc[19]}", f"{pc[20]} {pc[21]} {pc[22]}"
             self.right_tree.insert("", tk.END, values=pc_info)
 
     def switch_to_purchase_tab(self):

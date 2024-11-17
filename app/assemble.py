@@ -19,7 +19,7 @@ class AssembleTab(ctk.CTkFrame):
         self.pc_name_entry.grid(row=0, column=1, pady=5, sticky=tk.W)
 
         # Create labels and dropdowns for each component type
-        component_types = ("CPU", "Cooler", "Motherboard", "RAM", "SSD", "HDD", "GPU", "Case", "PSU", "Fan", "Extra")
+        component_types = ("CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra")
         self.component_types = component_types
 
         # Create a dictionary to store the component type dropdowns
@@ -113,9 +113,9 @@ class AssembleTab(ctk.CTkFrame):
         """
         # Predefined database schema structure
         db_columns = {
-            "cpu1": "", "cpu2": "", "cooler1": "", "cooler2": "",
+            "cpu1": "", "cpu2": "", "cooler1": "", "cooler2": "", "gpu1": "", "gpu2": "",
             "motherboard": "", "ram": "", "ssd1": "", "ssd2": "", "hdd1": "",
-            "hdd2": "", "gpu1": "", "gpu2": "", "pc_case": "", "psu": "",
+            "hdd2": "",  "pc_case": "", "psu": "",
             "fan1": "", "fan2": "", "fan3": "", "extra1": "", "extra2": "", "extra3": ""
         }
         
@@ -127,7 +127,7 @@ class AssembleTab(ctk.CTkFrame):
 
         # Handle storage, fans, and extras (multi-use types)
         multi_mappings = {
-            "CPU": "cpu", "GPU": "gpu", "Cooler": "cooler",
+            "CPU": "cpu", "Cooler": "cooler", "GPU": "gpu",
             "SSD": "ssd", "HDD": "hdd",
             "Fan": "fan", "Extra": "extra"
         }
