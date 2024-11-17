@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import *
+from db.queries import add_item_to_inventory
 
 class PurchaseTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -153,10 +153,6 @@ class PurchaseTab(ctk.CTkFrame):
                 price = item['price']
                 add_item_to_inventory(name, item_type, price)
 
-        """# Refresh the inventory Treeview
-        self.app.refresh_inventory_treeview()
-        self.app.refresh_balance_tab()"""
-
         # Clear the current purchase list
         self.current_purchase_items = []
 
@@ -176,10 +172,6 @@ class PurchaseTab(ctk.CTkFrame):
 
         # Clear the price entry field
         self.price_entry.delete(0, tk.END)
-
-        """# Update the dropdowns in AssembleTab after adding the bundle
-        for component_type in self.app.assemble_tab.component_types:
-            self.app.assemble_tab.update_dropdown(component_type, self.app.assemble_tab.component_entries[component_type])"""
 
     def validate_form(self):
         # Validate the form (name, price, and type must be filled)

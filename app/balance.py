@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import *
+from db.queries import get_expenses, get_inventory_items, get_sold_items, add_expense
 
 class BalanceTab(ctk.CTkFrame):
     def __init__(self, master, app):

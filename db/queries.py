@@ -132,6 +132,12 @@ def delete_item_from_inventory(item_id):
     conn.commit()
     conn.close()
 
+def delete_components_used_in_pc(pc_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM inventory WHERE used_in=?", (pc_name,))
+    conn.commit()
+    conn.close()
 
 def update_used_in_component(pc_name, name, item_type):
     conn = get_connection()
@@ -241,13 +247,13 @@ def get_pc_names():
 
 
 # Income Queries
-def sell_pc(item_id, name, cost, selling_price, profit):
+def add_income(id, name, cost, selling_price, profit):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO income (name, cost, selling_price, profit)
         VALUES (?, ?, ?, ?)
-    """, (item_id, name, cost, selling_price, profit))
+    """, (id, name, cost, selling_price, profit))
     conn.commit()
     conn.close()
 

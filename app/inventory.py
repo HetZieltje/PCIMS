@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import *
+from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, update_used_in_for_deleted_pc, add_income, delete_components_used_in_pc
 
 class InventoryTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -222,11 +222,10 @@ class InventoryTab(ctk.CTkFrame):
                 delete_item_from_inventory(item_id)
                 total_cost = float(item_values[2][1:])
                 profit = round(selling_price - total_cost, 2)
-                self.app.add_income(item_id, item_name, total_cost, selling_price, profit)
+                add_income(item_id, item_name, total_cost, selling_price, profit)
 
                 # Refresh the inventory Treeview and balance tab
                 self.refresh()
-                self.app.balance_tab.refresh_balance_tab()
 
     def sell_assembled_pc(self, selected_item_right):
         # Retrieve the PC name from the right Treeview
@@ -240,22 +239,20 @@ class InventoryTab(ctk.CTkFrame):
             # Ask for confirmation before selling the assembled PC
             confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell {pc_name} for €{selling_price:.2f}?")
             if confirm:
-
                 total_cost = float(pc_info[1][1:])
                 profit = round(selling_price - total_cost, 2)
 
                 # Add the income entry
-                self.app.add_income(pc_name, total_cost, selling_price, profit)
+                add_income(pc_name, total_cost, selling_price, profit)
 
                 # Delete components used in the PC from the inventory
-                self.app.delete_components_used_in_pc(pc_name)
+                delete_components_used_in_pc(pc_name)
 
                 # Delete the assembled PC from the database
                 delete_assembled_pc(pc_name)
 
                 # Refresh the inventory Treeview and balance tab
                 self.refresh()
-                self.app.balance_tab.refresh_balance_tab()
 
     def get_selling_price(self, item_name):
         while True:
