@@ -131,7 +131,7 @@ def delete_item_from_inventory(item_id):
     conn.close()
 
 
-def update_used_in_for_component(pc_name, name, item_type):
+def update_used_in_component(pc_name, name, item_type):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""

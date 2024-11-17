@@ -161,6 +161,11 @@ class AssembleTab(ctk.CTkFrame):
         # Map selected components to the database schema
         db_columns = self.map_components_to_db_schema(selected_components)
 
+        # Update the `used_in` field for all selected components
+        for type, name in selected_components.items():
+            if name:  # Only update if a component is selected
+                    update_used_in_component(pc_name, name, type)
+
         # Calculate the total price
         price = round(get_total_pc_price(pc_name), 2)
 
