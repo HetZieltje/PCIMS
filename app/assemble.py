@@ -114,8 +114,8 @@ class AssembleTab(ctk.CTkFrame):
         # Predefined database schema structure
         db_columns = {
             "cpu1": "", "cpu2": "", "cooler1": "", "cooler2": "",
-            "motherboard": "", "ram": "", "storage1": "", "storage2": "", "storage3": "",
-            "gpu1": "", "gpu2": "", "pc_case": "", "psu": "",
+            "motherboard": "", "ram": "", "ssd1": "", "ssd2": "", "hdd1": "",
+            "hdd2": "", "gpu1": "", "gpu2": "", "pc_case": "", "psu": "",
             "fan1": "", "fan2": "", "fan3": "", "extra1": "", "extra2": "", "extra3": ""
         }
         
@@ -128,7 +128,7 @@ class AssembleTab(ctk.CTkFrame):
         # Handle storage, fans, and extras (multi-use types)
         multi_mappings = {
             "CPU": "cpu", "GPU": "gpu", "Cooler": "cooler",
-            "SSD": "storage", "HDD": "storage",
+            "SSD": "ssd", "HDD": "hdd",
             "Fan": "fan", "Extra": "extra"
         }
 

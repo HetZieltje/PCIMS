@@ -42,9 +42,10 @@ def initialize_database():
             cooler2 TEXT,
             motherboard TEXT,
             ram TEXT,
-            storage1 TEXT,
-            storage2 TEXT,
-            storage3 TEXT,
+            ssd1 TEXT,
+            ssd2 TEXT,
+            hdd1 TEXT,
+            hdd2 TEXT,
             gpu1 TEXT,
             gpu2 TEXT,
             pc_case TEXT,
@@ -81,9 +82,10 @@ def initialize_database():
             cooler2 INTEGER REFERENCES expenses(id),
             motherboard INTEGER REFERENCES expenses(id),
             ram INTEGER REFERENCES expenses(id),
-            storage1 INTEGER REFERENCES expenses(id),
-            storage2 INTEGER REFERENCES expenses(id),
-            storage3 INTEGER REFERENCES expenses(id),
+            ssd1 INTEGER REFERENCES expenses(id),
+            ssd2 INTEGER REFERENCES expenses(id),
+            hdd1 INTEGER REFERENCES expenses(id),
+            hdd2 INTEGER REFERENCES expenses(id)
             gpu1 INTEGER REFERENCES expenses(id),
             gpu2 INTEGER REFERENCES expenses(id),
             pc_case INTEGER REFERENCES expenses(id),
@@ -202,9 +204,9 @@ def assemble_pc(pc_name, price, components):
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO assembled_pcs (
-            name, price, cpu1, cpu2, cooler1, cooler2, motherboard, ram, storage1, storage2, storage3,
-            gpu1, gpu2, pc_case, psu, fan1, fan2, fan3, extra1, extra2, extra3
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            name, price, cpu1, cpu2, cooler1, cooler2, motherboard, ram, ssd1, ssd2, hdd1,
+            hdd2, gpu1, gpu2, pc_case, psu, fan1, fan2, fan3, extra1, extra2, extra3
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (pc_name, price, *components.values()))
 
     conn.commit()

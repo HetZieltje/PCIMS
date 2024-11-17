@@ -108,7 +108,7 @@ class InventoryTab(ctk.CTkFrame):
 
         # Insert each assembled PC into the Treeview on the right
         for pc in assembled_pcs:
-            pc_info = pc[1], f"€{pc[2]}", f"{pc[3]} {pc[4]}", f"{pc[5]}{pc[6]}", pc[7], pc[8], pc[9], f"{pc[10]} {pc[11]}", f"{pc[13]} {pc[14]}", pc[14], pc[15], f"{pc[16]} {pc[17]} {pc[18]}", f"{pc[19]} {pc[20]} {pc[21]}"
+            pc_info = pc[1], f"€{pc[2]}", f"{pc[3]} {pc[4]}", f"{pc[5]}{pc[6]}", pc[7], pc[8], f"{pc[9]} {pc[10]}", f"{pc[11]} {pc[12]}", f"{pc[13]} {pc[14]}", pc[15], pc[16], f"{pc[17]} {pc[18]} {pc[19]}", f"{pc[20]} {pc[21]} {pc[22]}"
             self.right_tree.insert("", tk.END, values=pc_info)
 
     def switch_to_purchase_tab(self):
