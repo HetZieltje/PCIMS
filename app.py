@@ -14,7 +14,7 @@ from db.queries import initialize_database
 class PCIMS(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("PC Inventory Management System")
+        self.title("PCIMS")
         self.geometry("800x600")
 
         # Notebook for managing tabs
