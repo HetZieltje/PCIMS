@@ -48,13 +48,13 @@ class BalanceTab(ctk.CTkFrame):
         self.total_profit_label.pack(side=tk.TOP, padx=10, pady=5)
         
         # Load expenses and sold PCs upon opening the tab
-        self.refresh_balance_tab()
+        self.refresh()
 
         # Bind the left mouse button click to the treeview widgets
         self.left_tree.bind("<Button-1>", self.toggle_selection_left)
         self.right_tree.bind("<Button-1>", self.toggle_selection_right)
 
-    def refresh_balance_tab(self):
+    def refresh(self):
         # Check if the expenses tab is entirely empty
         if not get_expenses() and get_inventory_items():
             # Populate it from inventory if needed
@@ -73,7 +73,7 @@ class BalanceTab(ctk.CTkFrame):
         for expense in expenses:
             expense_info = (
                 expense['name'],
-                expense['component_type'],
+                expense['type'],
                 f"€{expense['price']}"  # Format as Euros
             )
             self.left_tree.insert("", tk.END, values=expense_info)

@@ -23,7 +23,7 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            type TEXT NOT NULL CHECK (type IN ('cpu', 'cooler', 'motherboard', 'ram', 'gpu', 'storage', 'case', 'psu', 'fan', 'extra')),
+            type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'Motherboard', 'RAM', 'HDD', 'SSD', 'GPU', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
             used_in INTEGER REFERENCES assembled_pcs (id) ON DELETE CASCADE,
             FOREIGN KEY (id) REFERENCES expenses (id) ON DELETE CASCADE
@@ -47,7 +47,11 @@ def initialize_database():
             gpu TEXT,
             pc_case TEXT,
             psu TEXT,
-            fan TEXT,
+            fan1 TEXT,
+            fan2 TEXT,
+            fan3 TEXT,
+            fan4 TEXT,
+            fan5 TEXT,
             extra1 TEXT,
             extra2 TEXT,
             extra3 TEXT      
@@ -109,7 +113,7 @@ def add_item_to_inventory(name, item_type, price, used_in=None):
 def get_inventory_items():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT name, type, price, used_in FROM inventory")
+    cursor.execute("SELECT id, name, type, price, used_in FROM inventory")
     items = cursor.fetchall()
     conn.close()
     return items
@@ -164,9 +168,17 @@ def add_expense(item_id, name, item_type, price):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO expenses (name, type, price)
+        INSERT INTO expenses (id, name, type, price)
         VALUES (?, ?, ?, ?)
     """, (item_id, name, item_type, price))
+    conn.commit()
+    conn.close()
+
+
+def delete_expense(item_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM expenses WHERE id=?", (item_id))
     conn.commit()
     conn.close()
 
@@ -185,7 +197,7 @@ def assemble_pc(pc_name, price, components):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO assembled_pcs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO assembled_pcs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (pc_name, price, *components.values()))
     conn.commit()
     conn.close()
@@ -265,15 +277,5 @@ def undo_sale(sold_pc_id):
         # Remove the sold PC record from `sold_pcs`
         cursor.execute("DELETE FROM sold_pcs WHERE id=?", (sold_pc_id,))
 
-    conn.commit()
-    conn.close()
-
-
-# Utility Queries
-def clear_database():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM inventory")
-    cursor.execute("DELETE FROM assembled_pcs")
     conn.commit()
     conn.close()

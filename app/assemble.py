@@ -120,8 +120,8 @@ class AssembleTab(ctk.CTkFrame):
         # Assemble PC in the main app
         assemble_pc(pc_name, price, components)
 
-        # Refresh the Treeview or take any other necessary action to update the UI
-        self.app.inventory_tab.refresh_inventory_treeview()
+        """# Refresh the Treeview or take any other necessary action to update the UI
+        self.app.inventory_tab.refresh_inventory_treeview()"""
 
         # Update the dropdowns in AssembleTab after assembling the PC
         for component_type in self.component_types:

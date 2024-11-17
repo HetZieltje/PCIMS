@@ -9,7 +9,6 @@ from app.assemble import AssembleTab
 from app.purchase import PurchaseTab
 from app.balance import BalanceTab
 
-from db.connection import get_connection
 from db.queries import initialize_database
 
 class PCIMS(ctk.CTk):
@@ -31,6 +30,16 @@ class PCIMS(ctk.CTk):
 
         ctk.set_appearance_mode("light")
 
+        # Bind tab selection event
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_change)
+
+    def on_tab_change(self, event):
+        # Get the currently selected tab
+        selected_tab = self.notebook.nametowidget(self.notebook.select())
+        # Call the refresh method if it exists
+        if hasattr(selected_tab, "refresh"):
+            selected_tab.refresh()
+
     def switch_to_tab(self, tab_name):
         """Switch to a specific tab by its name."""
         tab_map = {
@@ -44,24 +53,29 @@ class PCIMS(ctk.CTk):
         else:
             raise ValueError(f"Tab '{tab_name}' does not exist.")
 
+    def on_closing(self):
+        """Handle the window close event."""
+        db_path = os.path.join(os.path.dirname(__file__), 'db/pcims_db.db')
+
+        # Check if the database file exists
+        
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+        self.destroy()  # Close the application
+    
 # Initialize database only if it doesn't exist
 def setup_database():
     db_path = os.path.join(os.path.dirname(__file__), 'db/pcims_db.db')
 
     # Check if the database file exists
-    db_exists = os.path.exists(db_path)
-
-    # Get a connection
-    connection = get_connection()
-
-    # If the database is new, initialize it
-    if not db_exists:
+    if not os.path.exists(db_path):
+        # Get a connection and initialize the database
         initialize_database()
-
-    connection.close()
 
 if __name__ == "__main__":
     setup_database()
 
     app = PCIMS()
+    app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop()

@@ -86,9 +86,9 @@ class InventoryTab(ctk.CTkFrame):
         self.right_tree.bind("<Button-1>", self.toggle_selection_right)
 
         # Load inventory upon opening the application
-        self.refresh_inventory_treeview()
+        self.refresh()
 
-    def refresh_inventory_treeview(self):
+    def refresh(self):
         # Clear the existing items in both Treeviews
         for item in self.left_tree.get_children():
             self.left_tree.delete(item)
@@ -144,10 +144,10 @@ class InventoryTab(ctk.CTkFrame):
 
                     # Delete the item from the database
                     delete_item_from_inventory(item_id)
-                    self.app.delete_item_from_expenses(item_id)
+                    delete_expense(item_id)
 
                     # Refresh the inventory Treeview
-                    self.refresh_inventory_treeview()
+                    self.refresh()
                     self.app.balance_tab.refresh_balance_tab()
 
         elif selected_item_right:
@@ -163,7 +163,7 @@ class InventoryTab(ctk.CTkFrame):
                 update_used_in_for_deleted_pc(pc_name)
 
                 # Refresh the inventory Treeview
-                self.refresh_inventory_treeview()
+                self.refresh()
                 self.app.balance_tab.refresh_balance_tab()
     
     def toggle_selection_left(self, event):
@@ -227,7 +227,7 @@ class InventoryTab(ctk.CTkFrame):
                 self.app.add_income(item_id, item_name, total_cost, selling_price, profit)
 
                 # Refresh the inventory Treeview and balance tab
-                self.refresh_inventory_treeview()
+                self.refresh()
                 self.app.balance_tab.refresh_balance_tab()
 
     def sell_assembled_pc(self, selected_item_right):
@@ -256,7 +256,7 @@ class InventoryTab(ctk.CTkFrame):
                 delete_assembled_pc(pc_name)
 
                 # Refresh the inventory Treeview and balance tab
-                self.refresh_inventory_treeview()
+                self.refresh()
                 self.app.balance_tab.refresh_balance_tab()
 
     def get_selling_price(self, item_name):
