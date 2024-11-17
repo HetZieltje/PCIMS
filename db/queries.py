@@ -23,7 +23,7 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'Motherboard', 'RAM', 'HDD', 'SSD', 'GPU', 'Case', 'PSU', 'Fan', 'Extra')),
+            type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'Motherboard', 'RAM', 'SSD', 'HDD', 'GPU', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
             used_in INTEGER REFERENCES assembled_pcs (id) ON DELETE CASCADE,
             FOREIGN KEY (id) REFERENCES expenses (id) ON DELETE CASCADE
@@ -36,22 +36,22 @@ def initialize_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             price REAL NOT NULL,
-            cpu TEXT,
-            cooler TEXT,
+            cpu1 TEXT,
+            cpu2 TEXT,
+            cooler1 TEXT,
+            cooler2 TEXT,
             motherboard TEXT,
             ram TEXT,
             storage1 TEXT,
             storage2 TEXT,
             storage3 TEXT,
-            storage4 TEXT,
-            gpu TEXT,
+            gpu1 TEXT,
+            gpu2 TEXT,
             pc_case TEXT,
             psu TEXT,
             fan1 TEXT,
             fan2 TEXT,
             fan3 TEXT,
-            fan4 TEXT,
-            fan5 TEXT,
             extra1 TEXT,
             extra2 TEXT,
             extra3 TEXT      
@@ -75,18 +75,22 @@ def initialize_database():
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             price REAL NOT NULL,
-            cpu INTEGER REFERENCES expenses(id),
-            cooler INTEGER REFERENCES expenses(id),
+            cpu1 INTEGER REFERENCES expenses(id),
+            cpu2 INTEGER REFERENCES expenses(id),
+            cooler1 INTEGER REFERENCES expenses(id),
+            cooler2 INTEGER REFERENCES expenses(id),
             motherboard INTEGER REFERENCES expenses(id),
             ram INTEGER REFERENCES expenses(id),
             storage1 INTEGER REFERENCES expenses(id),
             storage2 INTEGER REFERENCES expenses(id),
             storage3 INTEGER REFERENCES expenses(id),
-            storage4 INTEGER REFERENCES expenses(id),
-            gpu INTEGER REFERENCES expenses(id),
+            gpu1 INTEGER REFERENCES expenses(id),
+            gpu2 INTEGER REFERENCES expenses(id),
             pc_case INTEGER REFERENCES expenses(id),
             psu INTEGER REFERENCES expenses(id),
-            fan INTEGER REFERENCES expenses(id),
+            fan1 INTEGER REFERENCES expenses(id),
+            fan2 INTEGER REFERENCES expenses(id),
+            fan3 INTEGER REFERENCES expenses(id),
             extra1 INTEGER REFERENCES expenses(id),
             extra2 INTEGER REFERENCES expenses(id),
             extra3 INTEGER REFERENCES expenses(id),
@@ -197,8 +201,12 @@ def assemble_pc(pc_name, price, components):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO assembled_pcs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO assembled_pcs (
+            name, price, cpu1, cpu2, cooler1, cooler2, motherboard, ram, storage1, storage2, storage3,
+            gpu1, gpu2, pc_case, psu, fan1, fan2, fan3, extra1, extra2, extra3
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (pc_name, price, *components.values()))
+
     conn.commit()
     conn.close()
 
@@ -220,7 +228,7 @@ def delete_assembled_pc(pc_name):
     conn.close()
 
 
-def get_all_assembled_pc_names():
+def get_pc_names():
     """Fetch all assembled PC names from the database."""
     conn = get_connection()
     cursor = conn.cursor()

@@ -45,10 +45,12 @@ class AssembleTab(ctk.CTkFrame):
         assemble_button = ctk.CTkButton(self, text="Assemble", command=self.assemble_pc)
         assemble_button.grid(row=len(component_types) + 1, column=0, columnspan=2, pady=10)
 
-        # Initialize the UUID dictionary
-        self.uuid_dict = {}
-
         for component_type in component_types:
+            self.update_dropdown(component_type, self.component_entries[component_type])
+
+    def refresh(self):
+        """Refresh all dropdowns when the tab is selected."""
+        for component_type in self.component_types:
             self.update_dropdown(component_type, self.component_entries[component_type])
 
     def get_inventory_items_by_type(self, component_type):
@@ -68,7 +70,7 @@ class AssembleTab(ctk.CTkFrame):
     
     def find_next_available_pc_name(self):
         # Get the list of existing PC names
-        existing_pc_names = get_all_assembled_pc_names()
+        existing_pc_names = get_pc_names()
 
         # Iterate through numbers to find the first available PC name
         for i in range(1, 9999):  # You can adjust the range as needed
@@ -97,35 +99,75 @@ class AssembleTab(ctk.CTkFrame):
         # Set the focus to the PC name entry field
         self.pc_name_entry.focus_set()
 
+    def map_components_to_db_schema(self, selected_components):
+        """
+        Map selected components to the database schema.
+        Fills empty slots with "" for storage, fans, and extras.
+        
+        Args:
+            selected_components (dict): Dictionary of component types and selected values.
+                Example: {"CPU": "Intel i7", "HDD": "Seagate 1TB", "Fan": "CoolerMaster Fan"}
+        
+        Returns:
+            dict: A dictionary with all database columns and their mapped values.
+        """
+        # Predefined database schema structure
+        db_columns = {
+            "cpu1": "", "cpu2": "", "cooler1": "", "cooler2": "",
+            "motherboard": "", "ram": "", "storage1": "", "storage2": "", "storage3": "",
+            "gpu1": "", "gpu2": "", "pc_case": "", "psu": "",
+            "fan1": "", "fan2": "", "fan3": "", "extra1": "", "extra2": "", "extra3": ""
+        }
+        
+        # Direct mapping for single-use component types
+        direct_mappings = {
+            "Motherboard": "motherboard", "RAM": "ram",
+            "Case": "pc_case", "PSU": "psu"
+        }
+
+        # Handle storage, fans, and extras (multi-use types)
+        multi_mappings = {
+            "CPU": "cpu", "GPU": "gpu", "Cooler": "cooler",
+            "SSD": "storage", "HDD": "storage",
+            "Fan": "fan", "Extra": "extra"
+        }
+
+        # Map single-use components
+        for component_type, db_column in direct_mappings.items():
+            db_columns[db_column] = selected_components.get(component_type, "") or ""
+
+        # Handle multi-use components dynamically
+        for component_type, prefix in multi_mappings.items():
+            values = [value for key, value in selected_components.items() if key == component_type and value]
+            for i, value in enumerate(values[:2] if prefix in ["cpu", "cooler", "gpu"] else values[:3]):
+                db_columns[f"{prefix}{i + 1}"] = value or ""
+
+        return db_columns
+
     def assemble_pc(self):
         pc_name = self.pc_name_entry.get()
-        components = {component_type: self.component_entries[component_type].get() for component_type in self.component_types}
+        selected_components = {component_type: self.component_entries[component_type].get() for component_type in self.component_types}
 
-        # Check if at least one component is selected
-        if not any(components.values()):
+        # Ensure at least one component is selected
+        if not any(selected_components.values()):
             messagebox.showerror("Error", "At least one component must be selected.")
             return
 
-        # Check if the PC name is not already in use
-        if pc_name in self.app.get_all_inventory_names():
+        # Check if the PC name is already in use
+        if pc_name in get_pc_names():
             messagebox.showerror("Error", "PC name already in use. Please choose a different name.")
             return
 
-        # Update the used_in field for each component in the assembled PC in the Inventory database
-        for component_type, component_name in components.items():
-            self.app.update_used_in_for_component(pc_name, component_name, component_type)
+        # Map selected components to the database schema
+        db_columns = self.map_components_to_db_schema(selected_components)
 
+        # Calculate the total price
         price = round(get_total_pc_price(pc_name), 2)
 
-        # Assemble PC in the main app
-        assemble_pc(pc_name, price, components)
+        # Insert into the database
+        assemble_pc(pc_name, price, db_columns)
 
-        """# Refresh the Treeview or take any other necessary action to update the UI
-        self.app.inventory_tab.refresh_inventory_treeview()"""
-
-        # Update the dropdowns in AssembleTab after assembling the PC
+        # Refresh dropdowns and clear fields
         for component_type in self.component_types:
             self.update_dropdown(component_type, self.component_entries[component_type])
-
-        # Clear the entry fields
         self.clear_entry_fields()
