@@ -113,7 +113,7 @@ class AssembleTab(ctk.CTkFrame):
         """
         # Predefined database schema structure
         db_columns = {
-            "cpu1": "", "cpu2": "", "cooler1": "", "cooler2": "", "gpu1": "", "gpu2": "",
+            "cpu1": "", "cpu2": "", "cooler1": "", "cooler2": "", "gpu": "",
             "motherboard": "", "ram": "", "ssd1": "", "ssd2": "", "hdd1": "",
             "hdd2": "",  "pc_case": "", "psu": "",
             "fan1": "", "fan2": "", "fan3": "", "extra1": "", "extra2": "", "extra3": ""
@@ -121,13 +121,13 @@ class AssembleTab(ctk.CTkFrame):
         
         # Direct mapping for single-use component types
         direct_mappings = {
-            "Motherboard": "motherboard", "RAM": "ram",
-            "Case": "pc_case", "PSU": "psu"
+            "GPU": "gpu", "Motherboard": "motherboard",
+            "RAM": "ram", "Case": "pc_case", "PSU": "psu"
         }
 
         # Handle storage, fans, and extras (multi-use types)
         multi_mappings = {
-            "CPU": "cpu", "Cooler": "cooler", "GPU": "gpu",
+            "CPU": "cpu", "Cooler": "cooler", 
             "SSD": "ssd", "HDD": "hdd",
             "Fan": "fan", "Extra": "extra"
         }
@@ -139,7 +139,7 @@ class AssembleTab(ctk.CTkFrame):
         # Handle multi-use components dynamically
         for component_type, prefix in multi_mappings.items():
             values = [value for key, value in selected_components.items() if key == component_type and value]
-            for i, value in enumerate(values[:2] if prefix in ["cpu", "cooler", "gpu"] else values[:3]):
+            for i, value in enumerate(values[:2] if prefix in ["cpu", "cooler"] else values[:3]):
                 db_columns[f"{prefix}{i + 1}"] = value or ""
 
         return db_columns

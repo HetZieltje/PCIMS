@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_expenses, get_inventory_items, get_sold_items, add_expense
+from db.queries import get_expenses, get_inventory_items, get_sold_items, add_expense, get_inventory_value
 
 class BalanceTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -46,7 +46,13 @@ class BalanceTab(ctk.CTkFrame):
         
         self.total_profit_label = ctk.CTkLabel(self)
         self.total_profit_label.pack(side=tk.TOP, padx=10, pady=5)
-        
+
+        self.inventory_value_label = ctk.CTkLabel(self)
+        self.inventory_value_label.pack(side=tk.TOP, padx=10, pady=5)
+
+        self.total_assets_label = ctk.CTkLabel(self)
+        self.total_assets_label.pack(side=tk.TOP, padx=10, pady=5)
+
         # Load expenses and sold PCs upon opening the tab
         self.refresh()
 
@@ -93,9 +99,17 @@ class BalanceTab(ctk.CTkFrame):
 
         # Calculate total profit and update the labels with the calculated totals
         total_profit = total_income - total_expenses
+
+        # Calculate inventory value
+        inventory_value = get_inventory_value()
+
+        # Calculate profit + inventory value
+        total_assets = total_profit + inventory_value
         self.total_income_label.configure(text=f"Total Income: €{total_income:.2f}")
         self.total_expenses_label.configure(text=f"Total Expenses: €{total_expenses:.2f}")
         self.total_profit_label.configure(text=f"Total Profit: €{total_profit:.2f}")
+        self.inventory_value_label.configure(text=f"Inventory Value: €{inventory_value:.2f}")
+        self.total_assets_label.configure(text=f"Profit + Inventory Value: €{total_assets:.2f}")
 
     def populate_expenses_from_inventory(self):
         # Get the list of inventory items from the main app

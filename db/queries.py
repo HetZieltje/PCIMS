@@ -40,14 +40,13 @@ def initialize_database():
             cpu2 TEXT,
             cooler1 TEXT,
             cooler2 TEXT,
+            gpu TEXT,
             motherboard TEXT,
             ram TEXT,
             ssd1 TEXT,
             ssd2 TEXT,
             hdd1 TEXT,
             hdd2 TEXT,
-            gpu1 TEXT,
-            gpu2 TEXT,
             pc_case TEXT,
             psu TEXT,
             fan1 TEXT,
@@ -80,8 +79,7 @@ def initialize_database():
             cpu2 INTEGER REFERENCES expenses(id),
             cooler1 INTEGER REFERENCES expenses(id),
             cooler2 INTEGER REFERENCES expenses(id),
-            gpu1 INTEGER REFERENCES expenses(id),
-            gpu2 INTEGER REFERENCES expenses(id),
+            gpu INTEGER REFERENCES expenses(id),
             motherboard INTEGER REFERENCES expenses(id),
             ram INTEGER REFERENCES expenses(id),
             ssd1 INTEGER REFERENCES expenses(id),
@@ -102,7 +100,6 @@ def initialize_database():
 
     conn.commit()
     conn.close()
-
 
 # Inventory Queries
 def add_item_to_inventory(name, item_type, price, used_in=None):
@@ -206,15 +203,24 @@ def get_expenses():
     return [{"name": row[1], "type": row[2], "price": row[3]} for row in items]
 
 
+def get_inventory_value():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT SUM(price) FROM inventory")
+    inventory_value = cursor.fetchone()[0]
+    conn.close()
+    return inventory_value if inventory_value else 0
+
+
 # Assembled PCs Queries
 def assemble_pc(pc_name, price, components):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO assembled_pcs (
-            name, price, cpu1, cpu2, cooler1, cooler2, gpu1, gpu2, motherboard, ram, ssd1, ssd2, hdd1,
+            name, price, cpu1, cpu2, cooler1, cooler2, gpu, motherboard, ram, ssd1, ssd2, hdd1,
             hdd2, pc_case, psu, fan1, fan2, fan3, extra1, extra2, extra3
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (pc_name, price, *components.values()))
 
     conn.commit()
