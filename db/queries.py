@@ -14,7 +14,8 @@ def initialize_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             type TEXT NOT NULL,
-            price REAL NOT NULL
+            price REAL NOT NULL,
+            purchase_date DATE DEFAULT CURRENT_DATE NOT NULL
         )
     ''')
 
@@ -23,7 +24,7 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'Motherboard', 'RAM', 'SSD', 'HDD', 'GPU', 'Case', 'PSU', 'Fan', 'Extra')),
+            type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
             used_in INTEGER REFERENCES assembled_pcs (id) ON DELETE CASCADE,
             FOREIGN KEY (id) REFERENCES expenses (id) ON DELETE CASCADE
@@ -36,25 +37,17 @@ def initialize_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             price REAL NOT NULL,
-            cpu1 TEXT,
-            cpu2 TEXT,
-            cooler1 TEXT,
-            cooler2 TEXT,
+            cpu TEXT,
+            cooler TEXT,
             gpu TEXT,
             motherboard TEXT,
             ram TEXT,
-            ssd1 TEXT,
-            ssd2 TEXT,
-            hdd1 TEXT,
-            hdd2 TEXT,
+            ssd TEXT,
+            hdd TEXT,
             pc_case TEXT,
             psu TEXT,
-            fan1 TEXT,
-            fan2 TEXT,
-            fan3 TEXT,
-            extra1 TEXT,
-            extra2 TEXT,
-            extra3 TEXT      
+            fan TEXT,
+            extra TEXT
         )
     ''')
 
@@ -75,26 +68,18 @@ def initialize_database():
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             price REAL NOT NULL,
-            cpu1 INTEGER REFERENCES expenses(id),
-            cpu2 INTEGER REFERENCES expenses(id),
-            cooler1 INTEGER REFERENCES expenses(id),
-            cooler2 INTEGER REFERENCES expenses(id),
+            cpu INTEGER REFERENCES expenses(id),
+            cooler INTEGER REFERENCES expenses(id),
             gpu INTEGER REFERENCES expenses(id),
             motherboard INTEGER REFERENCES expenses(id),
             ram INTEGER REFERENCES expenses(id),
-            ssd1 INTEGER REFERENCES expenses(id),
-            ssd2 INTEGER REFERENCES expenses(id),
-            hdd1 INTEGER REFERENCES expenses(id),
-            hdd2 INTEGER REFERENCES expenses(id),
+            ssd INTEGER REFERENCES expenses(id),
+            hdd INTEGER REFERENCES expenses(id),
             pc_case INTEGER REFERENCES expenses(id),
             psu INTEGER REFERENCES expenses(id),
             fan1 INTEGER REFERENCES expenses(id),
-            fan2 INTEGER REFERENCES expenses(id),
-            fan3 INTEGER REFERENCES expenses(id),
-            extra1 INTEGER REFERENCES expenses(id),
-            extra2 INTEGER REFERENCES expenses(id),
-            extra3 INTEGER REFERENCES expenses(id),
-            sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            extra INTEGER REFERENCES expenses(id),
+            sale_date DATE DEFAULT CURRENT_DATE NOT NULL
         )
     ''')
 
@@ -218,9 +203,8 @@ def assemble_pc(pc_name, price, components):
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO assembled_pcs (
-            name, price, cpu1, cpu2, cooler1, cooler2, gpu, motherboard, ram, ssd1, ssd2, hdd1,
-            hdd2, pc_case, psu, fan1, fan2, fan3, extra1, extra2, extra3
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            name, price, cpu, cooler, gpu, motherboard, ram, ssd, hdd, pc_case, psu, fan, extra
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (pc_name, price, *components.values()))
 
     conn.commit()

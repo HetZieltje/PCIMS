@@ -23,7 +23,7 @@ class PurchaseTab(ctk.CTkFrame):
         self.type_label = ctk.CTkLabel(self, text="Component Type:")
         self.type_var = tk.StringVar()
         self.type_dropdown = ctk.CTkComboBox(self, variable=self.type_var, values=[
-            "", "CPU", "Cooler", "Motherboard", "RAM", "SSD", "HDD", "GPU", "Case", "PSU", "Fan", "Extra"
+            "", "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"
         ], state="readonly", width=110)  # Set state to readonly and height to the number of items
         self.type_label.grid(row=2, column=0, pady=5, padx=10, sticky=tk.W)
         self.type_dropdown.grid(row=2, column=1, pady=5, padx=10, sticky=tk.W)
@@ -54,17 +54,6 @@ class PurchaseTab(ctk.CTkFrame):
         # List to store items in the current purchase
         self.current_purchase_items = []
     
-    def validate_percentage(self, new_value):
-        try:
-            if not new_value:
-                return True  # Allow empty input
-            # Attempt to convert the input to a float
-            float_value = float(new_value)
-            # Check if the value is within the valid range [0, 100]
-            return 0 <= float_value <= 100
-        except ValueError:
-            return False  # Disallow non-numeric input
-    
     def add_item(self):
         name = self.name_entry.get()
         component_type = self.type_var.get()
@@ -76,8 +65,8 @@ class PurchaseTab(ctk.CTkFrame):
             return
 
         if self.price_entry.get():
-            price = float(self.price_entry.get())
-            percentage = float(self.percent_entry.get()) if self.percent_entry.get() else 100.0
+            price = float(self.price_entry.get().replace(',', '.'))
+            percentage = float(self.percent_entry.get().replace(',', '.')) if self.percent_entry.get() else 100.0
             # Calculate the price after applying the percentage
             price_after_percentage = self.calc_price(price, percentage)
         else:
@@ -119,8 +108,8 @@ class PurchaseTab(ctk.CTkFrame):
         if self.validate_form():
             name = self.name_entry.get()
             type = self.type_var.get()
-            price = float(self.price_entry.get())
-            percentage = float(self.percent_entry.get()) if self.percent_entry.get() else 100.0
+            price = float(self.price_entry.get().replace(',', '.'))
+            percentage = float(self.percent_entry.get().replace(',', '.')) if self.percent_entry.get() else 100.0
             price_after_percentage = self.calc_price(price, percentage)
             id = add_item_to_inventory(name, type, price_after_percentage)
             add_expense(id, name, type, price_after_percentage)
@@ -152,16 +141,34 @@ class PurchaseTab(ctk.CTkFrame):
         return True
 
     def validate_price(self, new_value):
-        try:
-            if not new_value:
-                return True  # Allow empty input
+        if not new_value:
+            return True  # Allow empty input
 
+        # Replace commas with periods
+        new_value = new_value.replace(",", ".")
+
+        try:
             # Attempt to convert the input to a float
             float_value = float(new_value)
 
             # Check if the value is non-negative and has at most 2 decimal places
-            return 0 <= float_value < 10**9 and (len(new_value.split('.')[-1]) <= 2 if '.' in new_value else True)
+            return 0 <= float_value < 10**5 and (len(new_value.split('.')[-1]) <= 2 if '.' in new_value else True)
+        except ValueError:
+            return False  # Disallow invalid input
+        
+    def validate_percentage(self, new_value):
+        try:
+            if not new_value:
+                return True  # Allow empty input
+            
+            # Replace commas with periods
+            new_value = new_value.replace(",", ".")
 
+            # Attempt to convert the input to a float
+            float_value = float(new_value)
+
+            # Check if the value is within the valid range [0, 100]
+            return 0 <= float_value <= 100
         except ValueError:
             return False  # Disallow non-numeric input
 
