@@ -263,16 +263,26 @@ class InventoryTab(ctk.CTkFrame):
                     # If the user cancels the input, return None
                     return None
 
-                # Convert the input to a float
-                selling_price = float(selling_price_str)
+                # Normalize the input (replace commas with dots for decimals)
+                normalized_price_str = selling_price_str.replace(',', '.').replace(' ', '.')
 
-                # Ensure the selling price is non-negative
+                normalized_price = float(normalized_price_str)
+
+                if normalized_price < 10**5 and (len(normalized_price_str.split('.')[-1]) <= 2 if '.' in normalized_price_str else True):
+                    raise ValueError("Price format invalid. Must be numeric and up to 2 decimal places.")
+
+                # Convert the input to a float
+                selling_price = float(normalized_price_str)
+
+                # Ensure the selling price is non-negative and under 10^5
                 if selling_price < 0:
                     messagebox.showerror("Invalid Selling Price", "Selling price must be positive.")
+                elif selling_price >= 10**5:
+                    messagebox.showerror("Invalid Selling Price", "Selling price must be less than 100,000.")
                 else:
                     # Return the valid selling price
                     return selling_price
 
-            except ValueError:
-                # Handle invalid input (non-numeric)
-                messagebox.showerror("Invalid Selling Price", "Please enter a valid numeric value for the selling price.")
+            except ValueError as e:
+                # Handle invalid input (non-numeric or invalid format)
+                messagebox.showerror("Invalid Selling Price", str(e))

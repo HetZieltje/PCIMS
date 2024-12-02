@@ -45,7 +45,6 @@ class PCIMS(ctk.CTk):
         db_path = os.path.join(os.path.dirname(__file__), 'db/pcims_db.db')
 
         # Check if the database file exists
-        
         if os.path.exists(db_path):
             os.remove(db_path)
 

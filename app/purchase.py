@@ -65,8 +65,8 @@ class PurchaseTab(ctk.CTkFrame):
             return
 
         if self.price_entry.get():
-            price = float(self.price_entry.get().replace(',', '.'))
-            percentage = float(self.percent_entry.get().replace(',', '.')) if self.percent_entry.get() else 100.0
+            price = float(self.price_entry.get().replace(',', '.').replace(' ', '.'))
+            percentage = float(self.percent_entry.get().replace(',', '.').replace(' ', '.')) if self.percent_entry.get() else 100.0
             # Calculate the price after applying the percentage
             price_after_percentage = self.calc_price(price, percentage)
         else:
@@ -108,8 +108,8 @@ class PurchaseTab(ctk.CTkFrame):
         if self.validate_form():
             name = self.name_entry.get()
             type = self.type_var.get()
-            price = float(self.price_entry.get().replace(',', '.'))
-            percentage = float(self.percent_entry.get().replace(',', '.')) if self.percent_entry.get() else 100.0
+            price = float(self.price_entry.get().replace(',', '.').replace(' ', '.'))
+            percentage = float(self.percent_entry.get().replace(',', '.').replace(' ', '.')) if self.percent_entry.get() else 100.0
             price_after_percentage = self.calc_price(price, percentage)
             id = add_item_to_inventory(name, type, price_after_percentage)
             add_expense(id, name, type, price_after_percentage)
@@ -144,8 +144,7 @@ class PurchaseTab(ctk.CTkFrame):
         if not new_value:
             return True  # Allow empty input
 
-        # Replace commas with periods
-        new_value = new_value.replace(",", ".")
+        new_value = new_value.replace(",", ".").replace(" ", ".")
 
         try:
             # Attempt to convert the input to a float
@@ -163,6 +162,9 @@ class PurchaseTab(ctk.CTkFrame):
             
             # Replace commas with periods
             new_value = new_value.replace(",", ".")
+
+            # Replace commas with periods
+            new_value = new_value.replace(" ", ".")
 
             # Attempt to convert the input to a float
             float_value = float(new_value)
