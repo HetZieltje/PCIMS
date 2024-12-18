@@ -264,25 +264,26 @@ class InventoryTab(ctk.CTkFrame):
                     return None
 
                 # Normalize the input (replace commas with dots for decimals)
-                normalized_price_str = selling_price_str.replace(',', '.').replace(' ', '.')
+                normalized_price_str = selling_price_str.replace(',', '.').replace(' ', '')
 
-                normalized_price = float(normalized_price_str)
+                # Check if input is numeric
+                if not normalized_price_str.replace('.', '').isdigit() or normalized_price_str.count('.') > 1:
+                    raise ValueError("Price must be numeric.")
 
-                if normalized_price < 10**5 and (len(normalized_price_str.split('.')[-1]) <= 2 if '.' in normalized_price_str else True):
-                    raise ValueError("Price format invalid. Must be numeric and up to 2 decimal places.")
-
-                # Convert the input to a float
+                # Convert to float
                 selling_price = float(normalized_price_str)
 
-                # Ensure the selling price is non-negative and under 10^5
+                # Validate decimal places (if any) and range
+                if '.' in normalized_price_str and len(normalized_price_str.split('.')[-1]) > 2:
+                    raise ValueError("Price must have up to 2 decimal places.")
                 if selling_price < 0:
-                    messagebox.showerror("Invalid Selling Price", "Selling price must be positive.")
-                elif selling_price >= 10**5:
-                    messagebox.showerror("Invalid Selling Price", "Selling price must be less than 100,000.")
-                else:
-                    # Return the valid selling price
-                    return selling_price
+                    raise ValueError("Selling price must be positive.")
+                if selling_price >= 10**5:
+                    raise ValueError("Selling price must be less than 100,000.")
+
+                # Return the valid selling price
+                return selling_price
 
             except ValueError as e:
-                # Handle invalid input (non-numeric or invalid format)
+                # Handle invalid input
                 messagebox.showerror("Invalid Selling Price", str(e))
