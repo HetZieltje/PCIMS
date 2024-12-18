@@ -34,8 +34,7 @@ def initialize_database():
     # Assembled PCs table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS assembled_pcs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
+            name TEXT PRIMARY KEY,
             price REAL NOT NULL,
             cpu TEXT,
             cooler TEXT,
