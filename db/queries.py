@@ -13,7 +13,7 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            type TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
             purchase_date DATE DEFAULT CURRENT_DATE NOT NULL
         )
@@ -26,7 +26,7 @@ def initialize_database():
             name TEXT NOT NULL,
             type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
-            used_in INTEGER REFERENCES assembled_pcs (id) ON DELETE CASCADE,
+            used_in TEXT REFERENCES assembled_pcs (name) ON DELETE CASCADE,
             FOREIGN KEY (id) REFERENCES expenses (id) ON DELETE CASCADE
         )
     ''')
@@ -35,7 +35,7 @@ def initialize_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS assembled_pcs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
+            name TEXT NOT NULL UNIQUE,
             price REAL NOT NULL,
             cpu TEXT,
             cooler TEXT,
