@@ -1,4 +1,5 @@
 from db.connection import get_connection
+import uuid
 
 # Initialize the database with required tables
 def initialize_database():
@@ -11,7 +12,7 @@ def initialize_database():
     # Expenses table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
@@ -22,11 +23,11 @@ def initialize_database():
     # Inventory table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS inventory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
-            used_in TEXT REFERENCES assembled_pcs (name) ON DELETE CASCADE,
+            used_in TEXT,
             FOREIGN KEY (id) REFERENCES expenses (id) ON DELETE CASCADE
         )
     ''')
@@ -34,7 +35,8 @@ def initialize_database():
     # Assembled PCs table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS assembled_pcs (
-            name TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
             price REAL NOT NULL,
             cpu TEXT,
             cooler TEXT,
@@ -64,7 +66,7 @@ def initialize_database():
     # Sold PCs table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sold_pcs (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             price REAL NOT NULL,
             cpu INTEGER REFERENCES expenses(id),
@@ -87,16 +89,16 @@ def initialize_database():
 
 # Inventory Queries
 def add_item_to_inventory(name, item_type, price, used_in=None):
+    item_id = str(uuid.uuid4)
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO inventory (name, type, price, used_in)
-        VALUES (?, ?, ?, ?)
-    """, (name, item_type, price, used_in))
+        INSERT INTO inventory (id, name, type, price, used_in)
+        VALUES (?, ?, ?, ?, ?)
+    """, (item_id, name, item_type, price, used_in))
     conn.commit()
-    id = cursor.lastrowid
     conn.close()
-    return id
+    return item_id
 
 
 def get_inventory_items():
@@ -173,7 +175,7 @@ def add_expense(item_id, name, item_type, price):
 def delete_expense(item_id):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM expenses WHERE id=?", (item_id))
+    cursor.execute("DELETE FROM expenses WHERE id=?", (item_id,))
     conn.commit()
     conn.close()
 
