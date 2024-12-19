@@ -199,9 +199,18 @@ class PurchaseTab(ctk.CTkFrame):
                 self.price_entry.configure(state="normal")
                 self.price_entry.delete(0, tk.END)
 
+    def refresh(self):
+        """Refresh the Listbox when the tab is selected or theme is toggled."""
+        self.refresh_purchase_listbox()
+
     def refresh_purchase_listbox(self):
         # Clear the existing items in the Listbox
         self.current_purchase_listbox.delete(0, tk.END)
+
+        # Set the background and foreground colors based on the current theme
+        bg_color = "#3e3e3e" if self.app.is_dark_mode else "white"
+        fg_color = "white" if self.app.is_dark_mode else "black"
+        self.current_purchase_listbox.configure(bg=bg_color, fg=fg_color)
 
         # Insert each purchase into the Listbox
         for item in self.current_purchase_items:

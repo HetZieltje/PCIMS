@@ -96,6 +96,9 @@ class PCIMS(ctk.CTk):
         style.configure("Light.TNotebook", background="#f0f0f0", foreground="black")
         style.configure("Dark.TNotebook", background="#2e2e2e", foreground="white")
 
+        # Refresh the current tab to apply the theme
+        self.refresh_tab()
+
     def switch_to_purchase_tab(self):
         self.notebook.select(1)
 
