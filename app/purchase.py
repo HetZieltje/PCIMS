@@ -207,10 +207,3 @@ class PurchaseTab(ctk.CTkFrame):
         for item in self.current_purchase_items:
             item_info = f"{item['name']} - {item['component_type']} - {item['price']}"
             self.current_purchase_listbox.insert(tk.END, item_info)
-
-    def refresh(self):
-        self.set_listbox_style()
-        # ...existing code...
-
-    def set_listbox_style(self):
-        self.current_purchase_listbox.configure(bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
