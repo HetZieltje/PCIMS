@@ -64,6 +64,12 @@ class BalanceTab(ctk.CTkFrame):
         self.left_tree.bind("<Button-1>", self.toggle_selection_left)
         self.right_tree.bind("<Button-1>", self.toggle_selection_right)
 
+        # Bind the left mouse button click to the treeview headers for sorting
+        for col in self.left_tree["columns"]:
+            self.left_tree.heading(col, text=col, command=lambda _col=col: self.sort_column(self.left_tree, _col, False))
+        for col in self.right_tree["columns"]:
+            self.right_tree.heading(col, text=col, command=lambda _col=col: self.sort_column(self.right_tree, _col, False))
+
     def refresh(self):
         # Check if the expenses tab is entirely empty
         if not get_expenses() and get_inventory_items():
@@ -150,3 +156,27 @@ class BalanceTab(ctk.CTkFrame):
                 self.right_tree.selection_remove(clicked_item)
             else:
                 self.right_tree.selection_set(clicked_item)
+
+    def sort_column(self, treeview, col, reverse):
+        # Get the list of items in the specified column
+        items = [(self.convert_to_number(treeview.set(k, col)), k) for k in treeview.get_children('')]
+
+        # Sort the items based on the column values
+        items.sort(key=lambda x: (isinstance(x[0], str), x[0].lower() if isinstance(x[0], str) else x[0]), reverse=reverse)
+
+        # Rearrange the items in the Treeview
+        for index, (val, k) in enumerate(items):
+            treeview.move(k, '', index)
+
+        # Reverse the sorting order for the next click
+        treeview.heading(col, command=lambda: self.sort_column(treeview, col, not reverse))
+
+    def convert_to_number(self, value):
+        # Check if the value starts with "€" and try to convert it to a float
+        if value.startswith("€"):
+            try:
+                return float(value[1:])
+            except ValueError:
+                return value
+            
+        return value
