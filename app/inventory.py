@@ -273,6 +273,15 @@ class InventoryTab(ctk.CTkFrame):
             if sale_date is None:
                 return
 
+            # Check if the sale date is before the purchase date of any component
+            inventory_items = get_inventory_items()
+            for item in inventory_items:
+                if item[4] == pc_name:
+                    purchase_date = datetime.strptime(get_purchase_date(item[0]), "%Y-%m-%d").date()
+                    if sale_date < purchase_date:
+                        messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}) of any component.")
+                        return
+
             # Ask for confirmation before selling the assembled PC
             confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell {pc_name} for €{selling_price:.2f}?")
             if confirm:
