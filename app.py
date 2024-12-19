@@ -40,6 +40,15 @@ class PCIMS(ctk.CTk):
         if hasattr(selected_tab, "refresh"):
             selected_tab.refresh()
 
+    def switch_to_purchase_tab(self):
+        self.notebook.select(1)
+
+    def switch_to_assemble_tab(self):
+        self.notebook.select(2)
+    
+    def switch_to_balance_tab(self):
+        self.notebook.select(3)
+
     def on_closing(self):
         """Handle the window close event."""
         db_path = os.path.join(os.path.dirname(__file__), 'db/pcims_db.db')

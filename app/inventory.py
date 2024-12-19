@@ -80,6 +80,10 @@ class InventoryTab(ctk.CTkFrame):
         self.assemble_pc_button = ctk.CTkButton(self, text="Assemble PC", command=self.switch_to_assemble_tab)
         self.assemble_pc_button.pack(side="left", padx=2, pady=3)
 
+        # Balance button
+        self.balance_button = ctk.CTkButton(self, text="Balance", command=self.switch_to_balance_tab)
+        self.balance_button.pack(side="left", padx=2, pady=3)
+
         # Sell button
         self.sell_button = ctk.CTkButton(self, text="Sell", command=self.sell_item)
         self.sell_button.pack(side="left", padx=2, pady=3)
@@ -121,6 +125,10 @@ class InventoryTab(ctk.CTkFrame):
     def switch_to_assemble_tab(self):
         # Call the switch_to_assemble_tab function in the main app
         self.app.switch_to_assemble_tab()
+    
+    def switch_to_balance_tab(self):
+        # Call the switch_to_balance_tab function in the main app
+        self.app.switch_to_balance_tab()
     
     def delete_item(self):
         # Get the selected item from the left or right Treeview
