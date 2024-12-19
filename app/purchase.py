@@ -17,45 +17,45 @@ class PurchaseTab(ctk.CTkFrame):
 
         # Entry fields
         self.name_label = ctk.CTkLabel(self, text="Item Name:")
-        self.name_entry = ctk.CTkEntry(self, width=310)
-        self.name_label.grid(row=1, column=0, pady=5, padx=10, sticky=tk.W)
-        self.name_entry.grid(row=1, column=1, pady=5, padx=10, sticky=tk.W)
+        self.name_entry = ctk.CTkEntry(self, width=200)
+        self.name_label.grid(row=0, column=0, pady=5, padx=10, sticky=tk.W)
+        self.name_entry.grid(row=0, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.type_label = ctk.CTkLabel(self, text="Component Type:")
         self.type_var = tk.StringVar()
         self.type_dropdown = ctk.CTkComboBox(self, variable=self.type_var, values=[
             "", "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"
-        ], state="readonly", width=110)  # Set state to readonly and height to the number of items
-        self.type_label.grid(row=2, column=0, pady=5, padx=10, sticky=tk.W)
-        self.type_dropdown.grid(row=2, column=1, pady=5, padx=10, sticky=tk.W)
+        ], state="readonly", width=150)
+        self.type_label.grid(row=1, column=0, pady=5, padx=10, sticky=tk.W)
+        self.type_dropdown.grid(row=1, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.price_label = ctk.CTkLabel(self, text="Price (Euro):")
-        self.price_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_price), "%P"), width=60)  # Set width for 5 numbers + decimal
-        self.price_label.grid(row=3, column=0, pady=5, padx=10, sticky=tk.W)
-        self.price_entry.grid(row=3, column=1, pady=5, padx=10, sticky=tk.W)
+        self.price_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_price), "%P"), width=100)
+        self.price_label.grid(row=2, column=0, pady=5, padx=10, sticky=tk.W)
+        self.price_entry.grid(row=2, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.percent_label = ctk.CTkLabel(self, text="Percentage of Bundle Price:")
-        self.percent_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_percentage), "%P"), width=60)
-        self.percent_label.grid(row=4, column=0, pady=5, padx=10, sticky=tk.W)
-        self.percent_entry.grid(row=4, column=1, pady=5, padx=10, sticky=tk.W)
+        self.percent_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_percentage), "%P"), width=100)
+        self.percent_label.grid(row=3, column=0, pady=5, padx=10, sticky=tk.W)
+        self.percent_entry.grid(row=3, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.date_label = ctk.CTkLabel(self, text="Purchase Date:")
         self.date_entry = DateEntry(self, width=12, background='darkblue', foreground='white', borderwidth=2)
-        self.date_label.grid(row=5, column=0, pady=5, padx=10, sticky=tk.W)
-        self.date_entry.grid(row=5, column=1, pady=5, padx=10, sticky=tk.W)
+        self.date_label.grid(row=4, column=0, pady=5, padx=10, sticky=tk.W)
+        self.date_entry.grid(row=4, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.add_item_button = ctk.CTkButton(self, text="Add Item", command=self.add_item)
         self.add_bundle_button = ctk.CTkButton(self, text="Add Bundle", command=self.add_bundle)
-        self.add_item_button.grid(row=6, column=0, pady=5, padx=10, sticky=tk.W)
-        self.add_bundle_button.grid(row=6, column=1, pady=10, padx=10, sticky=tk.W)
+        self.add_item_button.grid(row=5, column=0, pady=5, padx=10, sticky=tk.W)
+        self.add_bundle_button.grid(row=5, column=1, pady=5, padx=10, sticky=tk.W)
 
         # Listbox to display items in the current purchase
         self.current_purchase_listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=80)
-        self.current_purchase_listbox.grid(row=7, column=0, columnspan=2, pady=10, padx=10, sticky=tk.W)
+        self.current_purchase_listbox.grid(row=6, column=0, columnspan=2, pady=10, padx=10, sticky=tk.W)
 
         # Delete Item button
         self.delete_item_button = ctk.CTkButton(self, text="Delete Item", command=self.delete_item)
-        self.delete_item_button.grid(row=8, column=0, pady=5, padx=10, sticky=tk.W)
+        self.delete_item_button.grid(row=7, column=0, pady=5, padx=10, sticky=tk.W)
 
         # List to store items in the current purchase
         self.current_purchase_items = []

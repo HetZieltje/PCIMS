@@ -13,7 +13,7 @@ class AssembleTab(ctk.CTkFrame):
 
         # Entry field for the name of the assembled PC
         self.pc_name_label = ctk.CTkLabel(self, text="PC Name:")
-        self.pc_name_entry = ctk.CTkEntry(self, width=325)
+        self.pc_name_entry = ctk.CTkEntry(self, width=200)
         self.pc_name_entry.insert(0, name)
         self.pc_name_label.grid(row=0, column=0, padx=10, pady=5, sticky=tk.W)
         self.pc_name_entry.grid(row=0, column=1, pady=5, sticky=tk.W)
@@ -27,31 +27,27 @@ class AssembleTab(ctk.CTkFrame):
 
         for idx, component_type in enumerate(component_types):
             label = ctk.CTkLabel(self, text=f"{component_type}:")
-            label.grid(row=idx + 1, column=0, padx=10, pady=5, sticky=tk.W)
+            label.grid(row=idx // 2 + 1, column=(idx % 2) * 2, padx=10, pady=5, sticky=tk.W)
 
-            # Create a StringVar to store the selected value
-            var = tk.StringVar(self)
-            dropdown = ttk.Combobox(self, textvariable=var, state="readonly", width=50)
-            dropdown.bind('<FocusIn>', lambda event, comp_type=component_type, dropdown=dropdown: self.update_dropdown(comp_type, dropdown))
-            dropdown.grid(row=idx + 1, column=1, pady=5, sticky=tk.W)
+            # Create a Listbox to allow multiple selections
+            listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=30)
+            listbox.bind('<FocusIn>', lambda event, comp_type=component_type, listbox=listbox: self.update_listbox(comp_type, listbox))
+            listbox.grid(row=idx // 2 + 1, column=(idx % 2) * 2 + 1, pady=5, sticky=tk.W)
 
-            # Save the Combobox in the dictionary
-            self.component_entries[component_type] = dropdown
-
-            # Save the StringVar in the dictionary
-            self.component_entries[f"{component_type}_var"] = var
+            # Save the Listbox in the dictionary
+            self.component_entries[component_type] = listbox
 
         # Create an "Assemble" button
         assemble_button = ctk.CTkButton(self, text="Assemble", command=self.assemble_pc)
-        assemble_button.grid(row=len(component_types) + 1, column=0, columnspan=2, pady=10)
+        assemble_button.grid(row=(len(component_types) // 2) + 2, column=0, columnspan=4, pady=10)
 
         for component_type in component_types:
-            self.update_dropdown(component_type, self.component_entries[component_type])
+            self.update_listbox(component_type, self.component_entries[component_type])
 
     def refresh(self):
         """Refresh all dropdowns when the tab is selected."""
         for component_type in self.component_types:
-            self.update_dropdown(component_type, self.component_entries[component_type])
+            self.update_listbox(component_type, self.component_entries[component_type])
 
     def get_inventory_items_by_type(self, component_type):
         # Retrieve all items of the specified component type from the main app
@@ -81,11 +77,11 @@ class AssembleTab(ctk.CTkFrame):
         # Return a default name if no available name is found
         return "PC"
 
-    def update_dropdown(self, component_type, dropdown):
+    def update_listbox(self, component_type, listbox):
         items = self.get_inventory_items_by_type(component_type)
-        names = [""] + items
-        # Set the updated values to the dropdown
-        dropdown["values"] = names
+        listbox.delete(0, tk.END)
+        for item in items:
+            listbox.insert(tk.END, item)
 
     def clear_entry_fields(self):
         # Use the find_next_available_pc_name method to set the next available PC name
@@ -94,14 +90,14 @@ class AssembleTab(ctk.CTkFrame):
         self.pc_name_entry.insert(0, next_pc_name)
 
         for component_type in self.component_types:
-            self.component_entries[component_type].set("")  # Clear the selection
+            self.component_entries[component_type].selection_clear(0, tk.END)  # Clear the selection
 
         # Set the focus to the PC name entry field
         self.pc_name_entry.focus_set()
 
     def assemble_pc(self):
         pc_name = self.pc_name_entry.get()
-        selected_components = {component_type: self.component_entries[component_type].get() for component_type in self.component_types}
+        selected_components = {component_type: ';'.join([self.component_entries[component_type].get(idx) for idx in self.component_entries[component_type].curselection()]) for component_type in self.component_types}
 
         # Ensure at least one component is selected
         if not any(selected_components.values()):
@@ -114,9 +110,9 @@ class AssembleTab(ctk.CTkFrame):
             return
 
         # Update the `used_in` field for all selected components
-        for type, name in selected_components.items():
-            if name:  # Only update if a component is selected
-                    update_used_in_component(pc_name, name, type)
+        for type, names in selected_components.items():
+            if names:  # Only update if components are selected
+                update_used_in_component(pc_name, names, type)
 
         # Calculate the total price
         price = round(get_total_pc_price(pc_name), 2)
@@ -126,5 +122,5 @@ class AssembleTab(ctk.CTkFrame):
 
         # Refresh dropdowns and clear fields
         for component_type in self.component_types:
-            self.update_dropdown(component_type, self.component_entries[component_type])
+            self.update_listbox(component_type, self.component_entries[component_type])
         self.clear_entry_fields()

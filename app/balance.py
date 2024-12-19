@@ -11,51 +11,66 @@ class BalanceTab(ctk.CTkFrame):
         # Reference to the main app
         self.app = app
 
-        # Left Treeview
-        self.left_tree = ttk.Treeview(self, columns=("Name", "Component Type", "Price", "Purchase Date"), show="headings", selectmode="browse")
+        # Create a PanedWindow to hold two separate Treeviews (left and right)
+        balance_panedwindow = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashwidth=5, sashrelief=tk.RAISED)
+        balance_panedwindow.pack(expand=1, fill="both")
+
+        # Left Treeview to display expenses
+        self.left_tree = ttk.Treeview(balance_panedwindow, columns=("Name", "Component Type", "Price", "Purchase Date"), show="headings", selectmode="browse")
         self.left_tree.heading("Name", text="Name")
         self.left_tree.heading("Component Type", text="Component Type")
         self.left_tree.heading("Price", text="Price")
         self.left_tree.heading("Purchase Date", text="Purchase Date")
-        self.left_tree.pack(side=tk.LEFT, padx=10, pady=10, fill=tk.BOTH, expand=1)
+        self.left_tree.pack(side=tk.LEFT, expand=1, fill="both")
 
-        # Right Treeview
-        self.right_tree = ttk.Treeview(self, columns=("Name", "Total Cost", "Selling Price", "Profit", "Sale Date"), show="headings", selectmode="browse")
+        # Right Treeview to display sold PCs
+        self.right_tree = ttk.Treeview(balance_panedwindow, columns=("Name", "Total Cost", "Selling Price", "Profit", "Sale Date"), show="headings", selectmode="browse")
         self.right_tree.heading("Name", text="Name")
         self.right_tree.heading("Total Cost", text="Total Cost")
         self.right_tree.heading("Selling Price", text="Selling Price")
         self.right_tree.heading("Profit", text="Profit")
         self.right_tree.heading("Sale Date", text="Sale Date")
-        self.right_tree.pack(side=tk.RIGHT, padx=10, pady=10, fill=tk.BOTH, expand=1)
+        self.right_tree.pack(side=tk.RIGHT, expand=1, fill="both")
+
+        # Add the Treeviews to the PanedWindow
+        balance_panedwindow.add(self.left_tree)
+        balance_panedwindow.add(self.right_tree)
+
+        # Set the initial width of the left Treeview
+        balance_panedwindow.paneconfig(self.left_tree, minsize=300)
 
         # Left Treeview columns configuration
-        self.left_tree.column("Name", minwidth=45, width=150)
-        self.left_tree.column("Component Type", minwidth=100, width=100)
-        self.left_tree.column("Price", minwidth=50, width=50)
-        self.left_tree.column("Purchase Date", minwidth=80, width=80)
+        self.left_tree.column("Name", minwidth=100, width=150)
+        self.left_tree.column("Component Type", minwidth=100, width=150)
+        self.left_tree.column("Price", minwidth=50, width=100)
+        self.left_tree.column("Purchase Date", minwidth=80, width=100)
 
         # Right Treeview columns configuration
-        self.right_tree.column("Name", minwidth=45, width=45)
-        self.right_tree.column("Total Cost", minwidth=70, width=70)
-        self.right_tree.column("Selling Price", minwidth=80, width=80)
-        self.right_tree.column("Profit", minwidth=50, width=50)
-        self.right_tree.column("Sale Date", minwidth=80, width=80)
+        self.right_tree.column("Name", minwidth=100, width=150)
+        self.right_tree.column("Total Cost", minwidth=70, width=100)
+        self.right_tree.column("Selling Price", minwidth=80, width=100)
+        self.right_tree.column("Profit", minwidth=50, width=100)
+        self.right_tree.column("Sale Date", minwidth=80, width=100)
+
+        # Frame for labels
+        label_frame = ctk.CTkFrame(self)
+        label_frame.pack(side=tk.TOP, fill="x", padx=10, pady=5)
 
         # Labels for sum of expenses, total income, and profit
-        self.total_income_label = ctk.CTkLabel(self)
-        self.total_income_label.pack(side=tk.TOP, padx=10, pady=(630, 5))
+        self.total_income_label = ctk.CTkLabel(label_frame)
+        self.total_income_label.grid(row=0, column=0, padx=10, pady=5)
 
-        self.total_expenses_label = ctk.CTkLabel(self)
-        self.total_expenses_label.pack(side=tk.TOP, padx=10, pady=5)
+        self.total_expenses_label = ctk.CTkLabel(label_frame)
+        self.total_expenses_label.grid(row=0, column=1, padx=10, pady=5)
         
-        self.total_profit_label = ctk.CTkLabel(self)
-        self.total_profit_label.pack(side=tk.TOP, padx=10, pady=5)
+        self.total_profit_label = ctk.CTkLabel(label_frame)
+        self.total_profit_label.grid(row=0, column=2, padx=10, pady=5)
 
-        self.inventory_value_label = ctk.CTkLabel(self)
-        self.inventory_value_label.pack(side=tk.TOP, padx=10, pady=5)
+        self.inventory_value_label = ctk.CTkLabel(label_frame)
+        self.inventory_value_label.grid(row=0, column=3, padx=10, pady=5)
 
-        self.total_assets_label = ctk.CTkLabel(self)
-        self.total_assets_label.pack(side=tk.TOP, padx=10, pady=5)
+        self.total_assets_label = ctk.CTkLabel(label_frame)
+        self.total_assets_label.grid(row=0, column=4, padx=10, pady=5)
 
         # Load expenses and sold PCs upon opening the tab
         self.refresh()

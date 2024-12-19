@@ -45,11 +45,11 @@ class InventoryTab(ctk.CTkFrame):
         inventory_panedwindow.add(self.right_tree)
 
         # Set the initial width of the left Treeview
-        inventory_panedwindow.paneconfig(self.left_tree, minsize=150)
+        inventory_panedwindow.paneconfig(self.left_tree, minsize=300)
 
         # Left Treeview columns configuration
-        self.left_tree.column("Name", minwidth=45, width=150)
-        self.left_tree.column("Type", minwidth=80, width=80)
+        self.left_tree.column("Name", minwidth=100, width=150)
+        self.left_tree.column("Type", minwidth=80, width=100)
         self.left_tree.column("Price", minwidth=50, width=50)
         self.left_tree.column("Used In", minwidth=50, width=50)
 
@@ -68,24 +68,28 @@ class InventoryTab(ctk.CTkFrame):
         self.right_tree.column("Fan", minwidth=30, width=30)
         self.right_tree.column("Extra", minwidth=40, width=40)
 
+        # Button frame
+        button_frame = ctk.CTkFrame(self)
+        button_frame.pack(side="top", fill="x", padx=10, pady=5)
+
         # Delete button (for the left and right Treeviews)
-        self.delete_button = ctk.CTkButton(self, text="Delete", command=self.delete_item)
+        self.delete_button = ctk.CTkButton(button_frame, text="Delete", command=self.delete_item)
         self.delete_button.pack(side="left", padx=2, pady=3)
 
         # Add Purchase button
-        self.add_purchase_button = ctk.CTkButton(self, text="Add Purchase", command=self.switch_to_purchase_tab)
+        self.add_purchase_button = ctk.CTkButton(button_frame, text="Add Purchase", command=self.switch_to_purchase_tab)
         self.add_purchase_button.pack(side="left", padx=2, pady=3)
 
         # Assemble PC button
-        self.assemble_pc_button = ctk.CTkButton(self, text="Assemble PC", command=self.switch_to_assemble_tab)
+        self.assemble_pc_button = ctk.CTkButton(button_frame, text="Assemble PC", command=self.switch_to_assemble_tab)
         self.assemble_pc_button.pack(side="left", padx=2, pady=3)
 
         # Balance button
-        self.balance_button = ctk.CTkButton(self, text="Balance", command=self.switch_to_balance_tab)
+        self.balance_button = ctk.CTkButton(button_frame, text="Balance", command=self.switch_to_balance_tab)
         self.balance_button.pack(side="left", padx=2, pady=3)
 
         # Sell button
-        self.sell_button = ctk.CTkButton(self, text="Sell", command=self.sell_item)
+        self.sell_button = ctk.CTkButton(button_frame, text="Sell", command=self.sell_item)
         self.sell_button.pack(side="left", padx=2, pady=3)
 
         # Bind the left mouse button click to the treeview widgets
