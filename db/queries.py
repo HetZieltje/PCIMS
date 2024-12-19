@@ -124,21 +124,22 @@ def delete_components_used_in_pc(pc_name):
     conn.commit()
     conn.close()
 
-def update_used_in_component(pc_name, name, item_type):
+def update_used_in_component(pc_name, names, item_type):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE inventory 
-        SET used_in = ? 
-        WHERE name = ? AND type = ? AND used_in IS NULL 
-        AND id = (
-            SELECT id 
-            FROM inventory 
+    for name in names.split(';'):
+        cursor.execute("""
+            UPDATE inventory 
+            SET used_in = ? 
             WHERE name = ? AND type = ? AND used_in IS NULL 
-            ORDER BY id 
-            LIMIT 1
-        )
-    """, (pc_name, name, item_type, name, item_type))
+            AND id = (
+                SELECT id 
+                FROM inventory 
+                WHERE name = ? AND type = ? AND used_in IS NULL 
+                ORDER BY id 
+                LIMIT 1
+            )
+        """, (pc_name, name, item_type, name, item_type))
     conn.commit()
     conn.close()
 
