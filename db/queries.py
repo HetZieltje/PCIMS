@@ -59,7 +59,8 @@ def initialize_database():
             name TEXT NOT NULL,
             cost REAL NOT NULL,
             selling_price REAL NOT NULL,
-            profit REAL NOT NULL
+            profit REAL NOT NULL,
+            sale_date DATE DEFAULT CURRENT_DATE NOT NULL
         )
     ''')
 
@@ -79,8 +80,7 @@ def initialize_database():
             pc_case INTEGER REFERENCES expenses(id),
             psu INTEGER REFERENCES expenses(id),
             fan1 INTEGER REFERENCES expenses(id),
-            extra INTEGER REFERENCES expenses(id),
-            sale_date DATE DEFAULT CURRENT_DATE NOT NULL
+            extra INTEGER REFERENCES expenses(id)
         )
     ''')
 
@@ -89,7 +89,7 @@ def initialize_database():
 
 # Inventory Queries
 def add_item_to_inventory(name, item_type, price, used_in=None):
-    item_id = str(uuid.uuid4)
+    item_id = str(uuid.uuid4())
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -161,13 +161,13 @@ def get_total_pc_price(pc_name):
 
 
 # Expense Queries
-def add_expense(item_id, name, item_type, price):
+def add_expense(item_id, name, item_type, price, purchase_date="CURRENT_DATE"):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO expenses (id, name, type, price)
-        VALUES (?, ?, ?, ?)
-    """, (item_id, name, item_type, price))
+        INSERT INTO expenses (id, name, type, price, purchase_date)
+        VALUES (?, ?, ?, ?, ?)
+    """, (item_id, name, item_type, price, purchase_date))
     conn.commit()
     conn.close()
 
@@ -186,7 +186,7 @@ def get_expenses():
     cursor.execute("SELECT * FROM expenses")
     items = cursor.fetchall()
     conn.close()
-    return [{"name": row[1], "type": row[2], "price": row[3]} for row in items]
+    return [{"id": row[0], "name": row[1], "type": row[2], "price": row[3], "purchase_date": row[4]} for row in items]
 
 
 def get_inventory_value():
@@ -196,6 +196,13 @@ def get_inventory_value():
     inventory_value = cursor.fetchone()[0]
     conn.close()
     return inventory_value if inventory_value else 0
+
+def get_purchase_date(item_id):
+    expenses = get_expenses()
+    for expense in expenses:
+        if expense['id'] == item_id:
+            return expense['purchase_date']
+    return None
 
 
 # Assembled PCs Queries
@@ -240,24 +247,24 @@ def get_pc_names():
 
 
 # Income Queries
-def add_income(name, cost, selling_price, profit):
+def add_income(name, cost, selling_price, profit, sale_date):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO income (name, cost, selling_price, profit)
-        VALUES (?, ?, ?, ?)
-    """, (name, cost, selling_price, profit))
+        INSERT INTO income (name, cost, selling_price, profit, sale_date)
+        VALUES (?, ?, ?, ?, ?)
+    """, (name, cost, selling_price, profit, sale_date))
     conn.commit()
     conn.close()
 
 
-def get_sold_items():
+def get_sales():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM income")
     items = cursor.fetchall()
     conn.close()
-    return [{"name": row[1], "cost": row[2], "selling_price": row[3], "profit": row[4]} for row in items]
+    return [{"name": row[1], "cost": row[2], "selling_price": row[3], "profit": row[4], "sale_date": row[5]} for row in items]
 
 
 def undo_sale(sold_pc_id):

@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox
+from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
 from db.queries import add_item_to_inventory, add_expense
@@ -38,18 +39,23 @@ class PurchaseTab(ctk.CTkFrame):
         self.percent_label.grid(row=4, column=0, pady=5, padx=10, sticky=tk.W)
         self.percent_entry.grid(row=4, column=1, pady=5, padx=10, sticky=tk.W)
 
+        self.date_label = ctk.CTkLabel(self, text="Purchase Date:")
+        self.date_entry = DateEntry(self, width=12, background='darkblue', foreground='white', borderwidth=2)
+        self.date_label.grid(row=5, column=0, pady=5, padx=10, sticky=tk.W)
+        self.date_entry.grid(row=5, column=1, pady=5, padx=10, sticky=tk.W)
+
         self.add_item_button = ctk.CTkButton(self, text="Add Item", command=self.add_item)
         self.add_bundle_button = ctk.CTkButton(self, text="Add Bundle", command=self.add_bundle)
-        self.add_item_button.grid(row=5, column=0, pady=5, padx=10, sticky=tk.W)
-        self.add_bundle_button.grid(row=5, column=1, pady=10, padx=10, sticky=tk.W)
+        self.add_item_button.grid(row=6, column=0, pady=5, padx=10, sticky=tk.W)
+        self.add_bundle_button.grid(row=6, column=1, pady=10, padx=10, sticky=tk.W)
 
         # Listbox to display items in the current purchase
         self.current_purchase_listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=80)
-        self.current_purchase_listbox.grid(row=6, column=0, columnspan=2, pady=10, padx=10, sticky=tk.W)
+        self.current_purchase_listbox.grid(row=7, column=0, columnspan=2, pady=10, padx=10, sticky=tk.W)
 
         # Delete Item button
         self.delete_item_button = ctk.CTkButton(self, text="Delete Item", command=self.delete_item)
-        self.delete_item_button.grid(row=7, column=0, pady=5, padx=10, sticky=tk.W)
+        self.delete_item_button.grid(row=8, column=0, pady=5, padx=10, sticky=tk.W)
 
         # List to store items in the current purchase
         self.current_purchase_items = []
@@ -73,8 +79,10 @@ class PurchaseTab(ctk.CTkFrame):
             messagebox.showerror("Error", "Please enter a price")
             return
         
+        purchase_date = self.date_entry.get_date()
+        
         # Add the item to the current purchases
-        item = {"name": name, "component_type": component_type, "price": price_after_percentage}
+        item = {"name": name, "component_type": component_type, "price": price_after_percentage, "purchase_date": purchase_date}
         self.current_purchase_items.append(item)
 
         # Refresh the Listbox or take any other necessary action to update the UI
@@ -111,8 +119,9 @@ class PurchaseTab(ctk.CTkFrame):
             price = float(self.price_entry.get().replace(',', '.').replace(' ', '.'))
             percentage = float(self.percent_entry.get().replace(',', '.').replace(' ', '.')) if self.percent_entry.get() else 100.0
             price_after_percentage = self.calc_price(price, percentage)
+            purchase_date = self.date_entry.get_date()
             id = add_item_to_inventory(name, type, price_after_percentage)
-            add_expense(id, name, type, price_after_percentage)
+            add_expense(id, name, type, price_after_percentage, purchase_date)
 
         # Add items from the current purchase list
         for item in self.current_purchase_items:            
@@ -128,6 +137,7 @@ class PurchaseTab(ctk.CTkFrame):
         self.price_entry.configure(state="normal")
         self.name_entry.focus_set()
         self.price_entry.delete(0, tk.END)
+        self.date_entry.set_date(self.date_entry._date.today())  # Reset to current date
 
     def validate_form(self):
         # Validate the form (name, price, and type must be filled)

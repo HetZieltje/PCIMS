@@ -1,8 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
+from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, update_used_in_for_deleted_pc, add_income, delete_components_used_in_pc
+from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, update_used_in_for_deleted_pc, add_income, delete_components_used_in_pc, get_purchase_date
+from datetime import datetime
 
 class InventoryTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -12,6 +14,7 @@ class InventoryTab(ctk.CTkFrame):
         self.app = app
 
         self.current_purchase_items = []
+        self.sale_date = None
 
         # Create a PanedWindow to hold two separate Treeviews (left and right)
         inventory_panedwindow = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashwidth=5, sashrelief=tk.RAISED)
@@ -215,6 +218,17 @@ class InventoryTab(ctk.CTkFrame):
         selling_price = self.get_selling_price(item_name)
 
         if selling_price is not None:
+            # Prompt the user for the sale date
+            sale_date = self.get_sale_date(item_name)
+            if sale_date is None:
+                return
+
+            # Check if the sale date is before the purchase date
+            purchase_date = datetime.strptime(get_purchase_date(item_id), "%Y-%m-%d").date()
+            if sale_date < purchase_date:
+                messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
+                return
+
             # Ask for confirmation before selling the standalone item
             confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell the {item_name} for €{selling_price:.2f}?")
             if confirm:
@@ -222,7 +236,7 @@ class InventoryTab(ctk.CTkFrame):
                 delete_item_from_inventory(item_id)
                 total_cost = float(item_values[2][1:])
                 profit = round(selling_price - total_cost, 2)
-                add_income(item_name, total_cost, selling_price, profit)
+                add_income(item_name, total_cost, selling_price, profit, sale_date)
 
                 # Refresh the inventory Treeview and balance tab
                 self.refresh()
@@ -236,6 +250,11 @@ class InventoryTab(ctk.CTkFrame):
         selling_price = self.get_selling_price(pc_name)
 
         if selling_price is not None:
+            # Prompt the user for the sale date
+            sale_date = self.get_sale_date(pc_name)
+            if sale_date is None:
+                return
+
             # Ask for confirmation before selling the assembled PC
             confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell {pc_name} for €{selling_price:.2f}?")
             if confirm:
@@ -243,7 +262,7 @@ class InventoryTab(ctk.CTkFrame):
                 profit = round(selling_price - total_cost, 2)
 
                 # Add the income entry
-                add_income(pc_name, total_cost, selling_price, profit)
+                add_income(pc_name, total_cost, selling_price, profit, sale_date)
 
                 # Delete components used in the PC from the inventory
                 delete_components_used_in_pc(pc_name)
@@ -253,6 +272,31 @@ class InventoryTab(ctk.CTkFrame):
 
                 # Refresh the inventory Treeview and balance tab
                 self.refresh()
+
+    def get_sale_date(self, item_name):
+        sale_date_popup = tk.Toplevel(self)
+        sale_date_popup.title("Select Sale Date")
+
+        tk.Label(sale_date_popup, text=f"Select sale date for {item_name}:").pack(pady=10)
+        sale_date_entry = DateEntry(sale_date_popup, width=12, background='darkblue', foreground='white', borderwidth=2)
+        sale_date_entry.pack(pady=10)
+
+        def on_confirm():
+            self.sale_date = sale_date_entry.get_date()
+            sale_date_popup.destroy()
+
+        def on_cancel():
+            self.sale_date = None
+            sale_date_popup.destroy()
+
+        tk.Button(sale_date_popup, text="Confirm", command=on_confirm).pack(side=tk.LEFT, padx=10, pady=10)
+        tk.Button(sale_date_popup, text="Cancel", command=on_cancel).pack(side=tk.RIGHT, padx=10, pady=10)
+
+        sale_date_popup.transient(self)
+        sale_date_popup.grab_set()
+        self.wait_window(sale_date_popup)
+
+        return self.sale_date
 
     def get_selling_price(self, item_name):
         while True:

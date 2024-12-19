@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_expenses, get_inventory_items, get_sold_items, add_expense, get_inventory_value
+from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value
 
 class BalanceTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -12,30 +12,34 @@ class BalanceTab(ctk.CTkFrame):
         self.app = app
 
         # Left Treeview
-        self.left_tree = ttk.Treeview(self, columns=("Name", "Component Type", "Price"), show="headings", selectmode="browse")
+        self.left_tree = ttk.Treeview(self, columns=("Name", "Component Type", "Price", "Purchase Date"), show="headings", selectmode="browse")
         self.left_tree.heading("Name", text="Name")
         self.left_tree.heading("Component Type", text="Component Type")
         self.left_tree.heading("Price", text="Price")
+        self.left_tree.heading("Purchase Date", text="Purchase Date")
         self.left_tree.pack(side=tk.LEFT, padx=10, pady=10, fill=tk.BOTH, expand=1)
 
         # Right Treeview
-        self.right_tree = ttk.Treeview(self, columns=("Name", "Total Cost", "Selling Price", "Profit"), show="headings", selectmode="browse")
+        self.right_tree = ttk.Treeview(self, columns=("Name", "Total Cost", "Selling Price", "Profit", "Sale Date"), show="headings", selectmode="browse")
         self.right_tree.heading("Name", text="Name")
         self.right_tree.heading("Total Cost", text="Total Cost")
         self.right_tree.heading("Selling Price", text="Selling Price")
         self.right_tree.heading("Profit", text="Profit")
+        self.right_tree.heading("Sale Date", text="Sale Date")
         self.right_tree.pack(side=tk.RIGHT, padx=10, pady=10, fill=tk.BOTH, expand=1)
 
         # Left Treeview columns configuration
         self.left_tree.column("Name", minwidth=45, width=150)
         self.left_tree.column("Component Type", minwidth=100, width=100)
         self.left_tree.column("Price", minwidth=50, width=50)
+        self.left_tree.column("Purchase Date", minwidth=80, width=80)
 
         # Right Treeview columns configuration
         self.right_tree.column("Name", minwidth=45, width=45)
         self.right_tree.column("Total Cost", minwidth=70, width=70)
         self.right_tree.column("Selling Price", minwidth=80, width=80)
         self.right_tree.column("Profit", minwidth=50, width=50)
+        self.right_tree.column("Sale Date", minwidth=80, width=80)
 
         # Labels for sum of expenses, total income, and profit
         self.total_income_label = ctk.CTkLabel(self)
@@ -72,7 +76,7 @@ class BalanceTab(ctk.CTkFrame):
 
         # Get the list of expenses and sold PCs from the app
         expenses = get_expenses()
-        sold_items = get_sold_items()
+        sold_items = get_sales()
 
         # Insert each expense into the Treeview for expenses
         total_expenses = 0.0
@@ -80,7 +84,8 @@ class BalanceTab(ctk.CTkFrame):
             expense_info = (
                 expense['name'],
                 expense['type'],
-                f"€{expense['price']}"  # Format as Euros
+                f"€{expense['price']}",  # Format as Euros
+                expense['purchase_date']
             )
             self.left_tree.insert("", tk.END, values=expense_info)
             total_expenses += expense['price']
@@ -92,7 +97,8 @@ class BalanceTab(ctk.CTkFrame):
                 sold_item['name'],
                 f"€{sold_item['cost']}",
                 f"€{sold_item['selling_price']}",
-                f"€{sold_item['profit']}"
+                f"€{sold_item['profit']}",
+                sold_item['sale_date']
             )
             self.right_tree.insert("", tk.END, values=sold_item_info)
             total_income += sold_item['selling_price']
