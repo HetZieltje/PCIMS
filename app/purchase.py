@@ -17,7 +17,7 @@ class PurchaseTab(ctk.CTkFrame):
 
         # Entry fields
         self.name_label = ctk.CTkLabel(self, text="Item Name:")
-        self.name_entry = ctk.CTkEntry(self, width=200)
+        self.name_entry = ctk.CTkEntry(self, width=300)
         self.name_label.grid(row=0, column=0, pady=5, padx=10, sticky=tk.W)
         self.name_entry.grid(row=0, column=1, pady=5, padx=10, sticky=tk.W)
 
@@ -25,22 +25,22 @@ class PurchaseTab(ctk.CTkFrame):
         self.type_var = tk.StringVar()
         self.type_dropdown = ctk.CTkComboBox(self, variable=self.type_var, values=[
             "", "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"
-        ], state="readonly", width=150)
+        ], state="readonly", width=200)
         self.type_label.grid(row=1, column=0, pady=5, padx=10, sticky=tk.W)
         self.type_dropdown.grid(row=1, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.price_label = ctk.CTkLabel(self, text="Price (Euro):")
-        self.price_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_price), "%P"), width=100)
+        self.price_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_price), "%P"), width=150)
         self.price_label.grid(row=2, column=0, pady=5, padx=10, sticky=tk.W)
         self.price_entry.grid(row=2, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.percent_label = ctk.CTkLabel(self, text="Percentage of Bundle Price:")
-        self.percent_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_percentage), "%P"), width=100)
+        self.percent_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_percentage), "%P"), width=150)
         self.percent_label.grid(row=3, column=0, pady=5, padx=10, sticky=tk.W)
         self.percent_entry.grid(row=3, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.date_label = ctk.CTkLabel(self, text="Purchase Date:")
-        self.date_entry = DateEntry(self, width=12, background='darkblue', foreground='white', borderwidth=2)
+        self.date_entry = DateEntry(self, width=15, background='darkblue', foreground='white', borderwidth=2)
         self.date_label.grid(row=4, column=0, pady=5, padx=10, sticky=tk.W)
         self.date_entry.grid(row=4, column=1, pady=5, padx=10, sticky=tk.W)
 
@@ -50,7 +50,7 @@ class PurchaseTab(ctk.CTkFrame):
         self.add_bundle_button.grid(row=5, column=1, pady=5, padx=10, sticky=tk.W)
 
         # Listbox to display items in the current purchase
-        self.current_purchase_listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=80)
+        self.current_purchase_listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=100, bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
         self.current_purchase_listbox.grid(row=6, column=0, columnspan=2, pady=10, padx=10, sticky=tk.W)
 
         # Delete Item button
@@ -207,3 +207,10 @@ class PurchaseTab(ctk.CTkFrame):
         for item in self.current_purchase_items:
             item_info = f"{item['name']} - {item['component_type']} - {item['price']}"
             self.current_purchase_listbox.insert(tk.END, item_info)
+
+    def refresh(self):
+        self.set_listbox_style()
+        # ...existing code...
+
+    def set_listbox_style(self):
+        self.current_purchase_listbox.configure(bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")

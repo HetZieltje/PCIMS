@@ -16,15 +16,15 @@ class BalanceTab(ctk.CTkFrame):
         balance_panedwindow.pack(expand=1, fill="both")
 
         # Left Treeview to display expenses
-        self.left_tree = ttk.Treeview(balance_panedwindow, columns=("Name", "Component Type", "Price", "Purchase Date"), show="headings", selectmode="browse")
+        self.left_tree = ttk.Treeview(balance_panedwindow, columns=("Name", "Type", "Price", "Purchase Date"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.left_tree.heading("Name", text="Name")
-        self.left_tree.heading("Component Type", text="Component Type")
+        self.left_tree.heading("Type", text="Type")
         self.left_tree.heading("Price", text="Price")
         self.left_tree.heading("Purchase Date", text="Purchase Date")
         self.left_tree.pack(side=tk.LEFT, expand=1, fill="both")
 
         # Right Treeview to display sold PCs
-        self.right_tree = ttk.Treeview(balance_panedwindow, columns=("Name", "Total Cost", "Selling Price", "Profit", "Sale Date"), show="headings", selectmode="browse")
+        self.right_tree = ttk.Treeview(balance_panedwindow, columns=("Name", "Total Cost", "Selling Price", "Profit", "Sale Date"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.right_tree.heading("Name", text="Name")
         self.right_tree.heading("Total Cost", text="Total Cost")
         self.right_tree.heading("Selling Price", text="Selling Price")
@@ -37,40 +37,47 @@ class BalanceTab(ctk.CTkFrame):
         balance_panedwindow.add(self.right_tree)
 
         # Set the initial width of the left Treeview
-        balance_panedwindow.paneconfig(self.left_tree, minsize=300)
+        balance_panedwindow.paneconfig(self.left_tree, minsize=400)
 
         # Left Treeview columns configuration
-        self.left_tree.column("Name", minwidth=100, width=150)
-        self.left_tree.column("Component Type", minwidth=100, width=150)
-        self.left_tree.column("Price", minwidth=50, width=100)
-        self.left_tree.column("Purchase Date", minwidth=80, width=100)
+        self.left_tree.column("Name", minwidth=150, width=200)
+        self.left_tree.column("Type", minwidth=150, width=200)
+        self.left_tree.column("Price", minwidth=100, width=150)
+        self.left_tree.column("Purchase Date", minwidth=100, width=150)
 
         # Right Treeview columns configuration
-        self.right_tree.column("Name", minwidth=100, width=150)
-        self.right_tree.column("Total Cost", minwidth=70, width=100)
-        self.right_tree.column("Selling Price", minwidth=80, width=100)
-        self.right_tree.column("Profit", minwidth=50, width=100)
-        self.right_tree.column("Sale Date", minwidth=80, width=100)
+        self.right_tree.column("Name", minwidth=150, width=200)
+        self.right_tree.column("Total Cost", minwidth=100, width=150)
+        self.right_tree.column("Selling Price", minwidth=100, width=150)
+        self.right_tree.column("Profit", minwidth=100, width=150)
+        self.right_tree.column("Sale Date", minwidth=100, width=150)
 
         # Frame for labels
         label_frame = ctk.CTkFrame(self)
-        label_frame.pack(side=tk.TOP, fill="x", padx=10, pady=5)
+        label_frame.pack(side=tk.BOTTOM, fill="x", padx=10, pady=5)
 
         # Labels for sum of expenses, total income, and profit
         self.total_income_label = ctk.CTkLabel(label_frame)
-        self.total_income_label.grid(row=0, column=0, padx=10, pady=5)
+        self.total_income_label.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
 
         self.total_expenses_label = ctk.CTkLabel(label_frame)
-        self.total_expenses_label.grid(row=0, column=1, padx=10, pady=5)
+        self.total_expenses_label.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
         
         self.total_profit_label = ctk.CTkLabel(label_frame)
-        self.total_profit_label.grid(row=0, column=2, padx=10, pady=5)
+        self.total_profit_label.grid(row=0, column=2, padx=10, pady=5, sticky="ew")
 
         self.inventory_value_label = ctk.CTkLabel(label_frame)
-        self.inventory_value_label.grid(row=0, column=3, padx=10, pady=5)
+        self.inventory_value_label.grid(row=0, column=3, padx=10, pady=5, sticky="ew")
 
         self.total_assets_label = ctk.CTkLabel(label_frame)
-        self.total_assets_label.grid(row=0, column=4, padx=10, pady=5)
+        self.total_assets_label.grid(row=0, column=4, padx=10, pady=5, sticky="ew")
+
+        # Configure grid columns to expand equally
+        label_frame.grid_columnconfigure(0, weight=1)
+        label_frame.grid_columnconfigure(1, weight=1)
+        label_frame.grid_columnconfigure(2, weight=1)
+        label_frame.grid_columnconfigure(3, weight=1)
+        label_frame.grid_columnconfigure(4, weight=1)
 
         # Load expenses and sold PCs upon opening the tab
         self.refresh()
@@ -84,6 +91,29 @@ class BalanceTab(ctk.CTkFrame):
             self.left_tree.heading(col, text=col, command=lambda _col=col: self.sort_column(self.left_tree, _col, False))
         for col in self.right_tree["columns"]:
             self.right_tree.heading(col, text=col, command=lambda _col=col: self.sort_column(self.right_tree, _col, False))
+
+        # Apply custom style for light and dark themes
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Light.Treeview", background="white", foreground="black", fieldbackground="white", highlightthickness=0, bd=0)
+        style.configure("Light.Treeview.Heading", background="lightgray", foreground="black")
+        style.map("Light.Treeview", background=[("selected", "lightgray")])
+
+        style.configure("Dark.Treeview", background="#3e3e3e", foreground="white", fieldbackground="#3e3e3e", highlightthickness=0, bd=0)
+        style.configure("Dark.Treeview.Heading", background="#4e4e4e", foreground="white")
+        style.map("Dark.Treeview", background=[("selected", "#5e5e5e")])
+
+        # Set initial style based on the current theme
+        self.set_treeview_style()
+
+    def set_treeview_style(self):
+        style = ttk.Style()
+        if self.app.is_dark_mode:
+            self.left_tree.configure(style="Dark.Treeview")
+            self.right_tree.configure(style="Dark.Treeview")
+        else:
+            self.left_tree.configure(style="Light.Treeview")
+            self.right_tree.configure(style="Light.Treeview")
 
     def refresh(self):
         # Check if the expenses tab is entirely empty
@@ -137,6 +167,8 @@ class BalanceTab(ctk.CTkFrame):
         self.total_profit_label.configure(text=f"Total Profit: €{total_profit:.2f}")
         self.inventory_value_label.configure(text=f"Inventory Value: €{inventory_value:.2f}")
         self.total_assets_label.configure(text=f"Profit + Inventory Value: €{total_assets:.2f}")
+
+        self.set_treeview_style()
 
     def populate_expenses_from_inventory(self):
         # Get the list of inventory items from the main app

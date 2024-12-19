@@ -13,7 +13,7 @@ class AssembleTab(ctk.CTkFrame):
 
         # Entry field for the name of the assembled PC
         self.pc_name_label = ctk.CTkLabel(self, text="PC Name:")
-        self.pc_name_entry = ctk.CTkEntry(self, width=200)
+        self.pc_name_entry = ctk.CTkEntry(self, width=300)
         self.pc_name_entry.insert(0, name)
         self.pc_name_label.grid(row=0, column=0, padx=10, pady=5, sticky=tk.W)
         self.pc_name_entry.grid(row=0, column=1, pady=5, sticky=tk.W)
@@ -30,7 +30,7 @@ class AssembleTab(ctk.CTkFrame):
             label.grid(row=idx // 2 + 1, column=(idx % 2) * 2, padx=10, pady=5, sticky=tk.W)
 
             # Create a Listbox to allow multiple selections
-            listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=30)
+            listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=40, bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
             listbox.bind('<FocusIn>', lambda event, comp_type=component_type, listbox=listbox: self.update_listbox(comp_type, listbox))
             listbox.grid(row=idx // 2 + 1, column=(idx % 2) * 2 + 1, pady=5, sticky=tk.W)
 
@@ -48,6 +48,11 @@ class AssembleTab(ctk.CTkFrame):
         """Refresh all dropdowns when the tab is selected."""
         for component_type in self.component_types:
             self.update_listbox(component_type, self.component_entries[component_type])
+        self.set_listbox_style()
+
+    def set_listbox_style(self):
+        for listbox in self.component_entries.values():
+            listbox.configure(bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
 
     def get_inventory_items_by_type(self, component_type):
         # Retrieve all items of the specified component type from the main app

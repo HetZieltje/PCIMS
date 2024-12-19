@@ -21,7 +21,7 @@ class InventoryTab(ctk.CTkFrame):
         inventory_panedwindow.pack(expand=1, fill="both")
 
         # Left Treeview to display the inventory (similar to the current inventory_tab)
-        self.left_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Type", "Price", "Used In"), show="headings", selectmode="browse")
+        self.left_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Type", "Price", "Used In"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.left_tree.heading("Name", text="Name")
         self.left_tree.heading("Type", text="Type")
         self.left_tree.heading("Price", text="Price")
@@ -29,7 +29,7 @@ class InventoryTab(ctk.CTkFrame):
         self.left_tree.pack(side=tk.LEFT, expand=1, fill="both")
 
         # Right Treeview to display the assembled PCs (similar to the current assemble_tab)
-        self.right_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Price", "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"), show="headings", selectmode="browse")
+        self.right_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Price", "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.right_tree.heading("Name", text="Name")
         self.right_tree.heading("Price", text="Price")
 
@@ -45,52 +45,28 @@ class InventoryTab(ctk.CTkFrame):
         inventory_panedwindow.add(self.right_tree)
 
         # Set the initial width of the left Treeview
-        inventory_panedwindow.paneconfig(self.left_tree, minsize=300)
+        inventory_panedwindow.paneconfig(self.left_tree, minsize=400)
 
         # Left Treeview columns configuration
-        self.left_tree.column("Name", minwidth=100, width=150)
-        self.left_tree.column("Type", minwidth=80, width=100)
-        self.left_tree.column("Price", minwidth=50, width=50)
-        self.left_tree.column("Used In", minwidth=50, width=50)
+        self.left_tree.column("Name", minwidth=150, width=200)
+        self.left_tree.column("Type", minwidth=100, width=150)
+        self.left_tree.column("Price", minwidth=50, width=100)
+        self.left_tree.column("Used In", minwidth=50, width=100)
 
         # Right Treeview columns configuration
-        self.right_tree.column("Name", minwidth=45, width=45)
-        self.right_tree.column("Price", minwidth=50, width=50)
-        self.right_tree.column("CPU", minwidth=35, width=35)
-        self.right_tree.column("Cooler", minwidth=45, width=45)
-        self.right_tree.column("GPU", minwidth=35, width=35)
-        self.right_tree.column("Motherboard", minwidth=80, width=80)
-        self.right_tree.column("RAM", minwidth=35, width=35)
-        self.right_tree.column("SSD", minwidth=35, width=35)
-        self.right_tree.column("HDD", minwidth=35, width=35)
-        self.right_tree.column("Case", minwidth=35, width=35)
-        self.right_tree.column("PSU", minwidth=35, width=35)
-        self.right_tree.column("Fan", minwidth=30, width=30)
-        self.right_tree.column("Extra", minwidth=40, width=40)
-
-        # Button frame
-        button_frame = ctk.CTkFrame(self)
-        button_frame.pack(side="top", fill="x", padx=10, pady=5)
-
-        # Delete button (for the left and right Treeviews)
-        self.delete_button = ctk.CTkButton(button_frame, text="Delete", command=self.delete_item)
-        self.delete_button.pack(side="left", padx=2, pady=3)
-
-        # Add Purchase button
-        self.add_purchase_button = ctk.CTkButton(button_frame, text="Add Purchase", command=self.switch_to_purchase_tab)
-        self.add_purchase_button.pack(side="left", padx=2, pady=3)
-
-        # Assemble PC button
-        self.assemble_pc_button = ctk.CTkButton(button_frame, text="Assemble PC", command=self.switch_to_assemble_tab)
-        self.assemble_pc_button.pack(side="left", padx=2, pady=3)
-
-        # Balance button
-        self.balance_button = ctk.CTkButton(button_frame, text="Balance", command=self.switch_to_balance_tab)
-        self.balance_button.pack(side="left", padx=2, pady=3)
-
-        # Sell button
-        self.sell_button = ctk.CTkButton(button_frame, text="Sell", command=self.sell_item)
-        self.sell_button.pack(side="left", padx=2, pady=3)
+        self.right_tree.column("Name", minwidth=45, width=100)
+        self.right_tree.column("Price", minwidth=50, width=100)
+        self.right_tree.column("CPU", minwidth=35, width=70)
+        self.right_tree.column("Cooler", minwidth=45, width=90)
+        self.right_tree.column("GPU", minwidth=35, width=70)
+        self.right_tree.column("Motherboard", minwidth=80, width=160)
+        self.right_tree.column("RAM", minwidth=35, width=70)
+        self.right_tree.column("SSD", minwidth=35, width=70)
+        self.right_tree.column("HDD", minwidth=35, width=70)
+        self.right_tree.column("Case", minwidth=35, width=70)
+        self.right_tree.column("PSU", minwidth=35, width=70)
+        self.right_tree.column("Fan", minwidth=30, width=60)
+        self.right_tree.column("Extra", minwidth=40, width=80)
 
         # Bind the left mouse button click to the treeview widgets
         self.left_tree.bind("<Button-1>", self.toggle_selection_left)
@@ -102,8 +78,31 @@ class InventoryTab(ctk.CTkFrame):
         for col in self.right_tree["columns"]:
             self.right_tree.heading(col, text=col, command=lambda _col=col: self.sort_column(self.right_tree, _col, False))
 
+        # Apply custom style for light and dark themes
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Light.Treeview", background="white", foreground="black", fieldbackground="white", highlightthickness=0, bd=0)
+        style.configure("Light.Treeview.Heading", background="lightgray", foreground="black")
+        style.map("Light.Treeview", background=[("selected", "lightgray")])
+
+        style.configure("Dark.Treeview", background="#3e3e3e", foreground="white", fieldbackground="#3e3e3e", highlightthickness=0, bd=0)
+        style.configure("Dark.Treeview.Heading", background="#4e4e4e", foreground="white")
+        style.map("Dark.Treeview", background=[("selected", "#5e5e5e")])
+
+        # Set initial style based on the current theme
+        self.set_treeview_style()
+
         # Load inventory upon opening the application
         self.refresh()
+
+    def set_treeview_style(self):
+        style = ttk.Style()
+        if self.app.is_dark_mode:
+            self.left_tree.configure(style="Dark.Treeview")
+            self.right_tree.configure(style="Dark.Treeview")
+        else:
+            self.left_tree.configure(style="Light.Treeview")
+            self.right_tree.configure(style="Light.Treeview")
 
     def refresh(self):
         # Clear the existing items in both Treeviews
@@ -127,6 +126,8 @@ class InventoryTab(ctk.CTkFrame):
         for pc in assembled_pcs:
             pc_info = pc[1], f"€{pc[2]}", pc[3], pc[4], pc[5], pc[6], pc[7], pc[8], pc[9], pc[10], pc[11], pc[12], pc[13]
             self.right_tree.insert("", tk.END, values=pc_info)
+
+        self.set_treeview_style()
 
     def switch_to_purchase_tab(self):
         # Call the switch_to_purchase_tab function in the main app
