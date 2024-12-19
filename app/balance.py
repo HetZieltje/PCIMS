@@ -40,13 +40,13 @@ class BalanceTab(ctk.CTkFrame):
         balance_panedwindow.paneconfig(self.left_tree, minsize=400)
 
         # Left Treeview columns configuration
-        self.left_tree.column("Name", minwidth=150, width=200)
-        self.left_tree.column("Type", minwidth=150, width=200)
+        self.left_tree.column("Name", minwidth=100, width=200)
+        self.left_tree.column("Type", minwidth=100, width=150)
         self.left_tree.column("Price", minwidth=100, width=150)
         self.left_tree.column("Purchase Date", minwidth=100, width=150)
 
         # Right Treeview columns configuration
-        self.right_tree.column("Name", minwidth=150, width=200)
+        self.right_tree.column("Name", minwidth=100, width=200)
         self.right_tree.column("Total Cost", minwidth=100, width=150)
         self.right_tree.column("Selling Price", minwidth=100, width=150)
         self.right_tree.column("Profit", minwidth=100, width=150)

@@ -54,7 +54,7 @@ class PCIMS(ctk.CTk):
         self.sell_button.pack(side="left", padx=2, pady=3)
 
         # Add a small interactive icon to toggle dark mode
-        self.dark_mode_icon = ctk.CTkButton(button_frame, text="🌙", width=30, height=30, command=self.toggle_dark_mode, fg_color=self.cget("fg_color"), hover_color=self.cget("fg_color"), border_width=1, border_color="black", text_color="white")
+        self.dark_mode_icon = ctk.CTkButton(button_frame, text="🌙", command=self.toggle_dark_mode)
         self.dark_mode_icon.pack(side="right", padx=2, pady=3)
 
         self.apply_theme()
@@ -78,12 +78,12 @@ class PCIMS(ctk.CTk):
         if self.is_dark_mode:
             ctk.set_appearance_mode("dark")
             self.configure(fg_color="#2e2e2e")
-            self.dark_mode_icon.configure(text="🌙", fg_color="#2e2e2e", hover_color="#2e2e2e", border_color="white", text_color="white")
+            self.dark_mode_icon.configure(text="🌙")
             self.notebook.configure(style="Dark.TNotebook")
         else:
             ctk.set_appearance_mode("light")
             self.configure(fg_color="#f0f0f0")
-            self.dark_mode_icon.configure(text="☀️", fg_color="#f0f0f0", hover_color="#f0f0f0", border_color="black", text_color="black")
+            self.dark_mode_icon.configure(text="       ☀️")
             self.notebook.configure(style="Light.TNotebook")
 
         # Apply theme to all tabs
