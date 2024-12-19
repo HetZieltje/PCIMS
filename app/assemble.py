@@ -99,51 +99,6 @@ class AssembleTab(ctk.CTkFrame):
         # Set the focus to the PC name entry field
         self.pc_name_entry.focus_set()
 
-    def map_components_to_db_schema(self, selected_components):
-        """
-        Map selected components to the database schema.
-        Fills empty slots with "" for storage, fans, and extras.
-        
-        Args:
-            selected_components (dict): Dictionary of component types and selected values.
-                Example: {"CPU": "Intel i7", "HDD": "Seagate 1TB", "Fan": "CoolerMaster Fan"}
-        
-        Returns:
-            dict: A dictionary with all database columns and their mapped values.
-        """
-        # Predefined database schema structure
-        db_columns = {
-            "cpu1": "", "cpu2": "", "cooler1": "", "cooler2": "", "gpu": "",
-            "motherboard": "", "ram": "", "ssd1": "", "ssd2": "", "hdd1": "",
-            "hdd2": "",  "pc_case": "", "psu": "",
-            "fan1": "", "fan2": "", "fan3": "", "extra1": "", "extra2": "", "extra3": ""
-        }
-        
-        # Direct mapping for single-use component types
-        direct_mappings = {
-            "GPU": "gpu", "Motherboard": "motherboard",
-            "RAM": "ram", "Case": "pc_case", "PSU": "psu"
-        }
-
-        # Handle storage, fans, and extras (multi-use types)
-        multi_mappings = {
-            "CPU": "cpu", "Cooler": "cooler", 
-            "SSD": "ssd", "HDD": "hdd",
-            "Fan": "fan", "Extra": "extra"
-        }
-
-        # Map single-use components
-        for component_type, db_column in direct_mappings.items():
-            db_columns[db_column] = selected_components.get(component_type, "") or ""
-
-        # Handle multi-use components dynamically
-        for component_type, prefix in multi_mappings.items():
-            values = [value for key, value in selected_components.items() if key == component_type and value]
-            for i, value in enumerate(values[:2] if prefix in ["cpu", "cooler"] else values[:3]):
-                db_columns[f"{prefix}{i + 1}"] = value or ""
-
-        return db_columns
-
     def assemble_pc(self):
         pc_name = self.pc_name_entry.get()
         selected_components = {component_type: self.component_entries[component_type].get() for component_type in self.component_types}
