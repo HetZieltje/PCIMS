@@ -2,6 +2,7 @@ from tkinter import ttk
 import os
 import customtkinter as ctk
 from customtkinter import *
+import json
 
 # Import tab modules
 from app.inventory import InventoryTab
@@ -13,12 +14,14 @@ from db.queries import initialize_database
 
 class PCIMS(ctk.CTk):
     def __init__(self):
+        # Load dark mode setting from config file
+        self.load_dark_mode_setting()
         super().__init__()
         self.title("PCIMS")
         self.geometry("1024x768")
 
         # Set initial appearance mode
-        self.is_dark_mode = True
+        self.is_dark_mode = self.config.get("is_dark_mode", True)
 
         # Notebook for managing tabs
         self.notebook = ttk.Notebook(self)
@@ -112,8 +115,21 @@ class PCIMS(ctk.CTk):
 
     def toggle_dark_mode(self):
         self.is_dark_mode = not self.is_dark_mode
+        self.save_dark_mode_setting()
         self.apply_theme()
         self.refresh_tab()
+
+    def save_dark_mode_setting(self):
+        self.config["is_dark_mode"] = self.is_dark_mode
+        with open("config.json", "w") as config_file:
+            json.dump(self.config, config_file)
+
+    def load_dark_mode_setting(self):
+        try:
+            with open("config.json", "r") as config_file:
+                self.config = json.load(config_file)
+        except FileNotFoundError:
+            self.config = {}
 
     def apply_theme(self):
         if self.is_dark_mode:
