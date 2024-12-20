@@ -266,7 +266,7 @@ def get_sales():
     cursor.execute("SELECT * FROM income")
     items = cursor.fetchall()
     conn.close()
-    return [{"name": row[1], "cost": row[2], "selling_price": row[3], "profit": row[4], "sale_date": row[5]} for row in items]
+    return [{"id": row[0], "name": row[1], "cost": row[2], "selling_price": row[3], "profit": row[4], "sale_date": row[5]} for row in items]
 
 
 def undo_sale(sold_pc_id):

@@ -154,7 +154,7 @@ class BalanceTab(ctk.CTkFrame):
                 f"€{sold_item['profit']}",
                 sold_item['sale_date']
             )
-            self.right_tree.insert("", tk.END, values=sold_item_info)
+            self.right_tree.insert("", tk.END, values=sold_item_info, tags=(sold_item['id'],))
             total_income += sold_item['selling_price']
 
         # Calculate total profit and update the labels with the calculated totals
@@ -233,9 +233,12 @@ class BalanceTab(ctk.CTkFrame):
 
     def show_sold_pc_parts(self, event):
         selected_item = self.right_tree.selection()
+        print(selected_item)
         if selected_item:
-            income_id = self.right_tree.item(selected_item, 'values')[0]
+            income_id = self.right_tree.item(selected_item, 'tags')[0]
+            print(income_id)
             parts_info = get_sold_pc_parts(income_id)
+            print(parts_info)
             if parts_info:
                 parts_details = "\n".join([f"{part['name']} ({part['type']}): €{part['price']} (Purchased on {part['purchase_date']})" for part in parts_info])
                 messagebox.showinfo("Sold PC Parts Information", parts_details)
