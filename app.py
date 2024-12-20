@@ -53,6 +53,9 @@ class PCIMS(ctk.CTk):
         self.sell_button = ctk.CTkButton(button_frame, text="Sell", command=self.sell_item)
         self.sell_button.pack(side="left", padx=2, pady=3)
 
+        self.unsell_button = ctk.CTkButton(button_frame, text="Unsell", command=self.unsell_item)
+        self.unsell_button.pack(side="left", padx=2, pady=3)
+
         # Add a small interactive icon to toggle dark mode
         self.dark_mode_icon = ctk.CTkButton(button_frame, text="       ☀️", command=self.toggle_dark_mode)
         self.dark_mode_icon.pack(side="right", padx=2, pady=3)
@@ -119,6 +122,12 @@ class PCIMS(ctk.CTk):
         selected_tab = self.notebook.nametowidget(self.notebook.select())
         if hasattr(selected_tab, "sell_item"):
             selected_tab.sell_item()
+
+    def unsell_item(self):
+        # Get the selected item from the right Treeview in the Balance tab
+        selected_tab = self.notebook.nametowidget(self.notebook.select())
+        if hasattr(selected_tab, "unsell_item"):
+            selected_tab.unsell_item()
 
     def on_closing(self):
         """Handle the window close event."""

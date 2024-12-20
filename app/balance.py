@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts
+from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts, undo_sale
 
 class BalanceTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -233,14 +233,19 @@ class BalanceTab(ctk.CTkFrame):
 
     def show_sold_pc_parts(self, event):
         selected_item = self.right_tree.selection()
-        print(selected_item)
         if selected_item:
             income_id = self.right_tree.item(selected_item, 'tags')[0]
-            print(income_id)
             parts_info = get_sold_pc_parts(income_id)
-            print(parts_info)
             if parts_info:
                 parts_details = "\n".join([f"{part['name']} ({part['type']}): €{part['price']} (Purchased on {part['purchase_date']})" for part in parts_info])
                 messagebox.showinfo("Sold PC Parts Information", parts_details)
-            else:
-                messagebox.showinfo("Sold PC Parts Information", "No parts information found for the selected PC.")
+
+
+    def unsell_item(self):
+        selected_item = self.right_tree.selection()
+        if selected_item:
+            income_id = self.right_tree.item(selected_item, 'tags')[0]
+            confirm = messagebox.askyesno("Confirm Unsell", "Do you want to unsell the selected item?")
+            if confirm:
+                undo_sale(income_id)
+                self.refresh()

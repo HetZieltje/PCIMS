@@ -269,16 +269,16 @@ def get_sales():
     return [{"id": row[0], "name": row[1], "cost": row[2], "selling_price": row[3], "profit": row[4], "sale_date": row[5]} for row in items]
 
 
-def undo_sale(sold_pc_id):
+def undo_sale(sold_item_id):
     conn = get_connection()
     cursor = conn.cursor()
 
     # Retrieve part IDs from `sold_pcs`
-    cursor.execute("SELECT * FROM sold_pcs WHERE id=?", (sold_pc_id,))
+    cursor.execute("SELECT * FROM sold_pcs WHERE id=?", (sold_item_id,))
     sold_pc = cursor.fetchone()
 
     if sold_pc:
-        part_id_indexes = range(3, len(sold_pc) - 1)  # Indexes of part IDs in the record
+        part_id_indexes = range(1, len(sold_pc))  # Indexes of part IDs in the record
 
         # Re-add each part to `inventory` using information from `expenses`
         for i in part_id_indexes:
@@ -288,12 +288,25 @@ def undo_sale(sold_pc_id):
                 part_info = cursor.fetchone()
                 if part_info:
                     cursor.execute("""
-                        INSERT INTO inventory (name, type, price, used_in)
-                        VALUES (?, ?, ?, NULL)
-                    """, (part_info[0], part_info[1], part_info[2]))
+                        INSERT INTO inventory (id, name, type, price, used_in)
+                        VALUES (?, ?, ?, ?, NULL)
+                    """, (part_id, part_info[0], part_info[1], part_info[2]))
 
         # Remove the sold PC record from `sold_pcs`
-        cursor.execute("DELETE FROM sold_pcs WHERE id=?", (sold_pc_id,))
+        cursor.execute("DELETE FROM sold_pcs WHERE id=?", (sold_item_id,))
+
+    else:
+        # If no record is found in `sold_pcs`, it might be an individual item
+        cursor.execute("SELECT name, type, price FROM expenses WHERE id=?", (sold_item_id,))
+        sold_item = cursor.fetchone()
+        if sold_item:
+            cursor.execute("""
+                INSERT INTO inventory (name, type, price, used_in)
+                VALUES (?, ?, ?, NULL)
+            """, (sold_item[0], sold_item[1], sold_item[2]))
+
+    # Remove the income record
+    cursor.execute("DELETE FROM income WHERE id=?", (sold_item_id,))
 
     conn.commit()
     conn.close()
