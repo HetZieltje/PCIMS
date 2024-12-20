@@ -313,6 +313,14 @@ class InventoryTab(ctk.CTkFrame):
         sale_date_popup = tk.Toplevel(self)
         sale_date_popup.title("Select Sale Date")
 
+        # Center the popup window
+        sale_date_popup.update_idletasks()
+        width = 300  # Set a fixed width for the popup
+        height = 200  # Set a fixed height for the popup
+        x = (sale_date_popup.winfo_screenwidth() // 2) - (width // 2)
+        y = (sale_date_popup.winfo_screenheight() // 2) - (height // 2)
+        sale_date_popup.geometry(f'{width}x{height}+{x}+{y}')
+
         tk.Label(sale_date_popup, text=f"Select sale date for {item_name}:").pack(pady=10)
         sale_date_entry = DateEntry(sale_date_popup, width=12, background='darkblue', foreground='white', borderwidth=2)
         sale_date_entry.pack(pady=10)
