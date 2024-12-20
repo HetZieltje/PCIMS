@@ -114,12 +114,12 @@ class InventoryTab(ctk.CTkFrame):
         inventory_items = get_inventory_items()
         assembled_pcs = get_assembled_pcs()
 
-        # Insert each inventory item into the Treeview on the left
+        # Insert each inventory item into the Treeview on the left, excluding Extras
         for item in inventory_items:
-            component_id = item[0]
-            # Ensure that component_id is in used_in_dict before accessing it
-            item_info = item[1], item[2], f"€{item[3]}", item[4]
-            self.left_tree.insert("", tk.END, values=item_info, tags=(component_id,))
+            if item[2] != "Extra":
+                component_id = item[0]
+                item_info = item[1], item[2], f"€{item[3]}", item[4]
+                self.left_tree.insert("", tk.END, values=item_info, tags=(component_id,))
 
         # Insert each assembled PC into the Treeview on the right
         for pc in assembled_pcs:

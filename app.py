@@ -9,6 +9,7 @@ from app.inventory import InventoryTab
 from app.purchase import PurchaseTab
 from app.assemble import AssembleTab
 from app.balance import BalanceTab
+from app.extras import ExtrasTab
 
 from db.queries import initialize_database
 
@@ -31,6 +32,7 @@ class PCIMS(ctk.CTk):
         self.notebook.add(PurchaseTab(self.notebook, self), text="Enter Purchase")
         self.notebook.add(AssembleTab(self.notebook, self), text="Assemble PC")
         self.notebook.add(BalanceTab(self.notebook, self), text="Balance")
+        self.notebook.add(ExtrasTab(self.notebook, self), text="Extras")
 
         self.notebook.pack(expand=1, fill="both")
 
@@ -52,6 +54,9 @@ class PCIMS(ctk.CTk):
 
         self.balance_button = ctk.CTkButton(button_frame, text="Balance", command=self.switch_to_balance_tab)
         self.balance_button.pack(side="left", padx=2, pady=3)
+
+        self.extras_button = ctk.CTkButton(button_frame, text="Extras", command=self.switch_to_extras_tab)
+        self.extras_button.pack(side="left", padx=2, pady=3)
 
         self.delete_button = ctk.CTkButton(button_frame, text="Delete", command=self.delete_item)
         self.delete_button.pack(side="left", padx=2, pady=3)
@@ -89,6 +94,7 @@ class PCIMS(ctk.CTk):
         self.add_purchase_button.pack_forget()
         self.assemble_pc_button.pack_forget()
         self.balance_button.pack_forget()
+        self.extras_button.pack_forget()
         self.delete_button.pack_forget()
         self.sell_button.pack_forget()
         self.unsell_button.pack_forget()
@@ -103,15 +109,25 @@ class PCIMS(ctk.CTk):
             self.inventory_button.pack(side="left", padx=2, pady=3)
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
             self.balance_button.pack(side="left", padx=2, pady=3)
+            self.extras_button.pack(side="left", padx=2, pady=3)
         elif selected_tab == 2:  # Assemble Tab
             self.inventory_button.pack(side="left", padx=2, pady=3)
             self.add_purchase_button.pack(side="left", padx=2, pady=3)
             self.balance_button.pack(side="left", padx=2, pady=3)
+            self.extras_button.pack(side="left", padx=2, pady=3)
         elif selected_tab == 3:  # Balance Tab
             self.inventory_button.pack(side="left", padx=2, pady=3)
             self.add_purchase_button.pack(side="left", padx=2, pady=3)
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
             self.unsell_button.pack(side="left", padx=2, pady=3)
+            self.extras_button.pack(side="left", padx=2, pady=3)
+        elif selected_tab == 4:  # Extras Tab
+            self.inventory_button.pack(side="left", padx=2, pady=3)
+            self.add_purchase_button.pack(side="left", padx=2, pady=3)
+            self.assemble_pc_button.pack(side="left", padx=2, pady=3)
+            self.balance_button.pack(side="left", padx=2, pady=3)
+            self.delete_button.pack(side="left", padx=2, pady=3)
+            self.sell_button.pack(side="left", padx=2, pady=3)
 
     def toggle_dark_mode(self):
         self.is_dark_mode = not self.is_dark_mode
@@ -167,6 +183,9 @@ class PCIMS(ctk.CTk):
     
     def switch_to_balance_tab(self):
         self.notebook.select(3)
+
+    def switch_to_extras_tab(self):
+        self.notebook.select(4)
 
     def delete_item(self):
         # Get the selected item from the left or right Treeview
