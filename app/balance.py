@@ -110,7 +110,6 @@ class BalanceTab(ctk.CTkFrame):
         self.set_treeview_style()
 
     def set_treeview_style(self):
-        style = ttk.Style()
         if self.app.is_dark_mode:
             self.left_tree.configure(style="Dark.Treeview")
             self.right_tree.configure(style="Dark.Treeview")

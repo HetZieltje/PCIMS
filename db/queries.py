@@ -15,19 +15,9 @@ def initialize_database():
             name TEXT NOT NULL,
             type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
-            purchase_date DATE DEFAULT CURRENT_DATE NOT NULL
-        )
-    ''')
-
-    # Inventory table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS inventory (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
-            price REAL NOT NULL,
-            used_in TEXT,
-            FOREIGN KEY(id) REFERENCES expenses(id) ON DELETE CASCADE
+            purchase_date DATE DEFAULT CURRENT_DATE NOT NULL,
+            in_inventory BOOLEAN NOT NULL DEFAULT 1,
+            used_in TEXT
         )
     ''')
 
@@ -86,37 +76,32 @@ def initialize_database():
     conn.close()
 
 # Inventory Queries
-def add_item_to_inventory(id, name, item_type, price, used_in=None):
+def add_item_to_inventory(id):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO inventory (id, name, type, price, used_in)
-        VALUES (?, ?, ?, ?, ?)
-    """, (id, name, item_type, price, used_in))
+    cursor.execute("UPDATE expenses SET in_inventory = 1 WHERE id = ?", (id,))
     conn.commit()
     conn.close()
-
 
 def get_inventory_items():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, type, price, used_in FROM inventory")
+    cursor.execute("SELECT id, name, type, price, used_in FROM expenses WHERE in_inventory = 1")
     items = cursor.fetchall()
     conn.close()
     return items
 
-
 def delete_item_from_inventory(item_id):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM inventory WHERE id=?", (item_id,))
+    cursor.execute("UPDATE expenses SET in_inventory = 0 WHERE id = ?", (item_id,))
     conn.commit()
     conn.close()
 
 def delete_components_used_in_pc(pc_name):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM inventory WHERE used_in=?", (pc_name,))
+    cursor.execute("UPDATE expenses SET in_inventory = 0 WHERE used_in = ?", (pc_name,))
     conn.commit()
     conn.close()
 
@@ -125,12 +110,12 @@ def update_used_in_component(pc_name, names, item_type):
     cursor = conn.cursor()
     for name in names.split(';'):
         cursor.execute("""
-            UPDATE inventory 
+            UPDATE expenses 
             SET used_in = ? 
             WHERE name = ? AND type = ? AND used_in IS NULL 
             AND id = (
                 SELECT id 
-                FROM inventory 
+                FROM expenses 
                 WHERE name = ? AND type = ? AND used_in IS NULL 
                 ORDER BY id 
                 LIMIT 1
@@ -139,23 +124,20 @@ def update_used_in_component(pc_name, names, item_type):
     conn.commit()
     conn.close()
 
-
 def update_used_in_for_deleted_pc(deleted_pc_name):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE inventory SET used_in = NULL WHERE used_in = ?", (deleted_pc_name,))
+    cursor.execute("UPDATE expenses SET used_in = NULL WHERE used_in = ?", (deleted_pc_name,))
     conn.commit()
     conn.close()
-
 
 def get_total_pc_price(pc_name):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT SUM(price) FROM inventory WHERE used_in=?", (pc_name,))
+    cursor.execute("SELECT SUM(price) FROM expenses WHERE used_in=?", (pc_name,))
     total_price = cursor.fetchone()[0]
     conn.close()
     return total_price if total_price else 0
-
 
 # Expense Queries
 def add_expense(name, item_type, price, purchase_date="CURRENT_DATE"):
@@ -171,7 +153,6 @@ def add_expense(name, item_type, price, purchase_date="CURRENT_DATE"):
 
     return id
 
-
 def delete_expense(item_id):
     conn = get_connection()
     cursor = conn.cursor()
@@ -179,20 +160,18 @@ def delete_expense(item_id):
     conn.commit()
     conn.close()
 
-
 def get_expenses():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM expenses")
     items = cursor.fetchall()
     conn.close()
-    return [{"id": row[0], "name": row[1], "type": row[2], "price": row[3], "purchase_date": row[4]} for row in items]
-
+    return [{"id": row[0], "name": row[1], "type": row[2], "price": row[3], "purchase_date": row[4], "in_inventory": row[5], "used_in": row[6]} for row in items]
 
 def get_inventory_value():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT SUM(price) FROM inventory")
+    cursor.execute("SELECT SUM(price) FROM expenses WHERE in_inventory = 1")
     inventory_value = cursor.fetchone()[0]
     conn.close()
     return inventory_value if inventory_value else 0
@@ -203,7 +182,6 @@ def get_purchase_date(item_id):
         if expense['id'] == item_id:
             return expense['purchase_date']
     return None
-
 
 # Assembled PCs Queries
 def assemble_pc(pc_name, price, components):
@@ -218,7 +196,6 @@ def assemble_pc(pc_name, price, components):
     conn.commit()
     conn.close()
 
-
 def get_assembled_pcs():
     conn = get_connection()
     cursor = conn.cursor()
@@ -227,14 +204,12 @@ def get_assembled_pcs():
     conn.close()
     return pcs
 
-
 def delete_assembled_pc(pc_name):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM assembled_pcs WHERE name=?", (pc_name,))
     conn.commit()
     conn.close()
-
 
 def get_pc_names():
     """Fetch all assembled PC names from the database."""
@@ -244,7 +219,6 @@ def get_pc_names():
     pc_names = [row[0] for row in cursor.fetchall()]
     conn.close()
     return pc_names
-
 
 # Income Queries
 def add_income(name, cost, selling_price, profit, sale_date):
@@ -259,7 +233,6 @@ def add_income(name, cost, selling_price, profit, sale_date):
     conn.close()
     return income_id
 
-
 def get_sales():
     conn = get_connection()
     cursor = conn.cursor()
@@ -267,7 +240,6 @@ def get_sales():
     items = cursor.fetchall()
     conn.close()
     return [{"id": row[0], "name": row[1], "cost": row[2], "selling_price": row[3], "profit": row[4], "sale_date": row[5]} for row in items]
-
 
 def undo_sale(sold_item_id):
     conn = get_connection()
@@ -280,37 +252,38 @@ def undo_sale(sold_item_id):
     if sold_pc:
         part_id_indexes = range(1, len(sold_pc))  # Indexes of part IDs in the record
 
-        # Re-add each part to `inventory` using information from `expenses`
+        # Re-add each part to `expenses` using information from `expenses`
         for i in part_id_indexes:
             part_id = sold_pc[i]
             if part_id:
-                cursor.execute("SELECT name, type, price FROM expenses WHERE id=?", (part_id,))
-                part_info = cursor.fetchone()
-                if part_info:
-                    cursor.execute("""
-                        INSERT INTO inventory (id, name, type, price, used_in)
-                        VALUES (?, ?, ?, ?, NULL)
-                    """, (part_id, part_info[0], part_info[1], part_info[2]))
+                cursor.execute("UPDATE expenses SET in_inventory = 1 WHERE id=?", (part_id,))
+
+        # Retrieve the PC name and price from the `income` table
+        cursor.execute("SELECT name, cost FROM income WHERE id=?", (sold_item_id,))
+        pc_info = cursor.fetchone()
+        pc_name, price = pc_info[0], pc_info[1]
+
+        # Replace None with empty strings
+        component_ids = [part_id if part_id is not None else "" for part_id in sold_pc[1:]]
+
+        # Reinsert the PC into the `assembled_pcs` table
+        cursor.execute("""
+            INSERT INTO assembled_pcs (name, price, cpu, cooler, gpu, motherboard, ram, ssd, hdd, pc_case, psu, fan, extra)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (pc_name, price, *component_ids))
 
         # Remove the sold PC record from `sold_pcs`
         cursor.execute("DELETE FROM sold_pcs WHERE id=?", (sold_item_id,))
 
     else:
         # If no record is found in `sold_pcs`, it might be an individual item
-        cursor.execute("SELECT name, type, price FROM expenses WHERE id=?", (sold_item_id,))
-        sold_item = cursor.fetchone()
-        if sold_item:
-            cursor.execute("""
-                INSERT INTO inventory (name, type, price, used_in)
-                VALUES (?, ?, ?, NULL)
-            """, (sold_item[0], sold_item[1], sold_item[2]))
+        cursor.execute("UPDATE expenses SET in_inventory = 1 WHERE id=?", (sold_item_id,))
 
     # Remove the income record
     cursor.execute("DELETE FROM income WHERE id=?", (sold_item_id,))
 
     conn.commit()
     conn.close()
-
 
 def add_sold_pc(id, component_ids):
     conn = get_connection()
