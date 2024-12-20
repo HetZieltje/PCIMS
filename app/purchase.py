@@ -120,13 +120,13 @@ class PurchaseTab(ctk.CTkFrame):
             percentage = float(self.percent_entry.get().replace(',', '.').replace(' ', '.')) if self.percent_entry.get() else 100.0
             price_after_percentage = self.calc_price(price, percentage)
             purchase_date = self.date_entry.get_date()
-            id = add_item_to_inventory(name, type, price_after_percentage)
-            add_expense(id, name, type, price_after_percentage, purchase_date)
+            id = add_expense(name, type, price_after_percentage, purchase_date)
+            add_item_to_inventory(id, name, type, price_after_percentage)
 
         # Add items from the current purchase list
         for item in self.current_purchase_items:            
-            id = add_item_to_inventory(item['name'], item['component_type'], item['price'])
-            add_expense(id, item['name'], item['component_type'], item['price'])
+            id =  add_expense(item['name'], item['component_type'], item['price'], item['purchase_date'])
+            add_item_to_inventory(id, item['name'], item['component_type'], item['price'])
 
         # Clear the current purchase list and UI
         self.current_purchase_items = []

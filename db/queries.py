@@ -1,5 +1,4 @@
 from db.connection import get_connection
-import uuid
 
 # Initialize the database with required tables
 def initialize_database():
@@ -12,7 +11,7 @@ def initialize_database():
     # Expenses table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS expenses (
-            id TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
@@ -23,12 +22,12 @@ def initialize_database():
     # Inventory table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS inventory (
-            id TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             type TEXT NOT NULL CHECK (type IN ('CPU', 'Cooler', 'GPU','Motherboard', 'RAM', 'SSD', 'HDD', 'Case', 'PSU', 'Fan', 'Extra')),
             price REAL NOT NULL,
             used_in TEXT,
-            FOREIGN KEY (id) REFERENCES expenses (id) ON DELETE CASCADE
+            FOREIGN KEY(id) REFERENCES expenses(id) ON DELETE CASCADE
         )
     ''')
 
@@ -67,9 +66,7 @@ def initialize_database():
     # Sold PCs table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sold_pcs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            price REAL NOT NULL,
+            id INTEGER PRIMARY KEY,
             cpu INTEGER REFERENCES expenses(id),
             cooler INTEGER REFERENCES expenses(id),
             gpu INTEGER REFERENCES expenses(id),
@@ -79,8 +76,9 @@ def initialize_database():
             hdd INTEGER REFERENCES expenses(id),
             pc_case INTEGER REFERENCES expenses(id),
             psu INTEGER REFERENCES expenses(id),
-            fan1 INTEGER REFERENCES expenses(id),
-            extra INTEGER REFERENCES expenses(id)
+            fan INTEGER REFERENCES expenses(id),
+            extra INTEGER REFERENCES expenses(id),
+            FOREIGN KEY(id) REFERENCES income(id) ON DELETE CASCADE
         )
     ''')
 
@@ -88,17 +86,15 @@ def initialize_database():
     conn.close()
 
 # Inventory Queries
-def add_item_to_inventory(name, item_type, price, used_in=None):
-    item_id = str(uuid.uuid4())
+def add_item_to_inventory(id, name, item_type, price, used_in=None):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO inventory (id, name, type, price, used_in)
         VALUES (?, ?, ?, ?, ?)
-    """, (item_id, name, item_type, price, used_in))
+    """, (id, name, item_type, price, used_in))
     conn.commit()
     conn.close()
-    return item_id
 
 
 def get_inventory_items():
@@ -162,15 +158,18 @@ def get_total_pc_price(pc_name):
 
 
 # Expense Queries
-def add_expense(item_id, name, item_type, price, purchase_date="CURRENT_DATE"):
+def add_expense(name, item_type, price, purchase_date="CURRENT_DATE"):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO expenses (id, name, type, price, purchase_date)
-        VALUES (?, ?, ?, ?, ?)
-    """, (item_id, name, item_type, price, purchase_date))
+        INSERT INTO expenses (name, type, price, purchase_date)
+        VALUES (?, ?, ?, ?)
+    """, (name, item_type, price, purchase_date))
+    id = cursor.lastrowid
     conn.commit()
     conn.close()
+
+    return id
 
 
 def delete_expense(item_id):
@@ -256,7 +255,9 @@ def add_income(name, cost, selling_price, profit, sale_date):
         VALUES (?, ?, ?, ?, ?)
     """, (name, cost, selling_price, profit, sale_date))
     conn.commit()
+    income_id = cursor.lastrowid
     conn.close()
+    return income_id
 
 
 def get_sales():
@@ -296,3 +297,22 @@ def undo_sale(sold_pc_id):
 
     conn.commit()
     conn.close()
+
+
+def add_sold_pc(id, component_ids):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO sold_pcs (id, cpu, cooler, gpu, motherboard, ram, ssd, hdd, pc_case, psu, fan, extra)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (id, *component_ids))
+    conn.commit()
+    conn.close()
+
+def get_sold_pcs():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM sold_pcs")
+    pcs = cursor.fetchall()
+    conn.close()
+    return pcs

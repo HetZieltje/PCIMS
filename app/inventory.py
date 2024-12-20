@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox, simpledialog
 from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, update_used_in_for_deleted_pc, add_income, delete_components_used_in_pc, get_purchase_date
+from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, update_used_in_for_deleted_pc, add_income, delete_components_used_in_pc, get_purchase_date, add_sold_pc
 from datetime import datetime
 
 class InventoryTab(ctk.CTkFrame):
@@ -222,7 +222,7 @@ class InventoryTab(ctk.CTkFrame):
 
     def sell_single_item(self, selected_item_left):
         # Retrieve the item ID and values from the selected item
-        item_id = self.left_tree.item(selected_item_left, 'tags')[0]
+        item_id = int(self.left_tree.item(selected_item_left, 'tags')[0])
         item_values = self.left_tree.item(selected_item_left, 'values')
         item_name = item_values[0]
         used_in_pc = item_values[3]
@@ -288,11 +288,15 @@ class InventoryTab(ctk.CTkFrame):
                 total_cost = float(pc_info[1][1:])
                 profit = round(selling_price - total_cost, 2)
 
-                # Add the income entry
-                add_income(pc_name, total_cost, selling_price, profit, sale_date)
+                # Add the income entry and retrieve the id
+                income_id = add_income(pc_name, total_cost, selling_price, profit, sale_date)
 
                 # Delete components used in the PC from the inventory
                 delete_components_used_in_pc(pc_name)
+
+                # Add the sold PC to the sold_pcs table
+                component_ids = [item[0] for item in get_inventory_items() if item[4] == pc_name]
+                add_sold_pc(income_id, component_ids)
 
                 # Delete the assembled PC from the database
                 delete_assembled_pc(pc_name)

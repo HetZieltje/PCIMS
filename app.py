@@ -15,7 +15,7 @@ class PCIMS(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("PCIMS")
-        self.geometry("800x600")
+        self.geometry("1024x768")
 
         # Set initial appearance mode
         self.is_dark_mode = True
@@ -54,7 +54,7 @@ class PCIMS(ctk.CTk):
         self.sell_button.pack(side="left", padx=2, pady=3)
 
         # Add a small interactive icon to toggle dark mode
-        self.dark_mode_icon = ctk.CTkButton(button_frame, text="🌙", command=self.toggle_dark_mode)
+        self.dark_mode_icon = ctk.CTkButton(button_frame, text="       ☀️", command=self.toggle_dark_mode)
         self.dark_mode_icon.pack(side="right", padx=2, pady=3)
 
         self.apply_theme()
@@ -78,12 +78,12 @@ class PCIMS(ctk.CTk):
         if self.is_dark_mode:
             ctk.set_appearance_mode("dark")
             self.configure(fg_color="#2e2e2e")
-            self.dark_mode_icon.configure(text="🌙")
+            self.dark_mode_icon.configure(text="       ☀️")
             self.notebook.configure(style="Dark.TNotebook")
         else:
             ctk.set_appearance_mode("light")
             self.configure(fg_color="#f0f0f0")
-            self.dark_mode_icon.configure(text="       ☀️")
+            self.dark_mode_icon.configure(text="🌙")
             self.notebook.configure(style="Light.TNotebook")
 
         # Apply theme to all tabs
