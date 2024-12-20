@@ -38,6 +38,9 @@ class PCIMS(ctk.CTk):
         button_frame.pack(side="top", fill="x", padx=10, pady=5)
 
         # Add buttons to the button frame
+        self.inventory_button = ctk.CTkButton(button_frame, text="Inventory", command=self.switch_to_inventory_tab)
+        self.inventory_button.pack(side="left", padx=2, pady=3)
+
         self.add_purchase_button = ctk.CTkButton(button_frame, text="Add Purchase", command=self.switch_to_purchase_tab)
         self.add_purchase_button.pack(side="left", padx=2, pady=3)
 
@@ -72,6 +75,41 @@ class PCIMS(ctk.CTk):
         if hasattr(selected_tab, "refresh"):
             selected_tab.refresh()
 
+        # Update button visibility based on the selected tab
+        self.update_button_visibility()
+
+    def update_button_visibility(self):
+        selected_tab = self.notebook.index(self.notebook.select())
+
+        # Hide all buttons initially
+        self.inventory_button.pack_forget()
+        self.add_purchase_button.pack_forget()
+        self.assemble_pc_button.pack_forget()
+        self.balance_button.pack_forget()
+        self.delete_button.pack_forget()
+        self.sell_button.pack_forget()
+        self.unsell_button.pack_forget()
+
+        # Show relevant buttons based on the selected tab
+        if selected_tab == 0:  # Inventory Tab
+            self.add_purchase_button.pack(side="left", padx=2, pady=3)
+            self.assemble_pc_button.pack(side="left", padx=2, pady=3)
+            self.delete_button.pack(side="left", padx=2, pady=3)
+            self.sell_button.pack(side="left", padx=2, pady=3)
+        elif selected_tab == 1:  # Purchase Tab
+            self.inventory_button.pack(side="left", padx=2, pady=3)
+            self.assemble_pc_button.pack(side="left", padx=2, pady=3)
+            self.balance_button.pack(side="left", padx=2, pady=3)
+        elif selected_tab == 2:  # Assemble Tab
+            self.inventory_button.pack(side="left", padx=2, pady=3)
+            self.add_purchase_button.pack(side="left", padx=2, pady=3)
+            self.balance_button.pack(side="left", padx=2, pady=3)
+        elif selected_tab == 3:  # Balance Tab
+            self.inventory_button.pack(side="left", padx=2, pady=3)
+            self.add_purchase_button.pack(side="left", padx=2, pady=3)
+            self.assemble_pc_button.pack(side="left", padx=2, pady=3)
+            self.unsell_button.pack(side="left", padx=2, pady=3)
+
     def toggle_dark_mode(self):
         self.is_dark_mode = not self.is_dark_mode
         self.apply_theme()
@@ -101,6 +139,9 @@ class PCIMS(ctk.CTk):
 
         # Refresh the current tab to apply the theme
         self.refresh_tab()
+
+    def switch_to_inventory_tab(self):
+        self.notebook.select(0)
 
     def switch_to_purchase_tab(self):
         self.notebook.select(1)
