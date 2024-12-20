@@ -292,10 +292,15 @@ class InventoryTab(ctk.CTkFrame):
                 income_id = add_income(pc_name, total_cost, selling_price, profit, sale_date)
 
                 # Delete components used in the PC from the inventory
+                component_ids = [item[0] for item in get_inventory_items() if item[4] == pc_name]
+
+                # Ensure the component_ids list has exactly 11 elements
+                while len(component_ids) < 11:
+                    component_ids.append(None)
+                
                 delete_components_used_in_pc(pc_name)
 
                 # Add the sold PC to the sold_pcs table
-                component_ids = [item[0] for item in get_inventory_items() if item[4] == pc_name]
                 add_sold_pc(income_id, component_ids)
 
                 # Delete the assembled PC from the database

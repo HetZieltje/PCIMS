@@ -304,7 +304,7 @@ def add_sold_pc(id, component_ids):
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO sold_pcs (id, cpu, cooler, gpu, motherboard, ram, ssd, hdd, pc_case, psu, fan, extra)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (id, *component_ids))
     conn.commit()
     conn.close()
@@ -316,3 +316,16 @@ def get_sold_pcs():
     pcs = cursor.fetchall()
     conn.close()
     return pcs
+
+def get_sold_pc_parts(income_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT e.name, e.type, e.price, e.purchase_date
+        FROM sold_pcs sp
+        JOIN expenses e ON sp.cpu = e.id OR sp.cooler = e.id OR sp.gpu = e.id OR sp.motherboard = e.id OR sp.ram = e.id OR sp.ssd = e.id OR sp.hdd = e.id OR sp.pc_case = e.id OR sp.psu = e.id OR sp.fan = e.id OR sp.extra = e.id
+        WHERE sp.id = ?
+    """, (income_id,))
+    parts = cursor.fetchall()
+    conn.close()
+    return [{"name": row[0], "type": row[1], "price": row[2], "purchase_date": row[3]} for row in parts]

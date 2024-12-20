@@ -1,8 +1,8 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value
+from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts
 
 class BalanceTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -91,6 +91,9 @@ class BalanceTab(ctk.CTkFrame):
             self.left_tree.heading(col, text=col, command=lambda _col=col: self.sort_column(self.left_tree, _col, False))
         for col in self.right_tree["columns"]:
             self.right_tree.heading(col, text=col, command=lambda _col=col: self.sort_column(self.right_tree, _col, False))
+
+        # Bind the double-click event to the right Treeview
+        self.right_tree.bind("<Double-1>", self.show_sold_pc_parts)
 
         # Apply custom style for light and dark themes
         style = ttk.Style()
@@ -227,3 +230,14 @@ class BalanceTab(ctk.CTkFrame):
                 return value
             
         return value
+
+    def show_sold_pc_parts(self, event):
+        selected_item = self.right_tree.selection()
+        if selected_item:
+            income_id = self.right_tree.item(selected_item, 'values')[0]
+            parts_info = get_sold_pc_parts(income_id)
+            if parts_info:
+                parts_details = "\n".join([f"{part['name']} ({part['type']}): €{part['price']} (Purchased on {part['purchase_date']})" for part in parts_info])
+                messagebox.showinfo("Sold PC Parts Information", parts_details)
+            else:
+                messagebox.showinfo("Sold PC Parts Information", "No parts information found for the selected PC.")
