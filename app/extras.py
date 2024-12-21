@@ -314,9 +314,21 @@ class ExtrasTab(ctk.CTkFrame):
     def refresh(self):
         self.extras_tree.delete(*self.extras_tree.get_children())
         extras = get_inventory_items()
+        
+        combined_extras = {}
         for extra in extras:
-            extra_info = (extra[1], f"€{extra[3]}", 1, extra[4])
+            if extra[2] == "Extra":
+                key = (extra[1], extra[4])
+                if key not in combined_extras:
+                    combined_extras[key] = {"total_price": 0, "quantity": 0}
+                combined_extras[key]["total_price"] += extra[3]
+                combined_extras[key]["quantity"] += 1
+
+        for (name, used_in), data in combined_extras.items():
+            avg_price = round(data["total_price"] / data["quantity"], 2)
+            extra_info = (name, f"€{avg_price}", data["quantity"], used_in)
             self.extras_tree.insert("", tk.END, values=extra_info)
+
         self.existing_extras = self.get_all_extras()
         self.name_entry.suggestions = self.existing_extras
         self.set_treeview_style()
