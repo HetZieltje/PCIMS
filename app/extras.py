@@ -182,8 +182,7 @@ class ExtrasTab(ctk.CTkFrame):
             messagebox.showerror("Error", "Please select an extra to delete.")
             return
 
-        selected_item = self.extras_tree.item(selected_item)
-        item_id = int(selected_item['values'][-1])
+        item_id = int(self.extras_tree.item(selected_item, 'tags')[0])
         delete_item_from_inventory(item_id)
         self.refresh()
 
@@ -193,9 +192,15 @@ class ExtrasTab(ctk.CTkFrame):
             messagebox.showerror("Error", "Please select an extra to sell.")
             return
 
-        selected_item = self.extras_tree.item(selected_item)
-        item_id = int(selected_item['values'][-1])
-        item_name = selected_item['values'][0]
+        item_id = int(self.extras_tree.item(selected_item, 'tags')[0])
+        item_values = self.extras_tree.item(selected_item, 'values')
+        item_name = item_values[0]
+        used_in_pc = item_values[3]
+
+        if used_in_pc != 'None':
+            # If the extra is used in a PC, raise an error message
+            messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be sold.")
+            return
 
         selling_price = self.get_selling_price(item_name)
         if selling_price is not None:
@@ -203,7 +208,12 @@ class ExtrasTab(ctk.CTkFrame):
             if sale_date is None:
                 return
 
-            purchase_date = datetime.strptime(get_purchase_date(item_id), "%Y-%m-%d").date()
+            purchase_date_str = get_purchase_date(item_id)
+            if not purchase_date_str:
+                messagebox.showerror("Error", f"Purchase date not found for item ID {item_id}.")
+                return
+
+            purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d").date()
             if sale_date < purchase_date:
                 messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
                 return
@@ -211,7 +221,7 @@ class ExtrasTab(ctk.CTkFrame):
             confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell the {item_name} for €{selling_price:.2f}?")
             if confirm:
                 delete_item_from_inventory(item_id)
-                total_cost = float(selected_item['values'][1][1:])
+                total_cost = float(item_values[1][1:])
                 profit = round(selling_price - total_cost, 2)
                 add_income(item_name, total_cost, selling_price, profit, sale_date)
                 self.refresh()
@@ -320,14 +330,15 @@ class ExtrasTab(ctk.CTkFrame):
             if extra[2] == "Extra":
                 key = (extra[1], extra[4])
                 if key not in combined_extras:
-                    combined_extras[key] = {"total_price": 0, "quantity": 0}
+                    combined_extras[key] = {"total_price": 0, "quantity": 0, "ids": []}
                 combined_extras[key]["total_price"] += extra[3]
                 combined_extras[key]["quantity"] += 1
+                combined_extras[key]["ids"].append(extra[0])
 
         for (name, used_in), data in combined_extras.items():
             avg_price = round(data["total_price"] / data["quantity"], 2)
             extra_info = (name, f"€{avg_price}", data["quantity"], used_in)
-            self.extras_tree.insert("", tk.END, values=extra_info)
+            self.extras_tree.insert("", tk.END, values=extra_info, tags=(data["ids"][0],))
 
         self.existing_extras = self.get_all_extras()
         self.name_entry.suggestions = self.existing_extras

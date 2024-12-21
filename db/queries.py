@@ -91,10 +91,10 @@ def get_inventory_items():
     conn.close()
     return items
 
-def delete_item_from_inventory(item_id):
+def delete_item_from_inventory(id):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE expenses SET in_inventory = 0 WHERE id = ?", (item_id,))
+    cursor.execute("UPDATE expenses SET in_inventory = 0 WHERE id = ?", (id,))
     conn.commit()
     conn.close()
 
@@ -153,10 +153,10 @@ def add_expense(name, item_type, price, purchase_date="CURRENT_DATE"):
 
     return id
 
-def delete_expense(item_id):
+def delete_expense(id):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM expenses WHERE id=?", (item_id,))
+    cursor.execute("DELETE FROM expenses WHERE id=?", (id,))
     conn.commit()
     conn.close()
 
@@ -176,10 +176,10 @@ def get_inventory_value():
     conn.close()
     return inventory_value if inventory_value else 0
 
-def get_purchase_date(item_id):
+def get_purchase_date(id):
     expenses = get_expenses()
     for expense in expenses:
-        if expense['id'] == item_id:
+        if expense['id'] == int(id):
             return expense['purchase_date']
     return None
 
@@ -229,9 +229,9 @@ def add_income(name, cost, selling_price, profit, sale_date):
         VALUES (?, ?, ?, ?, ?)
     """, (name, cost, selling_price, profit, sale_date))
     conn.commit()
-    income_id = cursor.lastrowid
+    id = cursor.lastrowid
     conn.close()
-    return income_id
+    return id
 
 def get_sales():
     conn = get_connection()
@@ -303,7 +303,7 @@ def get_sold_pcs():
     conn.close()
     return pcs
 
-def get_sold_pc_parts(income_id):
+def get_sold_pc_parts(id):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -311,7 +311,7 @@ def get_sold_pc_parts(income_id):
         FROM sold_pcs sp
         JOIN expenses e ON sp.cpu = e.id OR sp.cooler = e.id OR sp.gpu = e.id OR sp.motherboard = e.id OR sp.ram = e.id OR sp.ssd = e.id OR sp.hdd = e.id OR sp.pc_case = e.id OR sp.psu = e.id OR sp.fan = e.id OR sp.extra = e.id
         WHERE sp.id = ?
-    """, (income_id,))
+    """, (id,))
     parts = cursor.fetchall()
     conn.close()
     return [{"name": row[0], "type": row[1], "price": row[2], "purchase_date": row[3]} for row in parts]

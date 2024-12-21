@@ -147,7 +147,7 @@ class InventoryTab(ctk.CTkFrame):
 
         if selected_item_left:
             # Retrieve the item ID from the tags
-            item_id = self.left_tree.item(selected_item_left, 'tags')[0]
+            item_id = int(self.left_tree.item(selected_item_left, 'tags')[0])
 
             # Get the values displayed in the Treeview for the selected item
             item_values = self.left_tree.item(selected_item_left, 'values')
