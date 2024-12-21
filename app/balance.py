@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts, undo_sale
+from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts, undo_sale, delete_expense
 
 class BalanceTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -248,3 +248,30 @@ class BalanceTab(ctk.CTkFrame):
             if confirm:
                 undo_sale(income_id)
                 self.refresh()
+
+    def delete_item(self):
+        # Get the selected item from the left or right Treeview
+        selected_item_left = self.left_tree.selection()
+
+        if selected_item_left:
+            # Retrieve the item ID from the tags
+            item_id = int(self.left_tree.item(selected_item_left, 'tags')[0])
+
+            # Get the values displayed in the Treeview for the selected item
+            item_values = self.left_tree.item(selected_item_left, 'values')
+
+            # Check if the 'Used In' column is not empty for the selected item
+            used_in_pc = item_values[3]
+
+            if used_in_pc != 'None':
+                # Display an error message
+                messagebox.showerror("Error", f"The item is currently in use in '{used_in_pc}' and cannot be deleted.")
+            else:
+                # Ask for confirmation before deleting the item
+                confirm = messagebox.askyesno("Confirm Deletion", "Do you want to completely remove the item from expenses?")
+                if confirm:
+                    # Delete the item from expenses
+                    delete_expense(item_id)
+
+                    # Refresh the inventory Treeview
+                    self.refresh()

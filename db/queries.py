@@ -112,11 +112,11 @@ def update_used_in_component(pc_name, names, item_type):
         cursor.execute("""
             UPDATE expenses 
             SET used_in = ? 
-            WHERE name = ? AND type = ? AND used_in IS NULL 
+            WHERE name = ? AND type = ? AND used_in IS NULL AND in_inventory = 1
             AND id = (
                 SELECT id 
                 FROM expenses 
-                WHERE name = ? AND type = ? AND used_in IS NULL 
+                WHERE name = ? AND type = ? AND used_in IS NULL AND in_inventory = 1
                 ORDER BY id 
                 LIMIT 1
             )
@@ -182,6 +182,14 @@ def get_purchase_date(id):
         if expense['id'] == int(id):
             return expense['purchase_date']
     return None
+
+def get_item_cost(item_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT price FROM expenses WHERE id = ?", (item_id,))
+    cost = cursor.fetchone()[0]
+    conn.close()
+    return cost
 
 # Assembled PCs Queries
 def assemble_pc(pc_name, price, components):

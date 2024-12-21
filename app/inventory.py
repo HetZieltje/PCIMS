@@ -3,8 +3,9 @@ from tkinter import ttk, messagebox, simpledialog
 from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, update_used_in_for_deleted_pc, add_income, delete_components_used_in_pc, get_purchase_date, add_sold_pc
+from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, update_used_in_for_deleted_pc, add_income, delete_components_used_in_pc, get_purchase_date, add_sold_pc, get_item_cost
 from datetime import datetime
+import json
 
 class InventoryTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -21,10 +22,11 @@ class InventoryTab(ctk.CTkFrame):
         inventory_panedwindow.pack(expand=1, fill="both")
 
         # Left Treeview to display the inventory (similar to the current inventory_tab)
-        self.left_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Type", "Price", "Used In"), show="headings", selectmode="browse", style="Custom.Treeview")
+        self.left_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Type", "Price", "Quantity", "Used In"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.left_tree.heading("Name", text="Name")
         self.left_tree.heading("Type", text="Type")
         self.left_tree.heading("Price", text="Price")
+        self.left_tree.heading("Quantity", text="Quantity")
         self.left_tree.heading("Used In", text="Used In")
         self.left_tree.pack(side=tk.LEFT, expand=1, fill="both")
 
@@ -50,6 +52,7 @@ class InventoryTab(ctk.CTkFrame):
         # Left Treeview columns configuration
         self.left_tree.column("Name", minwidth=150, width=200)
         self.left_tree.column("Type", minwidth=100, width=150)
+        self.left_tree.column("Quantity", minwidth=50, width=100)
         self.left_tree.column("Price", minwidth=50, width=100)
         self.left_tree.column("Used In", minwidth=50, width=100)
 
@@ -114,12 +117,25 @@ class InventoryTab(ctk.CTkFrame):
         inventory_items = get_inventory_items()
         assembled_pcs = get_assembled_pcs()
 
-        # Insert each inventory item into the Treeview on the left, excluding Extras
+        # Combine identical items and calculate average price
+        combined_items = {}
         for item in inventory_items:
             if item[2] != "Extra":
-                component_id = item[0]
-                item_info = item[1], item[2], f"€{item[3]}", item[4]
-                self.left_tree.insert("", tk.END, values=item_info, tags=(component_id,))
+                key = (item[1], item[2], item[4])  # (Name, Type, Used In)
+                if key not in combined_items:
+                    combined_items[key] = [[item[0]], item[3], 1]  # [[IDs], Total Price, Quantity]
+                else:
+                    combined_items[key][0].append(item[0])
+                    combined_items[key][1] += item[3]
+                    combined_items[key][2] += 1
+
+        # Insert each combined inventory item into the Treeview on the left
+        for key, value in combined_items.items():
+            name, type_, used_in = key
+            ids, total_price, quantity = value
+            avg_price = total_price / quantity
+            item_info = name, type_, quantity, f"€{avg_price:.2f}", used_in
+            self.left_tree.insert("", tk.END, values=item_info, tags=(json.dumps(ids),))
 
         # Insert each assembled PC into the Treeview on the right
         for pc in assembled_pcs:
@@ -139,51 +155,6 @@ class InventoryTab(ctk.CTkFrame):
     def switch_to_balance_tab(self):
         # Call the switch_to_balance_tab function in the main app
         self.app.switch_to_balance_tab()
-    
-    def delete_item(self):
-        # Get the selected item from the left or right Treeview
-        selected_item_left = self.left_tree.selection()
-        selected_item_right = self.right_tree.selection()
-
-        if selected_item_left:
-            # Retrieve the item ID from the tags
-            item_id = int(self.left_tree.item(selected_item_left, 'tags')[0])
-
-            # Get the values displayed in the Treeview for the selected item
-            item_values = self.left_tree.item(selected_item_left, 'values')
-
-            # Check if the 'Used In' column is not empty for the selected item
-            used_in_pc = item_values[3]
-
-            if used_in_pc != 'None':
-                # Display an error message
-                messagebox.showerror("Error", f"The item is currently in use in '{used_in_pc}' and cannot be deleted.")
-            else:
-                # Ask for confirmation before deleting the assembled PC
-                confirm = messagebox.askyesno("Confirm Deletion", "Do you want to delete the component")
-                if confirm:
-
-                    # Delete the item from the database
-                    delete_item_from_inventory(item_id)
-                    delete_expense(item_id)
-
-                    # Refresh the inventory Treeview
-                    self.refresh()
-
-        elif selected_item_right:
-            # Retrieve the PC name from the right Treeview
-            pc_name = self.right_tree.item(selected_item_right, 'values')[0]
-
-            # Ask for confirmation before deleting the assembled PC
-            confirm = messagebox.askyesno("Confirm Deletion", "Do you want to delete the assembled PC?")
-            if confirm:
-                # Delete the assembled PC from the database
-                delete_assembled_pc(pc_name)
-
-                update_used_in_for_deleted_pc(pc_name)
-
-                # Refresh the inventory Treeview
-                self.refresh()
     
     def toggle_selection_left(self, event):
         clicked_item = self.left_tree.identify('item', event.x, event.y)
@@ -221,11 +192,11 @@ class InventoryTab(ctk.CTkFrame):
             self.sell_assembled_pc(selected_item_right)
 
     def sell_single_item(self, selected_item_left):
-        # Retrieve the item ID and values from the selected item
-        item_id = int(self.left_tree.item(selected_item_left, 'tags')[0])
+        # Retrieve the item IDs and values from the selected item
+        item_ids = json.loads(self.left_tree.item(selected_item_left, 'tags')[0])
         item_values = self.left_tree.item(selected_item_left, 'values')
         item_name = item_values[0]
-        used_in_pc = item_values[3]
+        used_in_pc = item_values[4]  # Updated index for 'Used In'
 
         if used_in_pc != 'None':
             # If the item is used in a PC, raise an error message
@@ -241,20 +212,33 @@ class InventoryTab(ctk.CTkFrame):
             if sale_date is None:
                 return
 
-            # Check if the sale date is before the purchase date
-            purchase_date = datetime.strptime(get_purchase_date(item_id), "%Y-%m-%d").date()
-            if sale_date < purchase_date:
-                messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
-                return
+            # Check if the sale date is before the purchase date for any item
+            for item_id in item_ids:
+                purchase_date_str = get_purchase_date(item_id)
+                if purchase_date_str is None:
+                    continue
+                purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d").date()
+                if sale_date < purchase_date:
+                    messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
+                    return
 
             # Ask for confirmation before selling the standalone item
             confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell the {item_name} for €{selling_price:.2f}?")
             if confirm:
-                # Remove the item from inventory and add to income table
+                # Remove one item from inventory and add to income table
+                item_id = item_ids.pop(0)
                 delete_item_from_inventory(item_id)
-                total_cost = float(item_values[2][1:])
+
+                # Query the database for the cost price of the item
+                total_cost = float(get_item_cost(item_id))
                 profit = round(selling_price - total_cost, 2)
                 add_income(item_name, total_cost, selling_price, profit, sale_date)
+
+                # Update the Treeview tag with the remaining IDs
+                if item_ids:
+                    self.left_tree.item(selected_item_left, tags=(json.dumps(item_ids),))
+                else:
+                    self.left_tree.delete(selected_item_left)
 
                 # Refresh the inventory Treeview and balance tab
                 self.refresh()
@@ -399,3 +383,48 @@ class InventoryTab(ctk.CTkFrame):
                 return value
             
         return value
+
+    def delete_item(self):
+        # Get the selected item from the left or right Treeview
+        selected_item_left = self.left_tree.selection()
+        selected_item_right = self.right_tree.selection()
+
+        if selected_item_left:
+            # Retrieve the item IDs from the tags
+            item_ids = json.loads(self.left_tree.item(selected_item_left, 'tags')[0])
+
+            # Get the values displayed in the Treeview for the selected item
+            item_values = self.left_tree.item(selected_item_left, 'values')
+
+            # Check if the 'Used In' column is not empty for the selected item
+            used_in_pc = item_values[4]  # Updated index for 'Used In'
+
+            if used_in_pc != 'None':
+                # Display an error message
+                messagebox.showerror("Error", f"The item is currently in use in '{used_in_pc}' and cannot be deleted.")
+            else:
+                # Ask for confirmation before deleting the item
+                confirm = messagebox.askyesno("Confirm Deletion", "Do you want to remove the item from inventory?")
+                if confirm:
+                    # Remove the items from inventory but not from expenses
+                    for item_id in item_ids:
+                        delete_item_from_inventory(item_id)
+
+                    # Refresh the inventory Treeview
+                    self.refresh()
+
+        elif selected_item_right:
+            # Retrieve the PC name from the right Treeview
+            pc_name = self.right_tree.item(selected_item_right, 'values')[0]
+
+            # Ask for confirmation before deleting the assembled PC
+            confirm = messagebox.askyesno("Confirm Deletion", "Do you want to delete the assembled PC?")
+            if confirm:
+                # Clear the used_in field for all components used in the PC
+                update_used_in_for_deleted_pc(pc_name)
+
+                # Delete the assembled PC from the database
+                delete_assembled_pc(pc_name)
+
+                # Refresh the inventory Treeview
+                self.refresh()
