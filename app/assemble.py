@@ -16,30 +16,37 @@ class AssembleTab(ctk.CTkFrame):
         self.pc_name_entry = ctk.CTkEntry(self, width=300)
         self.pc_name_entry.insert(0, name)
         self.pc_name_label.grid(row=0, column=0, padx=10, pady=5, sticky=tk.W)
-        self.pc_name_entry.grid(row=0, column=1, pady=5, sticky=tk.W)
+        self.pc_name_entry.grid(row=0, column=1, padx=10, pady=5, sticky=tk.W)
 
         # Create labels and dropdowns for each component type
-        component_types = ("CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra")
+        component_types = ("CPU", "Cooler", "Motherboard", "RAM", "GPU", "PSU", "SSD", "HDD", "Case", "Fan", "Extra")
         self.component_types = component_types
 
         # Create a dictionary to store the component type dropdowns
         self.component_entries = {}
 
-        for idx, component_type in enumerate(component_types):
-            label = ctk.CTkLabel(self, text=f"{component_type}:")
-            label.grid(row=idx // 2 + 1, column=(idx % 2) * 2, padx=10, pady=5, sticky=tk.W)
+        layout_positions = {
+            "CPU": (1, 0), "Cooler": (1, 2), "Motherboard": (1, 4), "RAM": (1, 6),
+            "GPU": (2, 0), "PSU": (2, 2),
+            "SSD": (3, 0), "HDD": (3, 2),
+            "Case": (4, 0), "Fan": (4, 2), "Extra": (4, 4)
+        }
 
-            # Create a Listbox to allow multiple selections
+        for component_type in component_types:
+            row, col = layout_positions[component_type]
+            label = ctk.CTkLabel(self, text=f"{component_type}:")
             listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=40, bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
             listbox.bind('<FocusIn>', lambda event, comp_type=component_type, listbox=listbox: self.update_listbox(comp_type, listbox))
-            listbox.grid(row=idx // 2 + 1, column=(idx % 2) * 2 + 1, pady=5, sticky=tk.W)
+
+            label.grid(row=row, column=col, padx=10, pady=5, sticky=tk.W)
+            listbox.grid(row=row, column=col + 1, padx=10, pady=5, sticky=tk.W)
 
             # Save the Listbox in the dictionary
             self.component_entries[component_type] = listbox
 
         # Create an "Assemble" button
         assemble_button = ctk.CTkButton(self, text="Assemble", command=self.assemble_pc)
-        assemble_button.grid(row=(len(component_types) // 2) + 2, column=0, columnspan=4, pady=10)
+        assemble_button.grid(row=5, column=0, columnspan=8, pady=10)
 
         for component_type in component_types:
             self.update_listbox(component_type, self.component_entries[component_type])
