@@ -271,14 +271,21 @@ def undo_sale(sold_item_id):
         pc_info = cursor.fetchone()
         pc_name, price = pc_info[0], pc_info[1]
 
-        # Replace None with empty strings
-        component_ids = [part_id if part_id is not None else "" for part_id in sold_pc[1:]]
+        # Retrieve the full names of each part and ensure correct order
+        component_names = [""] * 11
+        component_types = ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "hdd", "pc_case", "psu", "fan", "extra"]
+        for i, part_id in enumerate(sold_pc[1:]):
+            if part_id:
+                cursor.execute("SELECT name, type FROM expenses WHERE id=?", (part_id,))
+                component_name, component_type = cursor.fetchone()
+                index = component_types.index(component_type.lower())
+                component_names[index] = component_name
 
         # Reinsert the PC into the `assembled_pcs` table
         cursor.execute("""
             INSERT INTO assembled_pcs (name, price, cpu, cooler, gpu, motherboard, ram, ssd, hdd, pc_case, psu, fan, extra)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (pc_name, price, *component_ids))
+        """, (pc_name, price, *component_names))
 
         # Remove the sold PC record from `sold_pcs`
         cursor.execute("DELETE FROM sold_pcs WHERE id=?", (sold_item_id,))
