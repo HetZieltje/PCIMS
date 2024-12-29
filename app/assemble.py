@@ -129,8 +129,11 @@ class AssembleTab(ctk.CTkFrame):
         # Calculate the total price
         price = round(get_total_pc_price(pc_name), 2)
 
+        # Ensure the components are in the correct order
+        ordered_components = {component: selected_components.get(component, "") for component in ["CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"]}
+
         # Insert into the database
-        assemble_pc(pc_name, price, selected_components)
+        assemble_pc(pc_name, price, ordered_components)
 
         # Refresh dropdowns and clear fields
         for component_type in self.component_types:
