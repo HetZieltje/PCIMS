@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
 import customtkinter as ctk
 from customtkinter import *
 from db.queries import get_inventory_items, get_pc_names, update_used_in_component, get_total_pc_price, assemble_pc

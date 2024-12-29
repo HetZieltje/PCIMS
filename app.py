@@ -1,8 +1,8 @@
 from tkinter import ttk
 import os
+import json
 import customtkinter as ctk
 from customtkinter import *
-import json
 
 # Import tab modules
 from app.inventory import InventoryTab
