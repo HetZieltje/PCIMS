@@ -52,8 +52,8 @@ class InventoryTab(ctk.CTkFrame):
         # Left Treeview columns configuration
         self.left_tree.column("Name", minwidth=150, width=200)
         self.left_tree.column("Type", minwidth=100, width=150)
-        self.left_tree.column("Quantity", minwidth=50, width=100)
         self.left_tree.column("Price", minwidth=50, width=100)
+        self.left_tree.column("Quantity", minwidth=50, width=100)
         self.left_tree.column("Used In", minwidth=50, width=100)
 
         # Right Treeview columns configuration
@@ -134,7 +134,7 @@ class InventoryTab(ctk.CTkFrame):
             name, type_, used_in = key
             ids, total_price, quantity = value
             avg_price = total_price / quantity
-            item_info = name, type_, quantity, f"€{avg_price:.2f}", used_in
+            item_info = name, type_, f"€{avg_price:.2f}", quantity, used_in
             self.left_tree.insert("", tk.END, values=item_info, tags=(json.dumps(ids),))
 
         # Insert each assembled PC into the Treeview on the right
