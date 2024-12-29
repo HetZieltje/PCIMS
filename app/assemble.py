@@ -107,8 +107,8 @@ class AssembleTab(ctk.CTkFrame):
             # Check if there are more items of the same type in the inventory
             items = self.get_inventory_items_by_type(component_type)
             if items.count(last_selected_item) > listbox.get(0, tk.END).count(last_selected_item):
-                # Insert another item of the same type for selection
-                listbox.insert(tk.END, last_selected_item)
+                # Insert another item of the same type for selection directly underneath the selected one
+                listbox.insert(last_selected_index + 1, last_selected_item)
 
     def clear_entry_fields(self):
         # Use the find_next_available_pc_name method to set the next available PC name
