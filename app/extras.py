@@ -28,7 +28,7 @@ class AutocompleteEntry(ctk.CTkEntry):
             words = self.comparison()
             if words:
                 if not self.listbox_up:
-                    self.listbox = Listbox(self.master, bg="#3e3e3e" if self.master.app.is_dark_mode else "white", fg="white" if self.master.app.is_dark_mode else "black")
+                    self.listbox = Listbox(self.master, width=min(self.winfo_width(), 50), bg="#3e3e3e" if self.master.app.is_dark_mode else "white", fg="white" if self.master.app.is_dark_mode else "black")
                     self.listbox.bind("<Button-1>", self.selection)
                     self.listbox.bind("<Right>", self.selection)
                     self.listbox.place(x=self.winfo_x(), y=self.winfo_y() + self.winfo_height())
@@ -190,8 +190,19 @@ class ExtrasTab(ctk.CTkFrame):
             return
 
         item_id = int(self.extras_tree.item(selected_item, 'tags')[0])
-        delete_item_from_inventory(item_id)
-        self.refresh()
+        item_values = self.extras_tree.item(selected_item, 'values')
+        used_in_pc = item_values[3]
+
+        if used_in_pc != 'None':
+            # If the extra is used in a PC, raise an error message
+            messagebox.showerror("Error", f"The {item_values[0]} is currently used in {used_in_pc} and cannot be deleted.")
+            return
+
+        # Ask for confirmation before deleting the item
+        confirm = messagebox.askyesno("Confirm Deletion", "Do you want to remove the item from inventory?")
+        if confirm:
+            delete_item_from_inventory(item_id)
+            self.refresh()
 
     def sell_extra(self):
         selected_item = self.extras_tree.selection()
@@ -209,12 +220,16 @@ class ExtrasTab(ctk.CTkFrame):
             messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be sold.")
             return
 
+        # Prompt the user for the selling price
         selling_price = self.get_selling_price(item_name)
+
         if selling_price is not None:
+            # Prompt the user for the sale date
             sale_date = self.get_sale_date(item_name)
             if sale_date is None:
                 return
 
+            # Check if the sale date is before the purchase date
             purchase_date_str = get_purchase_date(item_id)
             if not purchase_date_str:
                 messagebox.showerror("Error", f"Purchase date not found for item ID {item_id}.")
@@ -225,6 +240,7 @@ class ExtrasTab(ctk.CTkFrame):
                 messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
                 return
 
+            # Ask for confirmation before selling the item
             confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell the {item_name} for €{selling_price:.2f}?")
             if confirm:
                 delete_item_from_inventory(item_id)
@@ -364,3 +380,9 @@ class ExtrasTab(ctk.CTkFrame):
             style.configure("Light.Treeview.Heading", background="lightgray", foreground="black")
             style.map("Light.Treeview", background=[("selected", "lightgray")])
             self.extras_tree.configure(style="Light.Treeview")
+
+    def delete_item(self):
+        self.delete_extra()
+
+    def sell_item(self):
+        self.sell_extra()
