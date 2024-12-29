@@ -40,7 +40,7 @@ class PurchaseTab(ctk.CTkFrame):
         self.percent_entry.grid(row=3, column=1, pady=5, padx=10, sticky=tk.W)
 
         self.date_label = ctk.CTkLabel(self, text="Purchase Date:")
-        self.date_entry = DateEntry(self, width=15, background='darkblue', foreground='white', borderwidth=2)
+        self.date_entry = DateEntry(self, width=15, background='darkblue', foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
         self.date_label.grid(row=4, column=0, pady=5, padx=10, sticky=tk.W)
         self.date_entry.grid(row=4, column=1, pady=5, padx=10, sticky=tk.W)
 

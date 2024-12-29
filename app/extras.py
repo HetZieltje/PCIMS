@@ -126,7 +126,7 @@ class ExtrasTab(ctk.CTkFrame):
         self.price_switch.pack(side=tk.RIGHT)
 
         self.date_label = ctk.CTkLabel(self, text="Purchase Date:")
-        self.date_entry = DateEntry(self, width=15, background='darkblue', foreground='white', borderwidth=2)
+        self.date_entry = DateEntry(self, width=15, background='darkblue', foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
         self.date_label.grid(row=4, column=0, pady=5, padx=10, sticky=tk.W)
         self.date_entry.grid(row=4, column=1, pady=5, padx=10, sticky=tk.W)
 
@@ -269,7 +269,7 @@ class ExtrasTab(ctk.CTkFrame):
         sale_date_popup.geometry(f'{width}x{height}+{x}+{y}')
 
         tk.Label(sale_date_popup, text=f"Select sale date for {item_name}:").pack(pady=10)
-        sale_date_entry = DateEntry(sale_date_popup, width=12, background='darkblue', foreground='white', borderwidth=2)
+        sale_date_entry = DateEntry(sale_date_popup, width=12, background='darkblue', foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
         sale_date_entry.pack(pady=10)
 
         def on_confirm():
