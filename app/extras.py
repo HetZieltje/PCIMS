@@ -103,6 +103,7 @@ class ExtrasTab(ctk.CTkFrame):
 
         self.quantity_label = ctk.CTkLabel(self, text="Quantity:")
         self.quantity_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_quantity), "%P"), width=50)
+        self.quantity_entry.insert(0, "1")  # Default quantity to 1
         self.quantity_label.grid(row=2, column=0, pady=5, padx=10, sticky=tk.W)
         self.quantity_entry.grid(row=2, column=1, pady=5, padx=(10, 0), sticky=tk.W)
 
@@ -131,15 +132,7 @@ class ExtrasTab(ctk.CTkFrame):
         self.extras_tree.heading("Price", text="Price")
         self.extras_tree.heading("Quantity", text="Quantity")
         self.extras_tree.heading("Used In", text="Used In")
-        self.extras_tree.grid(row=6, column=0, columnspan=2, pady=10, padx=10, sticky=tk.W)
-
-        # Delete Extra button
-        self.delete_extra_button = ctk.CTkButton(self, text="Delete Extra", command=self.delete_extra)
-        self.delete_extra_button.grid(row=7, column=0, pady=5, padx=10, sticky=tk.W)
-
-        # Sell Extra button
-        self.sell_extra_button = ctk.CTkButton(self, text="Sell Extra", command=self.sell_extra)
-        self.sell_extra_button.grid(row=7, column=1, pady=5, padx=10, sticky=tk.W)
+        self.extras_tree.grid(row=0, column=2, rowspan=6, pady=10, padx=10, sticky=tk.NS)
 
         # Load extras upon opening the tab
         self.refresh()
@@ -175,6 +168,13 @@ class ExtrasTab(ctk.CTkFrame):
         for _ in range(quantity):
             add_expense(name, "Extra", price_per_item, purchase_date)
         self.refresh()
+
+        # Reset the entry fields
+        self.name_entry.delete(0, tk.END)
+        self.price_entry.delete(0, tk.END)
+        self.quantity_entry.delete(0, tk.END)
+        self.quantity_entry.insert(0, "1")  # Reset quantity to 1
+        self.date_entry.set_date(datetime.today())
 
     def delete_extra(self):
         selected_item = self.extras_tree.selection()
