@@ -37,6 +37,7 @@ class AssembleTab(ctk.CTkFrame):
             label = ctk.CTkLabel(self, text=f"{component_type}:")
             listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=40, bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
             listbox.bind('<FocusIn>', lambda event, comp_type=component_type, listbox=listbox: self.update_listbox(comp_type, listbox))
+            listbox.bind('<<ListboxSelect>>', lambda event, comp_type=component_type, listbox=listbox: self.handle_selection(comp_type, listbox))
 
             label.grid(row=row, column=col, padx=10, pady=5, sticky=tk.W)
             listbox.grid(row=row, column=col + 1, padx=10, pady=5, sticky=tk.W)
@@ -65,16 +66,16 @@ class AssembleTab(ctk.CTkFrame):
         # Retrieve all items of the specified component type from the main app
         items = get_inventory_items()
 
-        # Use a set to store unique item names for the specified component type
-        unique_items = set()
+        # Use a list to store item names for the specified component type
+        item_names = []
 
-        # Iterate through items and add unique names to the set
+        # Iterate through items and add names to the list
         for item in items:
             # Check if the "Used In" column is "None"
             if item[2] == component_type and item[4] is None:
-                unique_items.add(item[1])
+                item_names.append(item[1])
 
-        return sorted(list(unique_items))  # Convert the set to a sorted list for consistent ordering
+        return item_names  # Return the list of item names
     
     def find_next_available_pc_name(self):
         # Get the list of existing PC names
@@ -92,8 +93,22 @@ class AssembleTab(ctk.CTkFrame):
     def update_listbox(self, component_type, listbox):
         items = self.get_inventory_items_by_type(component_type)
         listbox.delete(0, tk.END)
+        unique_items = set()
         for item in items:
-            listbox.insert(tk.END, item)
+            if item not in unique_items:
+                listbox.insert(tk.END, item)
+                unique_items.add(item)
+
+    def handle_selection(self, component_type, listbox):
+        selected_indices = listbox.curselection()
+        if len(selected_indices) > 0:
+            last_selected_index = selected_indices[-1]
+            last_selected_item = listbox.get(last_selected_index)
+            # Check if there are more items of the same type in the inventory
+            items = self.get_inventory_items_by_type(component_type)
+            if items.count(last_selected_item) > listbox.get(0, tk.END).count(last_selected_item):
+                # Insert another item of the same type for selection
+                listbox.insert(tk.END, last_selected_item)
 
     def clear_entry_fields(self):
         # Use the find_next_available_pc_name method to set the next available PC name
