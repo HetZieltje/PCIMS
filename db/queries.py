@@ -273,7 +273,7 @@ def undo_sale(sold_item_id):
 
         # Retrieve the full names of each part and ensure correct order
         component_names = [""] * 11
-        component_types = ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "hdd", "pc_case", "psu", "fan", "extra"]
+        component_types = ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "hdd", "case", "psu", "fan", "extra"]
         for i, part_id in enumerate(sold_pc[1:]):
             if part_id:
                 cursor.execute("SELECT name, type FROM expenses WHERE id=?", (part_id,))

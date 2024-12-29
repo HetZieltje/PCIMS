@@ -107,7 +107,7 @@ class ExtrasTab(ctk.CTkFrame):
         self.quantity_label.grid(row=2, column=0, pady=5, padx=10, sticky=tk.W)
         self.quantity_entry.grid(row=2, column=1, pady=5, padx=(10, 0), sticky=tk.W)
 
-        self.quantity_frame = ctk.CTkFrame(self)
+        self.quantity_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.quantity_frame.grid(row=2, column=1, pady=5, padx=(60, 10), sticky=tk.W)
         self.quantity_minus_button = ctk.CTkButton(self.quantity_frame, text="-", width=20, command=self.decrease_quantity)
         self.quantity_minus_button.pack(side=tk.LEFT)
@@ -115,8 +115,15 @@ class ExtrasTab(ctk.CTkFrame):
         self.quantity_plus_button.pack(side=tk.LEFT)
 
         self.price_switch_var = tk.StringVar(value="total")
-        self.price_switch = ctk.CTkSwitch(self, text="Price per Item", variable=self.price_switch_var, onvalue="per_item", offvalue="total", command=self.toggle_price_mode)
-        self.price_switch.grid(row=3, column=0, columnspan=2, pady=5, padx=10, sticky=tk.W)
+        
+        self.price_switch_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.price_switch_frame.grid(row=3, column=0, columnspan=2, pady=5, padx=10, sticky=tk.W)
+
+        self.total_price_label = ctk.CTkLabel(self.price_switch_frame, text="Total Price")
+        self.total_price_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.price_switch = ctk.CTkSwitch(self.price_switch_frame, text="Price per Item", variable=self.price_switch_var, onvalue="per_item", offvalue="total", command=self.toggle_price_mode)
+        self.price_switch.pack(side=tk.RIGHT)
 
         self.date_label = ctk.CTkLabel(self, text="Purchase Date:")
         self.date_entry = DateEntry(self, width=15, background='darkblue', foreground='white', borderwidth=2)
