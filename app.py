@@ -52,17 +52,17 @@ class PCIMS(ctk.CTk):
         self.assemble_pc_button = ctk.CTkButton(button_frame, text="Assemble PC", command=self.switch_to_assemble_tab)
         self.assemble_pc_button.pack(side="left", padx=2, pady=3)
 
-        self.balance_button = ctk.CTkButton(button_frame, text="Balance", command=self.switch_to_balance_tab)
-        self.balance_button.pack(side="left", padx=2, pady=3)
-
-        self.extras_button = ctk.CTkButton(button_frame, text="Extras", command=self.switch_to_extras_tab)
-        self.extras_button.pack(side="left", padx=2, pady=3)
-
         self.delete_button = ctk.CTkButton(button_frame, text="Delete", command=self.delete_item)
         self.delete_button.pack(side="left", padx=2, pady=3)
 
         self.sell_button = ctk.CTkButton(button_frame, text="Sell", command=self.sell_item)
         self.sell_button.pack(side="left", padx=2, pady=3)
+
+        self.balance_button = ctk.CTkButton(button_frame, text="Balance", command=self.switch_to_balance_tab)
+        self.balance_button.pack(side="left", padx=2, pady=3)
+
+        self.extras_button = ctk.CTkButton(button_frame, text="Extras", command=self.switch_to_extras_tab)
+        self.extras_button.pack(side="left", padx=2, pady=3)
 
         self.unsell_button = ctk.CTkButton(button_frame, text="Unsell", command=self.unsell_item)
         self.unsell_button.pack(side="left", padx=2, pady=3)
@@ -103,10 +103,10 @@ class PCIMS(ctk.CTk):
         if selected_tab == 0:  # Inventory Tab
             self.add_purchase_button.pack(side="left", padx=2, pady=3)
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
-            self.delete_button.pack(side="left", padx=2, pady=3)
-            self.sell_button.pack(side="left", padx=2, pady=3)
             self.balance_button.pack(side="left", padx=2, pady=3)
             self.extras_button.pack(side="left", padx=2, pady=3)
+            self.delete_button.pack(side="left", padx=2, pady=3)
+            self.sell_button.pack(side="left", padx=2, pady=3)
         elif selected_tab == 1:  # Purchase Tab
             self.inventory_button.pack(side="left", padx=2, pady=3)
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
