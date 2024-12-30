@@ -15,6 +15,7 @@ class AutocompleteEntry(ctk.CTkEntry):
         self.bind("<Right>", self.selection)
         self.bind("<Up>", self.move_up)
         self.bind("<Down>", self.move_down)
+        self.bind("<FocusOut>", self.hide_listbox)
         self.listbox_up = False
         self.listbox = None
 
@@ -71,6 +72,11 @@ class AutocompleteEntry(ctk.CTkEntry):
                 index = str(int(index) + 1)
                 self.listbox.selection_set(first=index)
                 self.listbox.activate(index)
+
+    def hide_listbox(self, event):
+        if self.listbox_up:
+            self.listbox.destroy()
+            self.listbox_up = False
 
     def comparison(self):
         pattern = self.var.get().lower()
