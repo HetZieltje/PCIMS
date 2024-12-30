@@ -113,32 +113,35 @@ class ExtrasTab(ctk.CTkFrame):
         self.existing_extras = self.get_all_extras()
 
         # Entry fields
-        self.name_label = ctk.CTkLabel(self, text="Extra Name:")
-        self.name_entry = AutocompleteEntry(self, self.existing_extras, width=300)
+        self.form_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.form_frame.grid(row=0, column=0, rowspan=6, pady=10, padx=10, sticky=tk.NW)
+
+        self.name_label = ctk.CTkLabel(self.form_frame, text="Extra Name:")
+        self.name_entry = AutocompleteEntry(self.form_frame, self.existing_extras, width=300)
         self.name_label.grid(row=0, column=0, pady=5, padx=10, sticky=tk.W)
         self.name_entry.grid(row=0, column=1, pady=5, padx=10, sticky=tk.W)
 
-        self.price_label = ctk.CTkLabel(self, text="Price (Euro):")
-        self.price_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_price), "%P"), width=150)
+        self.price_label = ctk.CTkLabel(self.form_frame, text="Price (Euro):")
+        self.price_entry = ctk.CTkEntry(self.form_frame, validate="key", validatecommand=(self.register(self.validate_price), "%P"), width=150)
         self.price_label.grid(row=1, column=0, pady=5, padx=10, sticky=tk.W)
         self.price_entry.grid(row=1, column=1, pady=5, padx=10, sticky=tk.W)
 
-        self.quantity_label = ctk.CTkLabel(self, text="Quantity:")
-        self.quantity_entry = ctk.CTkEntry(self, validate="key", validatecommand=(self.register(self.validate_quantity), "%P"), width=50)
+        self.quantity_label = ctk.CTkLabel(self.form_frame, text="Quantity:")
+        self.quantity_entry = ctk.CTkEntry(self.form_frame, validate="key", validatecommand=(self.register(self.validate_quantity), "%P"), width=50)
         self.quantity_entry.insert(0, "1")  # Default quantity to 1
         self.quantity_label.grid(row=2, column=0, pady=5, padx=10, sticky=tk.W)
         self.quantity_entry.grid(row=2, column=1, pady=5, padx=(10, 0), sticky=tk.W)
 
-        self.quantity_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.quantity_frame.grid(row=2, column=1, pady=5, padx=(60, 10), sticky=tk.W)
+        self.quantity_frame = ctk.CTkFrame(self.form_frame, fg_color="transparent")
+        self.quantity_frame.grid(row=2, column=1, pady=5, padx=(80, 10), sticky=tk.W)
         self.quantity_minus_button = ctk.CTkButton(self.quantity_frame, text="-", width=20, command=self.decrease_quantity)
-        self.quantity_minus_button.pack(side=tk.LEFT)
+        self.quantity_minus_button.pack(side=tk.LEFT, padx=(0, 5))
         self.quantity_plus_button = ctk.CTkButton(self.quantity_frame, text="+", width=20, command=self.increase_quantity)
         self.quantity_plus_button.pack(side=tk.LEFT)
 
         self.price_switch_var = tk.StringVar(value="total")
         
-        self.price_switch_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.price_switch_frame = ctk.CTkFrame(self.form_frame, fg_color="transparent")
         self.price_switch_frame.grid(row=3, column=0, columnspan=2, pady=5, padx=10, sticky=tk.W)
 
         self.total_price_label = ctk.CTkLabel(self.price_switch_frame, text="Total Price")
@@ -147,12 +150,12 @@ class ExtrasTab(ctk.CTkFrame):
         self.price_switch = ctk.CTkSwitch(self.price_switch_frame, text="Price per Item", variable=self.price_switch_var, onvalue="per_item", offvalue="total", command=self.toggle_price_mode)
         self.price_switch.pack(side=tk.RIGHT)
 
-        self.date_label = ctk.CTkLabel(self, text="Purchase Date:")
-        self.date_entry = DateEntry(self, width=15, background='darkblue', foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
+        self.date_label = ctk.CTkLabel(self.form_frame, text="Purchase Date:")
+        self.date_entry = DateEntry(self.form_frame, width=15, background='darkblue', foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
         self.date_label.grid(row=4, column=0, pady=5, padx=10, sticky=tk.W)
         self.date_entry.grid(row=4, column=1, pady=5, padx=10, sticky=tk.W)
 
-        self.add_extra_button = ctk.CTkButton(self, text="Add New Extra", command=self.add_extra)
+        self.add_extra_button = ctk.CTkButton(self.form_frame, text="Add New Extra", command=self.add_extra)
         self.add_extra_button.grid(row=5, column=0, pady=5, padx=10, sticky=tk.W)
 
         # Treeview to display extras
@@ -161,7 +164,11 @@ class ExtrasTab(ctk.CTkFrame):
         self.extras_tree.heading("Price", text="Price")
         self.extras_tree.heading("Quantity", text="Quantity")
         self.extras_tree.heading("Used In", text="Used In")
-        self.extras_tree.grid(row=0, column=2, rowspan=6, pady=10, padx=10, sticky=tk.NS)
+        self.extras_tree.grid(row=0, column=1, rowspan=6, pady=10, padx=10, sticky=tk.NSEW)
+
+        # Configure the grid to make the Treeview fill the right side
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
         # Load extras upon opening the tab
         self.refresh()
