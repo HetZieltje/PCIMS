@@ -58,6 +58,9 @@ class PCIMS(ctk.CTk):
         self.sell_button = ctk.CTkButton(button_frame, text="Sell", command=self.sell_item)
         self.sell_button.pack(side="left", padx=2, pady=3)
 
+        self.rename_button = ctk.CTkButton(button_frame, text="Rename", command=self.rename_item)
+        self.rename_button.pack(side="left", padx=2, pady=3)
+
         self.balance_button = ctk.CTkButton(button_frame, text="Balance", command=self.switch_to_balance_tab)
         self.balance_button.pack(side="left", padx=2, pady=3)
 
@@ -97,6 +100,7 @@ class PCIMS(ctk.CTk):
         self.extras_button.pack_forget()
         self.delete_button.pack_forget()
         self.sell_button.pack_forget()
+        self.rename_button.pack_forget()
         self.unsell_button.pack_forget()
 
         # Show relevant buttons based on the selected tab
@@ -107,6 +111,7 @@ class PCIMS(ctk.CTk):
             self.extras_button.pack(side="left", padx=2, pady=3)
             self.delete_button.pack(side="left", padx=2, pady=3)
             self.sell_button.pack(side="left", padx=2, pady=3)
+            self.rename_button.pack(side="left", padx=2, pady=3)
         elif selected_tab == 1:  # Purchase Tab
             self.inventory_button.pack(side="left", padx=2, pady=3)
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
@@ -205,6 +210,11 @@ class PCIMS(ctk.CTk):
         selected_tab = self.notebook.nametowidget(self.notebook.select())
         if hasattr(selected_tab, "sell_item"):
             selected_tab.sell_item()
+
+    def rename_item(self):
+        selected_tab = self.notebook.nametowidget(self.notebook.select())
+        if hasattr(selected_tab, "rename_item"):
+            selected_tab.rename_item()
 
     def unsell_item(self):
         # Get the selected item from the right Treeview in the Balance tab

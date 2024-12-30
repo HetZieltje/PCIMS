@@ -272,7 +272,7 @@ def undo_sale(sold_item_id):
         pc_name, price = pc_info[0], pc_info[1]
 
         # Retrieve the full names of each part and ensure correct order
-        component_names = {component: [] for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "hdd", "case", "psu", "fan", "extra"]}
+        component_names = {component: [] for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "case", "psu", "fan", "extra"]}
         for i, part_id in enumerate(sold_pc[1:]):
             if part_id:
                 cursor.execute("SELECT name, type FROM expenses WHERE id=?", (part_id,))
@@ -280,7 +280,7 @@ def undo_sale(sold_item_id):
                 component_names[component_type.lower()].append(component_name)
 
         # Prepare the components for insertion
-        ordered_components = {component: ';'.join(component_names[component]) for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "hdd", "case", "psu", "fan", "extra"]}
+        ordered_components = {component: ';'.join(component_names[component]) for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "case", "psu", "fan", "extra"]}
 
         # Reinsert the PC into the `assembled_pcs` table
         cursor.execute("""
@@ -331,3 +331,32 @@ def get_sold_pc_parts(id):
     parts = cursor.fetchall()
     conn.close()
     return [{"name": row[0], "type": row[1], "price": row[2], "purchase_date": row[3]} for row in parts]
+
+def rename_part(item_id, old_name, new_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE expenses SET name = ? WHERE id = ?", (new_name, item_id))
+    
+    # Get the type of the item
+    cursor.execute("SELECT type, used_in FROM expenses WHERE id = ?", (item_id,))
+    result = cursor.fetchone()
+    item_type, used_in = result[0], result[1]
+
+    # Update the name in the assembled PCs
+    if used_in:
+        cursor.execute(f"""
+            UPDATE assembled_pcs
+            SET {item_type.lower()} = REPLACE({item_type.lower()}, ?, ?)
+            WHERE name = ?
+        """, (old_name, new_name, used_in))
+    
+    conn.commit()
+    conn.close()
+
+def rename_pc(old_name, new_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE assembled_pcs SET name = ? WHERE name = ?", (new_name, old_name))
+    cursor.execute("UPDATE expenses SET used_in = ? WHERE used_in = ?", (new_name, old_name))
+    conn.commit()
+    conn.close()

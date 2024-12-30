@@ -5,7 +5,7 @@ import json
 from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, add_income, delete_components_used_in_pc, get_purchase_date, add_sold_pc, get_item_cost, update_used_in_for_deleted_pc
+from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, add_income, delete_components_used_in_pc, get_purchase_date, add_sold_pc, get_item_cost, update_used_in_for_deleted_pc, rename_part, rename_pc
 
 class InventoryTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -456,3 +456,30 @@ class InventoryTab(ctk.CTkFrame):
 
         else:
             messagebox.showerror("Error", "Please select an item to delete.")
+
+    def rename_item(self):
+        selected_item_left = self.left_tree.selection()
+        selected_item_right = self.right_tree.selection()
+
+        if selected_item_left:
+            item_ids = json.loads(self.left_tree.item(selected_item_left, 'tags')[0])
+            item_values = self.left_tree.item(selected_item_left, 'values')
+            old_name = item_values[0]
+
+            new_name = simpledialog.askstring("Rename Part", f"Enter new name for {old_name}:")
+            if new_name:
+                for item_id in item_ids:
+                    rename_part(item_id, old_name, new_name)
+                self.refresh()
+
+        elif selected_item_right:
+            item_values = self.right_tree.item(selected_item_right, 'values')
+            old_name = item_values[0]
+
+            new_name = simpledialog.askstring("Rename PC", f"Enter new name for {old_name}:")
+            if new_name:
+                rename_pc(old_name, new_name)
+                self.refresh()
+
+        else:
+            messagebox.showerror("Error", "Please select an item to rename.")
