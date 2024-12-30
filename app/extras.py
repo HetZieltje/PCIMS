@@ -18,8 +18,13 @@ class AutocompleteEntry(ctk.CTkEntry):
         self.bind("<Up>", self.move_up)
         self.bind("<Down>", self.move_down)
         self.bind("<FocusOut>", self.hide_listbox)
+        self.bind("<Return>", self.hide_listbox_on_enter)
+        self.bind("<Tab>", self.hide_listbox_on_enter)
         self.listbox_up = False
         self.listbox = None
+
+        # Bind the master to hide the listbox when clicking on the background
+        self.master.bind("<Button-1>", self.hide_listbox_on_click)
 
     def changed(self, *args):
         if self.var.get() == "":
@@ -76,6 +81,16 @@ class AutocompleteEntry(ctk.CTkEntry):
                 self.listbox.activate(index)
 
     def hide_listbox(self, event):
+        if self.listbox_up:
+            self.listbox.destroy()
+            self.listbox_up = False
+
+    def hide_listbox_on_click(self, event):
+        if self.listbox_up and not self.winfo_containing(event.x_root, event.y_root):
+            self.listbox.destroy()
+            self.listbox_up = False
+
+    def hide_listbox_on_enter(self, event):
         if self.listbox_up:
             self.listbox.destroy()
             self.listbox_up = False
