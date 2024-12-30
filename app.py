@@ -55,6 +55,9 @@ class PCIMS(ctk.CTk):
         self.balance_button = ctk.CTkButton(button_frame, text="Balance", command=self.switch_to_balance_tab)
         self.balance_button.pack(side="left", padx=2, pady=3)
 
+        self.extras_button = ctk.CTkButton(button_frame, text="Extras", command=self.switch_to_extras_tab)
+        self.extras_button.pack(side="left", padx=2, pady=3)
+
         self.delete_button = ctk.CTkButton(button_frame, text="Delete", command=self.delete_item)
         self.delete_button.pack(side="left", padx=2, pady=3)
 
@@ -63,9 +66,6 @@ class PCIMS(ctk.CTk):
 
         self.unsell_button = ctk.CTkButton(button_frame, text="Unsell", command=self.unsell_item)
         self.unsell_button.pack(side="left", padx=2, pady=3)
-
-        self.extras_button = ctk.CTkButton(button_frame, text="Extras", command=self.switch_to_extras_tab)
-        self.extras_button.pack(side="left", padx=2, pady=3)
 
         # Add a small interactive icon to toggle dark mode
         self.dark_mode_icon = ctk.CTkButton(button_frame, text="       ☀️", command=self.toggle_dark_mode)
