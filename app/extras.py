@@ -76,7 +76,7 @@ class AutocompleteEntry(ctk.CTkEntry):
 
     def comparison(self):
         pattern = self.var.get().lower()
-        return [w for w in self.suggestions if w.lower().startswith(pattern)]
+        return [w for w in self.suggestions if pattern in w.lower()]
 
 class ExtrasTab(ctk.CTkFrame):
     def __init__(self, master, app):

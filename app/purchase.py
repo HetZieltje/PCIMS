@@ -3,7 +3,78 @@ from tkinter import messagebox
 from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import add_expense
+from db.queries import add_expense, get_expenses
+
+class AutocompleteEntry(ctk.CTkEntry):
+    def __init__(self, master, suggestions, *args, **kwargs):
+        self.var = tk.StringVar()
+        kwargs['textvariable'] = self.var
+        super().__init__(master, *args, **kwargs)
+        self.suggestions = suggestions
+        self.var.trace_add("write", self.changed)
+        self.bind("<Right>", self.selection)
+        self.bind("<Up>", self.move_up)
+        self.bind("<Down>", self.move_down)
+        self.listbox_up = False
+        self.listbox = None
+
+    def changed(self, *args):
+        if self.var.get() == "":
+            if self.listbox_up:
+                self.listbox.destroy()
+                self.listbox_up = False
+        else:
+            words = self.comparison()
+            if words:
+                if not self.listbox_up:
+                    self.listbox = tk.Listbox(self.master, width=min(self.winfo_width(), 50), bg="#3e3e3e" if self.master.app.is_dark_mode else "white", fg="white" if self.master.app.is_dark_mode else "black")
+                    self.listbox.bind("<Button-1>", self.selection)
+                    self.listbox.bind("<Right>", self.selection)
+                    self.listbox.place(x=self.winfo_x(), y=self.winfo_y() + self.winfo_height())
+                    self.listbox_up = True
+
+                self.listbox.delete(0, tk.END)
+                for w in words:
+                    self.listbox.insert(tk.END, w)
+            else:
+                if self.listbox_up:
+                    self.listbox.destroy()
+                    self.listbox_up = False
+
+    def selection(self, event):
+        if self.listbox_up:
+            self.var.set(self.listbox.get(tk.ACTIVE))
+            self.listbox.destroy()
+            self.listbox_up = False
+            self.icursor(tk.END)
+
+    def move_up(self, event):
+        if self.listbox_up:
+            if self.listbox.curselection() == ():
+                index = '0'
+            else:
+                index = self.listbox.curselection()[0]
+            if index != '0':
+                self.listbox.selection_clear(first=index)
+                index = str(int(index) - 1)
+                self.listbox.selection_set(first=index)
+                self.listbox.activate(index)
+
+    def move_down(self, event):
+        if self.listbox_up:
+            if self.listbox.curselection() == ():
+                index = '0'
+            else:
+                index = self.listbox.curselection()[0]
+            if index != tk.END:
+                self.listbox.selection_clear(first=index)
+                index = str(int(index) + 1)
+                self.listbox.selection_set(first=index)
+                self.listbox.activate(index)
+
+    def comparison(self):
+        pattern = self.var.get().lower()
+        return [w for w in self.suggestions if pattern in w.lower()]
 
 class PurchaseTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -15,9 +86,12 @@ class PurchaseTab(ctk.CTkFrame):
         # List to store items in the current purchase
         self.current_purchase_items = []
 
+        # Get all unique item names from expenses
+        self.existing_items = self.get_all_items()
+
         # Entry fields
         self.name_label = ctk.CTkLabel(self, text="Item Name:")
-        self.name_entry = ctk.CTkEntry(self, width=300)
+        self.name_entry = AutocompleteEntry(self, self.existing_items, width=300)
         self.name_label.grid(row=0, column=0, pady=5, padx=10, sticky=tk.W)
         self.name_entry.grid(row=0, column=1, pady=5, padx=10, sticky=tk.W)
 
@@ -214,3 +288,7 @@ class PurchaseTab(ctk.CTkFrame):
         for item in self.current_purchase_items:
             item_info = f"{item['name']} - {item['component_type']} - {item['price']}"
             self.current_purchase_listbox.insert(tk.END, item_info)
+
+    def get_all_items(self):
+        expenses = get_expenses()
+        return sorted(set(expense['name'] for expense in expenses))
