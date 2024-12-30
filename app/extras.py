@@ -5,6 +5,7 @@ from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
 from db.queries import add_expense, get_inventory_items, delete_item_from_inventory, add_income, get_purchase_date, get_expenses
+import json
 
 class AutocompleteEntry(ctk.CTkEntry):
     def __init__(self, master, suggestions, *args, **kwargs):
@@ -189,7 +190,6 @@ class ExtrasTab(ctk.CTkFrame):
             messagebox.showerror("Error", "Please select an extra to delete.")
             return
 
-        item_id = int(self.extras_tree.item(selected_item, 'tags')[0])
         item_values = self.extras_tree.item(selected_item, 'values')
         used_in_pc = item_values[3]
 
@@ -198,11 +198,22 @@ class ExtrasTab(ctk.CTkFrame):
             messagebox.showerror("Error", f"The {item_values[0]} is currently used in {used_in_pc} and cannot be deleted.")
             return
 
+        # Ask how many items to delete if there are more than one
+        quantity_to_delete = 1
+        if int(item_values[2]) > 1:
+            quantity_to_delete = simpledialog.askinteger("Quantity", f"Enter the quantity of {item_values[0]} to delete (1-{item_values[2]}):", minvalue=1, maxvalue=int(item_values[2]))
+            if quantity_to_delete is None:
+                return
+
         # Ask for confirmation before deleting the item
-        confirm = messagebox.askyesno("Confirm Deletion", "Do you want to remove the item from inventory?")
+        confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete {quantity_to_delete} of {item_values[0]} from inventory?")
         if confirm:
-            delete_item_from_inventory(item_id)
+            item_ids = json.loads(self.extras_tree.item(selected_item, 'tags')[0])
+            for _ in range(quantity_to_delete):
+                delete_item_from_inventory(item_ids.pop(0))
+
             self.refresh()
+
 
     def sell_extra(self):
         selected_item = self.extras_tree.selection()
@@ -210,7 +221,7 @@ class ExtrasTab(ctk.CTkFrame):
             messagebox.showerror("Error", "Please select an extra to sell.")
             return
 
-        item_id = int(self.extras_tree.item(selected_item, 'tags')[0])
+        item_ids = json.loads(self.extras_tree.item(selected_item, 'tags')[0])
         item_values = self.extras_tree.item(selected_item, 'values')
         item_name = item_values[0]
         used_in_pc = item_values[3]
@@ -220,16 +231,28 @@ class ExtrasTab(ctk.CTkFrame):
             messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be sold.")
             return
 
-        # Prompt the user for the selling price
-        selling_price = self.get_selling_price(item_name)
-
-        if selling_price is not None:
-            # Prompt the user for the sale date
-            sale_date = self.get_sale_date(item_name)
-            if sale_date is None:
+        # Ask how many items to sell if there are more than one
+        quantity_to_sell = 1
+        if int(item_values[2]) > 1:
+            quantity_to_sell = simpledialog.askinteger("Quantity", f"Enter the quantity of {item_name} to sell (1-{item_values[2]}):", minvalue=1, maxvalue=int(item_values[2]))
+            if quantity_to_sell is None:
                 return
 
-            # Check if the sale date is before the purchase date
+        # Prompt the user for the total selling price
+        total_selling_price = self.get_selling_price(item_name)
+        if total_selling_price is None:
+            return
+
+        # Calculate the selling price per item
+        selling_price_per_item = total_selling_price / quantity_to_sell
+
+        # Prompt the user for the sale date
+        sale_date = self.get_sale_date(item_name)
+        if sale_date is None:
+            return
+
+        # Check if the sale date is before the purchase date for any item
+        for item_id in item_ids[:quantity_to_sell]:
             purchase_date_str = get_purchase_date(item_id)
             if not purchase_date_str:
                 messagebox.showerror("Error", f"Purchase date not found for item ID {item_id}.")
@@ -240,19 +263,23 @@ class ExtrasTab(ctk.CTkFrame):
                 messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
                 return
 
-            # Ask for confirmation before selling the item
-            confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell the {item_name} for €{selling_price:.2f}?")
-            if confirm:
+        # Ask for confirmation before selling the item
+        confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell {quantity_to_sell} of {item_name} for €{total_selling_price:.2f}?")
+        if confirm:
+            for _ in range(quantity_to_sell):
+                item_id = item_ids.pop(0)
                 delete_item_from_inventory(item_id)
                 total_cost = float(item_values[1][1:])
-                profit = round(selling_price - total_cost, 2)
-                add_income(item_name, total_cost, selling_price, profit, sale_date)
-                self.refresh()
+                profit = round(selling_price_per_item - total_cost, 2)
+                add_income(item_name, total_cost, selling_price_per_item, profit, sale_date)
+
+            # Refresh the inventory Treeview and balance tab
+            self.refresh()
 
     def get_selling_price(self, item_name):
         while True:
             try:
-                selling_price_str = simpledialog.askstring("Selling Price", f"Enter the selling price for {item_name}:")
+                selling_price_str = simpledialog.askstring("Selling Price", f"Enter the total selling price for {item_name}:")
                 if selling_price_str is None:
                     return None
 
@@ -361,7 +388,7 @@ class ExtrasTab(ctk.CTkFrame):
         for (name, used_in), data in combined_extras.items():
             avg_price = round(data["total_price"] / data["quantity"], 2)
             extra_info = (name, f"€{avg_price}", data["quantity"], used_in)
-            self.extras_tree.insert("", tk.END, values=extra_info, tags=(data["ids"][0],))
+            self.extras_tree.insert("", tk.END, values=extra_info, tags=(json.dumps(data["ids"]),))
 
         self.existing_extras = self.get_all_extras()
         self.name_entry.suggestions = self.existing_extras

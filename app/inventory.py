@@ -203,45 +203,57 @@ class InventoryTab(ctk.CTkFrame):
             messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be sold.")
             return
 
-        # Prompt the user for the selling price
-        selling_price = self.get_selling_price(item_name)
-
-        if selling_price is not None:
-            # Prompt the user for the sale date
-            sale_date = self.get_sale_date(item_name)
-            if sale_date is None:
+        # Ask how many items to sell if there are more than one
+        quantity_to_sell = 1
+        if len(item_ids) > 1:
+            quantity_to_sell = simpledialog.askinteger("Quantity", f"Enter the quantity of {item_name} to sell (1-{len(item_ids)}):", minvalue=1, maxvalue=len(item_ids))
+            if quantity_to_sell is None:
                 return
 
-            # Check if the sale date is before the purchase date for any item
-            for item_id in item_ids:
-                purchase_date_str = get_purchase_date(item_id)
-                if purchase_date_str is None:
-                    continue
-                purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d").date()
-                if sale_date < purchase_date:
-                    messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
-                    return
+        # Prompt the user for the total selling price
+        total_selling_price = self.get_selling_price(item_name)
+        if total_selling_price is None:
+            return
 
-            # Ask for confirmation before selling the standalone item
-            confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell the {item_name} for €{selling_price:.2f}?")
-            if confirm:
+        # Calculate the selling price per item
+        selling_price_per_item = total_selling_price / quantity_to_sell
+
+        # Prompt the user for the sale date
+        sale_date = self.get_sale_date(item_name)
+        if sale_date is None:
+            return
+
+        # Check if the sale date is before the purchase date for any item
+        for item_id in item_ids[:quantity_to_sell]:
+            purchase_date_str = get_purchase_date(item_id)
+            if purchase_date_str is None:
+                continue
+            purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d").date()
+            if sale_date < purchase_date:
+                messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
+                return
+
+        # Ask for confirmation before selling the standalone item
+        confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell {quantity_to_sell} of {item_name} for €{total_selling_price:.2f}?")
+        if confirm:
+            for _ in range(quantity_to_sell):
                 # Remove one item from inventory and add to income table
                 item_id = item_ids.pop(0)
                 delete_item_from_inventory(item_id)
 
                 # Query the database for the cost price of the item
                 total_cost = float(get_item_cost(item_id))
-                profit = round(selling_price - total_cost, 2)
-                add_income(item_name, total_cost, selling_price, profit, sale_date)
+                profit = round(selling_price_per_item - total_cost, 2)
+                add_income(item_name, total_cost, selling_price_per_item, profit, sale_date)
 
-                # Update the Treeview tag with the remaining IDs
-                if item_ids:
-                    self.left_tree.item(selected_item_left, tags=(json.dumps(item_ids),))
-                else:
-                    self.left_tree.delete(selected_item_left)
+            # Update the Treeview tag with the remaining IDs
+            if item_ids:
+                self.left_tree.item(selected_item_left, tags=(json.dumps(item_ids),))
+            else:
+                self.left_tree.delete(selected_item_left)
 
-                # Refresh the inventory Treeview and balance tab
-                self.refresh()
+            # Refresh the inventory Treeview and balance tab
+            self.refresh()
 
     def sell_assembled_pc(self, selected_item_right):
         # Retrieve the PC name from the right Treeview
@@ -329,8 +341,8 @@ class InventoryTab(ctk.CTkFrame):
     def get_selling_price(self, item_name):
         while True:
             try:
-                # Prompt the user for the selling price
-                selling_price_str = simpledialog.askstring("Selling Price", f"Enter the selling price for {item_name}:")
+                # Prompt the user for the total selling price
+                selling_price_str = simpledialog.askstring("Selling Price", f"Enter the total selling price for {item_name}:")
                 if selling_price_str is None:
                     # If the user cancels the input, return None
                     return None
@@ -403,12 +415,24 @@ class InventoryTab(ctk.CTkFrame):
                 # Display an error message
                 messagebox.showerror("Error", f"The item is currently in use in '{used_in_pc}' and cannot be deleted.")
             else:
+                # Ask how many items to delete if there are more than one
+                quantity_to_delete = 1
+                if len(item_ids) > 1:
+                    quantity_to_delete = simpledialog.askinteger("Quantity", f"Enter the quantity of {item_values[0]} to delete (1-{len(item_ids)}):", minvalue=1, maxvalue=len(item_ids))
+                    if quantity_to_delete is None:
+                        return
+
                 # Ask for confirmation before deleting the item
-                confirm = messagebox.askyesno("Confirm Deletion", "Do you want to remove the item from inventory?")
+                confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete {quantity_to_delete} of {item_values[0]} from inventory?")
                 if confirm:
-                    # Remove the items from inventory but not from expenses
-                    for item_id in item_ids:
-                        delete_item_from_inventory(item_id)
+                    for _ in range(quantity_to_delete):
+                        delete_item_from_inventory(item_ids.pop(0))
+
+                    # Update the Treeview tag with the remaining IDs
+                    if item_ids:
+                        self.left_tree.item(selected_item_left, tags=(json.dumps(item_ids),))
+                    else:
+                        self.left_tree.delete(selected_item_left)
 
                     # Refresh the inventory Treeview
                     self.refresh()
