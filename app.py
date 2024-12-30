@@ -172,6 +172,10 @@ class PCIMS(ctk.CTk):
         style.configure("Light.TNotebook", background="#f0f0f0", foreground="black")
         style.configure("Dark.TNotebook", background="#2e2e2e", foreground="white")
 
+        # Update button frame background color
+        button_frame = self.children['!ctkframe']
+        button_frame.configure(fg_color=self.cget("fg_color"))
+
         # Refresh the current tab to apply the theme
         self.refresh_tab()
 
