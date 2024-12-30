@@ -8,11 +8,12 @@ from db.queries import add_expense, get_inventory_items, delete_item_from_invent
 import json
 
 class AutocompleteEntry(ctk.CTkEntry):
-    def __init__(self, master, suggestions, *args, **kwargs):
+    def __init__(self, master, suggestions, app, *args, **kwargs):
         self.var = StringVar()
         kwargs['textvariable'] = self.var
         super().__init__(master, *args, **kwargs)
         self.suggestions = suggestions
+        self.app = app
         self.var.trace_add("write", self.changed)
         self.bind("<Right>", self.selection)
         self.bind("<Up>", self.move_up)
@@ -35,7 +36,7 @@ class AutocompleteEntry(ctk.CTkEntry):
             words = self.comparison()
             if words:
                 if not self.listbox_up:
-                    self.listbox = Listbox(self.master, width=min(self.winfo_width(), 50), bg="#3e3e3e" if self.master.app.is_dark_mode else "white", fg="white" if self.master.app.is_dark_mode else "black")
+                    self.listbox = Listbox(self.master, width=min(self.winfo_width(), 50), bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
                     self.listbox.bind("<Button-1>", self.selection)
                     self.listbox.bind("<Right>", self.selection)
                     self.listbox.place(x=self.winfo_x(), y=self.winfo_y() + self.winfo_height())
@@ -117,7 +118,7 @@ class ExtrasTab(ctk.CTkFrame):
         self.form_frame.grid(row=0, column=0, rowspan=6, pady=10, padx=10, sticky=tk.NW)
 
         self.name_label = ctk.CTkLabel(self.form_frame, text="Extra Name:")
-        self.name_entry = AutocompleteEntry(self.form_frame, self.existing_extras, width=300)
+        self.name_entry = AutocompleteEntry(self.form_frame, self.existing_extras, self.app, width=300)
         self.name_label.grid(row=0, column=0, pady=5, padx=10, sticky=tk.W)
         self.name_entry.grid(row=0, column=1, pady=5, padx=10, sticky=tk.W)
 
