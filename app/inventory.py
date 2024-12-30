@@ -5,7 +5,7 @@ import json
 from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_assembled_pc, add_income, delete_components_used_in_pc, get_purchase_date, add_sold_pc, get_item_cost, update_used_in_for_deleted_pc
+from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, add_income, delete_components_used_in_pc, get_purchase_date, add_sold_pc, get_item_cost, update_used_in_for_deleted_pc
 
 class InventoryTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -411,9 +411,34 @@ class InventoryTab(ctk.CTkFrame):
 
     def delete_item(self):
         # Get the selected item from the left or right Treeview
+        selected_item_left = self.left_tree.selection()
         selected_item_right = self.right_tree.selection()
 
-        if selected_item_right:
+        if selected_item_left:
+            # Retrieve the item IDs and values from the selected item
+            item_ids = json.loads(self.left_tree.item(selected_item_left, 'tags')[0])
+            item_values = self.left_tree.item(selected_item_left, 'values')
+            item_name = item_values[0]
+            used_in_pc = item_values[4]  # Updated index for 'Used In'
+
+            if used_in_pc != 'None':
+                # If the item is used in a PC, raise an error message
+                messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be deleted.")
+                return
+
+            # Ask for confirmation before deleting the item
+            confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete {item_name} from expenses?")
+            if confirm:
+                for item_id in item_ids:
+                    delete_expense(item_id)
+
+                # Remove the item from the Treeview
+                self.left_tree.delete(selected_item_left)
+
+                # Refresh the inventory Treeview
+                self.refresh()
+
+        elif selected_item_right:
             # Retrieve the PC name from the right Treeview
             pc_name = self.right_tree.item(selected_item_right, 'values')[0]
 
@@ -430,4 +455,4 @@ class InventoryTab(ctk.CTkFrame):
                 self.refresh()
 
         else:
-            return
+            messagebox.showerror("Error", "Please select an item to delete.")
