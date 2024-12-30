@@ -250,28 +250,31 @@ class BalanceTab(ctk.CTkFrame):
                 self.refresh()
 
     def delete_item(self):
-        # Get the selected item from the left or right Treeview
-        selected_item_left = self.left_tree.selection()
+        selected_item = self.left_tree.selection()
+        if not selected_item:
+            messagebox.showerror("Error", "Please select an item to delete.")
+            return
 
-        if selected_item_left:
-            # Retrieve the item ID from the tags
-            item_id = int(self.left_tree.item(selected_item_left, 'tags')[0])
+        item_values = self.left_tree.item(selected_item, 'values')
+        item_name = item_values[0]
+        item_type = item_values[1]
+        item_price = item_values[2]
+        item_purchase_date = item_values[3]
 
-            # Get the values displayed in the Treeview for the selected item
-            item_values = self.left_tree.item(selected_item_left, 'values')
+        # Confirm deletion
+        confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete {item_name} from expenses?")
+        if confirm:
+            # Get the item ID from the database
+            expenses = get_expenses()
+            for expense in expenses:
+                if (expense['name'] == item_name and expense['type'] == item_type and
+                        f"€{expense['price']}" == item_price and expense['purchase_date'] == item_purchase_date):
+                    if expense['in_inventory'] == 1 and expense['used_in'] is None:
+                        delete_expense(expense['id'])
+                        break
+                    else:
+                        messagebox.showerror("Error", f"Cannot delete {item_name} as it is either used in a PC or has already been sold.")
+                        return
 
-            # Check if the 'Used In' column is not empty for the selected item
-            used_in_pc = item_values[3]
-
-            if used_in_pc != 'None':
-                # Display an error message
-                messagebox.showerror("Error", f"The item is currently in use in '{used_in_pc}' and cannot be deleted.")
-            else:
-                # Ask for confirmation before deleting the item
-                confirm = messagebox.askyesno("Confirm Deletion", "Do you want to completely remove the item from expenses?")
-                if confirm:
-                    # Delete the item from expenses
-                    delete_expense(item_id)
-
-                    # Refresh the inventory Treeview
-                    self.refresh()
+            # Refresh the Treeview
+            self.refresh()

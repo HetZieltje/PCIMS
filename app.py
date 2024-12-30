@@ -105,6 +105,8 @@ class PCIMS(ctk.CTk):
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
             self.delete_button.pack(side="left", padx=2, pady=3)
             self.sell_button.pack(side="left", padx=2, pady=3)
+            self.balance_button.pack(side="left", padx=2, pady=3)
+            self.extras_button.pack(side="left", padx=2, pady=3)
         elif selected_tab == 1:  # Purchase Tab
             self.inventory_button.pack(side="left", padx=2, pady=3)
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
@@ -120,6 +122,7 @@ class PCIMS(ctk.CTk):
             self.add_purchase_button.pack(side="left", padx=2, pady=3)
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
             self.extras_button.pack(side="left", padx=2, pady=3)
+            self.delete_button.pack(side="left", padx=2, pady=3)
             self.unsell_button.pack(side="left", padx=2, pady=3)
         elif selected_tab == 4:  # Extras Tab
             self.inventory_button.pack(side="left", padx=2, pady=3)
