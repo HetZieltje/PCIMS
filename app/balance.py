@@ -1,8 +1,9 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
+import json
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts, undo_sale, delete_expense
+from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts, undo_sale, delete_expense, rename_part
 
 class BalanceTab(ctk.CTkFrame):
     def __init__(self, master, app):
@@ -118,20 +119,17 @@ class BalanceTab(ctk.CTkFrame):
             self.right_tree.configure(style="Light.Treeview")
 
     def refresh(self):
-        # Check if the expenses tab is entirely empty
-        if not get_expenses() and get_inventory_items():
-            # Populate it from inventory if needed
-            self.populate_expenses_from_inventory()
-
-        # Clear the existing items in the Treeviews and update the labels
-        self.left_tree.delete(*self.left_tree.get_children())
-        self.right_tree.delete(*self.right_tree.get_children())
+        # Clear the existing items in both Treeviews
+        for item in self.left_tree.get_children():
+            self.left_tree.delete(item)
+        for item in self.right_tree.get_children():
+            self.right_tree.delete(item)
 
         # Get the list of expenses and sold PCs from the app
         expenses = get_expenses()
         sold_items = get_sales()
 
-        # Insert each expense into the Treeview for expenses
+        # Insert each expense into the Treeview on the left
         total_expenses = 0.0
         for expense in expenses:
             expense_info = (
@@ -140,21 +138,33 @@ class BalanceTab(ctk.CTkFrame):
                 f"€{expense['price']}",  # Format as Euros
                 expense['purchase_date']
             )
-            self.left_tree.insert("", tk.END, values=expense_info)
+            self.left_tree.insert("", tk.END, values=expense_info, tags=(json.dumps([expense['id']]),))
             total_expenses += expense['price']
 
-        # Insert each sold PC into the Treeview for sold PCs
+        # Combine identical sold items and calculate average price
+        combined_sold_items = {}
         total_income = 0.0
         for sold_item in sold_items:
-            sold_item_info = (
-                sold_item['name'],
-                f"€{sold_item['cost']}",
-                f"€{sold_item['selling_price']}",
-                f"€{sold_item['profit']}",
-                sold_item['sale_date']
-            )
-            self.right_tree.insert("", tk.END, values=sold_item_info, tags=(sold_item['id'],))
-            total_income += sold_item['selling_price']
+            key = (sold_item['name'], sold_item['sale_date'])  # (Name, Sale Date)
+            if key not in combined_sold_items:
+                combined_sold_items[key] = [[sold_item['id']], sold_item['cost'], sold_item['selling_price'], sold_item['profit'], 1, sold_item['is_pc']]  # [[IDs], Total Cost, Total Selling Price, Total Profit, Quantity, is_pc]
+            else:
+                combined_sold_items[key][0].append(sold_item['id'])
+                combined_sold_items[key][1] += sold_item['cost']
+                combined_sold_items[key][2] += sold_item['selling_price']
+                combined_sold_items[key][3] += sold_item['profit']
+                combined_sold_items[key][4] += 1
+
+        # Insert each combined sold item into the Treeview on the right
+        for key, value in combined_sold_items.items():
+            name, sale_date = key
+            ids, total_cost, total_selling_price, total_profit, quantity, is_pc = value
+            avg_cost = total_cost / quantity
+            avg_selling_price = total_selling_price / quantity
+            avg_profit = total_profit / quantity
+            sold_item_info = name, f"€{avg_cost:.2f}", f"€{avg_selling_price:.2f}", f"€{avg_profit:.2f}", sale_date
+            self.right_tree.insert("", tk.END, values=sold_item_info, tags=(json.dumps(ids),))
+            total_income += total_selling_price
 
         # Calculate total profit and update the labels with the calculated totals
         total_profit = total_income - total_expenses
@@ -233,20 +243,24 @@ class BalanceTab(ctk.CTkFrame):
     def show_sold_pc_parts(self, event):
         selected_item = self.right_tree.selection()
         if selected_item:
-            income_id = self.right_tree.item(selected_item, 'tags')[0]
+            income_id = json.loads(self.right_tree.item(selected_item, 'tags')[0])[0]
+            item_values = self.right_tree.item(selected_item, 'values')
+            item_name = item_values[0]
             parts_info = get_sold_pc_parts(income_id)
             if parts_info:
                 parts_details = "\n".join([f"{part['name']} ({part['type']}): €{part['price']} (Purchased on {part['purchase_date']})" for part in parts_info])
                 messagebox.showinfo("Sold PC Parts Information", parts_details)
-
+            else:
+                messagebox.showinfo("Sold Item Information", f"No parts information available for the selected item: {item_name}.")
 
     def unsell_item(self):
         selected_item = self.right_tree.selection()
         if selected_item:
-            income_id = self.right_tree.item(selected_item, 'tags')[0]
+            income_id = json.loads(self.right_tree.item(selected_item, 'tags')[0])[0]
+            item_name = self.right_tree.item(selected_item, 'values')[0]
             confirm = messagebox.askyesno("Confirm Unsell", "Do you want to unsell the selected item?")
             if confirm:
-                undo_sale(income_id)
+                undo_sale(income_id, item_name)
                 self.refresh()
 
     def delete_item(self):
@@ -257,24 +271,30 @@ class BalanceTab(ctk.CTkFrame):
 
         item_values = self.left_tree.item(selected_item, 'values')
         item_name = item_values[0]
-        item_type = item_values[1]
-        item_price = item_values[2]
-        item_purchase_date = item_values[3]
 
         # Confirm deletion
         confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete {item_name} from expenses?")
         if confirm:
-            # Get the item ID from the database
-            expenses = get_expenses()
-            for expense in expenses:
-                if (expense['name'] == item_name and expense['type'] == item_type and
-                        f"€{expense['price']}" == item_price and expense['purchase_date'] == item_purchase_date):
-                    if expense['in_inventory'] == 1 and expense['used_in'] is None:
-                        delete_expense(expense['id'])
-                        break
-                    else:
-                        messagebox.showerror("Error", f"Cannot delete {item_name} as it is either used in a PC or has already been sold.")
-                        return
+            # Get the item ID from the tags
+            item_ids = json.loads(self.left_tree.item(selected_item, 'tags')[0])
+            for item_id in item_ids:
+                delete_expense(item_id)
 
             # Refresh the Treeview
             self.refresh()
+
+    def rename_item(self):
+        selected_item = self.left_tree.selection()
+
+        if selected_item:
+            item_ids = json.loads(self.left_tree.item(selected_item, 'tags')[0])
+            item_values = self.left_tree.item(selected_item, 'values')
+            old_name = item_values[0]
+
+            new_name = simpledialog.askstring("Rename item", f"Enter new name for {old_name}:")
+            if new_name:
+                for item_id in item_ids:
+                    rename_part(item_id, old_name, new_name)
+                self.refresh()
+        else:
+            messagebox.showerror("Error", "Please select an item to rename.")

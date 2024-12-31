@@ -45,11 +45,13 @@ def initialize_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS income (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            old_id INTEGER,
             name TEXT NOT NULL,
             cost REAL NOT NULL,
             selling_price REAL NOT NULL,
             profit REAL NOT NULL,
-            sale_date DATE DEFAULT CURRENT_DATE NOT NULL
+            sale_date DATE DEFAULT CURRENT_DATE NOT NULL,
+            is_pc BOOLEAN NOT NULL DEFAULT 0
         )
     ''')
 
@@ -57,6 +59,7 @@ def initialize_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sold_pcs (
             id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
             cpu INTEGER REFERENCES expenses(id),
             cooler INTEGER REFERENCES expenses(id),
             gpu INTEGER REFERENCES expenses(id),
@@ -229,13 +232,13 @@ def get_pc_names():
     return pc_names
 
 # Income Queries
-def add_income(name, cost, selling_price, profit, sale_date):
+def add_income(old_id, name, cost, selling_price, profit, sale_date, is_pc):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO income (name, cost, selling_price, profit, sale_date)
-        VALUES (?, ?, ?, ?, ?)
-    """, (name, cost, selling_price, profit, sale_date))
+        INSERT INTO income (old_id, name, cost, selling_price, profit, sale_date, is_pc)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (old_id, name, cost, selling_price, profit, sale_date, is_pc))
     conn.commit()
     id = cursor.lastrowid
     conn.close()
@@ -247,18 +250,18 @@ def get_sales():
     cursor.execute("SELECT * FROM income")
     items = cursor.fetchall()
     conn.close()
-    return [{"id": row[0], "name": row[1], "cost": row[2], "selling_price": row[3], "profit": row[4], "sale_date": row[5]} for row in items]
+    return [{"id": row[0], "old_id": row[1], "name": row[2], "cost": row[3], "selling_price": row[4], "profit": row[5], "sale_date": row[6], "is_pc": row[7]} for row in items]
 
-def undo_sale(sold_item_id):
+def undo_sale(sold_item_id, item_name):
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Retrieve part IDs from `sold_pcs`
-    cursor.execute("SELECT * FROM sold_pcs WHERE id=?", (sold_item_id,))
+    # Retrieve part IDs and name from `sold_pcs`
+    cursor.execute("SELECT * FROM sold_pcs WHERE id=? AND name=?", (sold_item_id, item_name))
     sold_pc = cursor.fetchone()
 
     if sold_pc:
-        part_id_indexes = range(1, len(sold_pc))  # Indexes of part IDs in the record
+        part_id_indexes = range(2, len(sold_pc))  # Indexes of part IDs in the record
 
         # Re-add each part to `expenses` using information from `expenses`
         for i in part_id_indexes:
@@ -272,15 +275,15 @@ def undo_sale(sold_item_id):
         pc_name, price = pc_info[0], pc_info[1]
 
         # Retrieve the full names of each part and ensure correct order
-        component_names = {component: [] for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "case", "psu", "fan", "extra"]}
-        for i, part_id in enumerate(sold_pc[1:]):
+        component_names = {component: [] for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "hdd", "case", "psu", "fan", "extra"]}
+        for i, part_id in enumerate(sold_pc[2:]):
             if part_id:
                 cursor.execute("SELECT name, type FROM expenses WHERE id=?", (part_id,))
                 component_name, component_type = cursor.fetchone()
                 component_names[component_type.lower()].append(component_name)
 
         # Prepare the components for insertion
-        ordered_components = {component: ';'.join(component_names[component]) for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "case", "psu", "fan", "extra"]}
+        ordered_components = {component: ';'.join(component_names[component]) for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "hdd", "case", "psu", "fan", "extra"]}
 
         # Reinsert the PC into the `assembled_pcs` table
         cursor.execute("""
@@ -301,13 +304,13 @@ def undo_sale(sold_item_id):
     conn.commit()
     conn.close()
 
-def add_sold_pc(id, component_ids):
+def add_sold_pc(id, name, component_ids):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO sold_pcs (id, cpu, cooler, gpu, motherboard, ram, ssd, hdd, pc_case, psu, fan, extra)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (id, *component_ids))
+        INSERT INTO sold_pcs (id, name, cpu, cooler, gpu, motherboard, ram, ssd, hdd, pc_case, psu, fan, extra)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (id, name, *component_ids))
     conn.commit()
     conn.close()
 

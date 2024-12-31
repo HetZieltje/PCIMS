@@ -257,7 +257,7 @@ class InventoryTab(ctk.CTkFrame):
                 # Query the database for the cost price of the item
                 total_cost = float(get_item_cost(item_id))
                 profit = round(selling_price_per_item - total_cost, 2)
-                add_income(item_name, total_cost, selling_price_per_item, profit, sale_date)
+                add_income(item_id, item_name, total_cost, selling_price_per_item, profit, sale_date, False)
 
             # Update the Treeview tag with the remaining IDs
             if item_ids:
@@ -298,19 +298,20 @@ class InventoryTab(ctk.CTkFrame):
                 profit = round(selling_price - total_cost, 2)
 
                 # Add the income entry and retrieve the id
-                income_id = add_income(pc_name, total_cost, selling_price, profit, sale_date)
+                income_id = add_income(None, pc_name, total_cost, selling_price, profit, sale_date, True)
 
                 # Delete components used in the PC from the inventory
-                component_ids = [item[0] for item in get_inventory_items() if item[4] == pc_name]
+                component_ids = {component: None for component in ["cpu", "cooler", "gpu", "motherboard", "ram", "ssd", "hdd", "case", "psu", "fan", "extra"]}
+                for item in get_inventory_items():
+                    if item[4] == pc_name:
+                        component_type = item[2].lower()
+                        if component_type in component_ids and component_ids[component_type] is None:
+                            component_ids[component_type] = item[0]
 
-                # Ensure the component_ids list has exactly 11 elements
-                while len(component_ids) < 11:
-                    component_ids.append(None)
-                
                 delete_components_used_in_pc(pc_name)
 
                 # Add the sold PC to the sold_pcs table
-                add_sold_pc(income_id, component_ids)
+                add_sold_pc(income_id, pc_name, list(component_ids.values()))
 
                 # Delete the assembled PC from the database
                 delete_assembled_pc(pc_name)
