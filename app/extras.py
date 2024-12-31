@@ -4,7 +4,7 @@ from datetime import datetime
 from tkcalendar import DateEntry
 import customtkinter as ctk
 from customtkinter import *
-from db.queries import add_expense, get_inventory_items, delete_item_from_inventory, add_income, get_purchase_date, get_expenses
+from db.queries import add_expense, get_inventory_items, delete_item_from_inventory, add_income, get_purchase_date, get_expenses, rename_part
 import json
 
 class AutocompleteEntry(ctk.CTkEntry):
@@ -442,3 +442,22 @@ class ExtrasTab(ctk.CTkFrame):
 
     def sell_item(self):
         self.sell_extra()
+
+    def rename_extra(self):
+        selected_item = self.extras_tree.selection()
+
+        if selected_item:
+            item_ids = json.loads(self.extras_tree.item(selected_item, 'tags')[0])
+            item_values = self.extras_tree.item(selected_item, 'values')
+            old_name = item_values[0]
+
+            new_name = simpledialog.askstring("Rename Extra", f"Enter new name for {old_name}:")
+            if new_name:
+                for item_id in item_ids:
+                    rename_part(item_id, old_name, new_name)
+                self.refresh()
+        else:
+            messagebox.showerror("Error", "Please select an item to rename.")
+
+    def rename_item(self):
+        self.rename_extra()
