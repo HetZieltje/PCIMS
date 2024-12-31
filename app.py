@@ -137,6 +137,7 @@ class PCIMS(ctk.CTk):
             self.balance_button.pack(side="left", padx=2, pady=3)
             self.delete_button.pack(side="left", padx=2, pady=3)
             self.sell_button.pack(side="left", padx=2, pady=3)
+            self.rename_button.pack(side="left", padx=2, pady=3)
 
     def toggle_dark_mode(self):
         self.is_dark_mode = not self.is_dark_mode
