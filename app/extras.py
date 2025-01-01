@@ -300,7 +300,7 @@ class ExtrasTab(ctk.CTkFrame):
                 delete_item_from_inventory(item_id)
                 total_cost = float(item_values[1][1:])
                 profit = round(selling_price_per_item - total_cost, 2)
-                add_income(item_name, total_cost, selling_price_per_item, profit, sale_date)
+                add_income(item_id, item_name, total_cost, selling_price_per_item, profit, sale_date, False)
 
             # Refresh the inventory Treeview and balance tab
             self.refresh()

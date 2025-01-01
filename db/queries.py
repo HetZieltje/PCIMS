@@ -232,7 +232,7 @@ def get_pc_names():
     return pc_names
 
 # Income Queries
-def add_income(old_id, name, cost, selling_price, profit, sale_date, is_pc):
+def add_income(old_id, name, cost, selling_price, profit, sale_date, is_pc=False):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
