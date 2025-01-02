@@ -3,7 +3,6 @@ from tkinter import messagebox, simpledialog, StringVar, Listbox, ttk
 from datetime import datetime
 from tkcalendar import DateEntry
 import customtkinter as ctk
-from customtkinter import *
 from db.queries import add_expense, get_inventory_items, delete_item_from_inventory, add_income, get_purchase_date, get_expenses, rename_part
 import json
 

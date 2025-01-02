@@ -4,7 +4,6 @@ from datetime import datetime
 import json
 from tkcalendar import DateEntry
 import customtkinter as ctk
-from customtkinter import *
 from db.queries import get_inventory_items, get_assembled_pcs, delete_item_from_inventory, delete_expense, delete_assembled_pc, add_income, delete_components_used_in_pc, get_purchase_date, add_sold_pc, get_item_cost, update_used_in_for_deleted_pc, rename_part, rename_pc
 
 class InventoryTab(ctk.CTkFrame):

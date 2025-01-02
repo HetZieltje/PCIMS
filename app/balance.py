@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import json
 import customtkinter as ctk
-from customtkinter import *
 from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts, undo_sale, delete_expense, rename_part
 
 class BalanceTab(ctk.CTkFrame):

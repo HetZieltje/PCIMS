@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import messagebox
 from tkcalendar import DateEntry
 import customtkinter as ctk
-from customtkinter import *
 from db.queries import add_expense, get_expenses
 
 class AutocompleteEntry(ctk.CTkEntry):
