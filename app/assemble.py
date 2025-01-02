@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import messagebox
 import customtkinter as ctk
 from db.queries import get_inventory_items, get_pc_names, update_used_in_component, get_total_pc_price, assemble_pc
 
@@ -127,12 +126,12 @@ class AssembleTab(ctk.CTkFrame):
 
         # Ensure at least one component is selected
         if not any(selected_components.values()):
-            messagebox.showerror("Error", "At least one component must be selected.")
+            tk.messagebox.showerror("Error", "At least one component must be selected.")
             return
 
         # Check if the PC name is already in use
         if pc_name in get_pc_names():
-            messagebox.showerror("Error", "PC name already in use. Please choose a different name.")
+            tk.messagebox.showerror("Error", "PC name already in use. Please choose a different name.")
             return
 
         # Update the `used_in` field for all selected components

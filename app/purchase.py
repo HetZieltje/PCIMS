@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import messagebox
 from tkcalendar import DateEntry
 import customtkinter as ctk
 from db.queries import add_expense, get_expenses
@@ -161,7 +160,7 @@ class PurchaseTab(ctk.CTkFrame):
         # Check if name and component_type are not empty
         if not name or not component_type:
             # Show an error message or take any other necessary action
-            messagebox.showerror("Error", "Please enter both item name and component type.")
+            tk.messagebox.showerror("Error", "Please enter both item name and component type.")
             return
 
         if self.price_entry.get():
@@ -170,7 +169,7 @@ class PurchaseTab(ctk.CTkFrame):
             # Calculate the price after applying the percentage
             price_after_percentage = self.calc_price(price, percentage)
         else:
-            messagebox.showerror("Error", "Please enter a price")
+            tk.messagebox.showerror("Error", "Please enter a price")
             return
         
         purchase_date = self.date_entry.get_date()
@@ -203,7 +202,7 @@ class PurchaseTab(ctk.CTkFrame):
     def add_bundle(self):
         # Validate form if no items are in the current purchase list
         if not self.current_purchase_items and not self.validate_form():
-            messagebox.showerror("Error", "Please enter valid data.")
+            tk.messagebox.showerror("Error", "Please enter valid data.")
             return
 
         # Add the form entry if valid

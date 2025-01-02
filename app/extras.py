@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import messagebox, simpledialog, StringVar, Listbox, ttk
 from datetime import datetime
 from tkcalendar import DateEntry
 import customtkinter as ctk
@@ -8,7 +7,7 @@ import json
 
 class AutocompleteEntry(ctk.CTkEntry):
     def __init__(self, master, suggestions, app, *args, **kwargs):
-        self.var = StringVar()
+        self.var = tk.StringVar()
         kwargs['textvariable'] = self.var
         super().__init__(master, *args, **kwargs)
         self.suggestions = suggestions
@@ -35,7 +34,7 @@ class AutocompleteEntry(ctk.CTkEntry):
             words = self.comparison()
             if words:
                 if not self.listbox_up:
-                    self.listbox = Listbox(self.master, width=min(self.winfo_width(), 50), bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
+                    self.listbox = tk.Listbox(self.master, width=min(self.winfo_width(), 50), bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
                     self.listbox.bind("<Button-1>", self.selection)
                     self.listbox.bind("<Right>", self.selection)
                     self.listbox.place(x=self.winfo_x(), y=self.winfo_y() + self.winfo_height())
@@ -159,7 +158,7 @@ class ExtrasTab(ctk.CTkFrame):
         self.add_extra_button.grid(row=5, column=0, pady=5, padx=10, sticky=tk.W)
 
         # Treeview to display extras
-        self.extras_tree = ttk.Treeview(self, columns=("Name", "Price", "Quantity", "Used In"), show="headings", selectmode="browse", style="Custom.Treeview")
+        self.extras_tree = tk.ttk.Treeview(self, columns=("Name", "Price", "Quantity", "Used In"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.extras_tree.heading("Name", text="Name")
         self.extras_tree.heading("Price", text="Price")
         self.extras_tree.heading("Quantity", text="Quantity")
@@ -180,19 +179,19 @@ class ExtrasTab(ctk.CTkFrame):
     def add_extra(self):
         name = self.name_entry.get()
         if not name:
-            messagebox.showerror("Error", "Please enter the extra name.")
+            tk.messagebox.showerror("Error", "Please enter the extra name.")
             return
 
         if self.price_entry.get():
             price = float(self.price_entry.get().replace(',', '.').replace(' ', '.'))
         else:
-            messagebox.showerror("Error", "Please enter a price.")
+            tk.messagebox.showerror("Error", "Please enter a price.")
             return
 
         if self.quantity_entry.get():
             quantity = int(self.quantity_entry.get())
         else:
-            messagebox.showerror("Error", "Please enter a quantity.")
+            tk.messagebox.showerror("Error", "Please enter a quantity.")
             return
 
         if self.price_switch_var.get() == "total":
@@ -215,7 +214,7 @@ class ExtrasTab(ctk.CTkFrame):
     def delete_extra(self):
         selected_item = self.extras_tree.selection()
         if not selected_item:
-            messagebox.showerror("Error", "Please select an extra to delete.")
+            tk.messagebox.showerror("Error", "Please select an extra to delete.")
             return
 
         item_values = self.extras_tree.item(selected_item, 'values')
@@ -223,18 +222,18 @@ class ExtrasTab(ctk.CTkFrame):
 
         if used_in_pc != 'None':
             # If the extra is used in a PC, raise an error message
-            messagebox.showerror("Error", f"The {item_values[0]} is currently used in {used_in_pc} and cannot be deleted.")
+            tk.messagebox.showerror("Error", f"The {item_values[0]} is currently used in {used_in_pc} and cannot be deleted.")
             return
 
         # Ask how many items to delete if there are more than one
         quantity_to_delete = 1
         if int(item_values[2]) > 1:
-            quantity_to_delete = simpledialog.askinteger("Quantity", f"Enter the quantity of {item_values[0]} to delete (1-{item_values[2]}):", minvalue=1, maxvalue=int(item_values[2]))
+            quantity_to_delete = tk.simpledialog.askinteger("Quantity", f"Enter the quantity of {item_values[0]} to delete (1-{item_values[2]}):", minvalue=1, maxvalue=int(item_values[2]))
             if quantity_to_delete is None:
                 return
 
         # Ask for confirmation before deleting the item
-        confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete {quantity_to_delete} of {item_values[0]} from inventory?")
+        confirm = tk.messagebox.askyesno("Confirm Deletion", f"Do you want to delete {quantity_to_delete} of {item_values[0]} from inventory?")
         if confirm:
             item_ids = json.loads(self.extras_tree.item(selected_item, 'tags')[0])
             for _ in range(quantity_to_delete):
@@ -246,7 +245,7 @@ class ExtrasTab(ctk.CTkFrame):
     def sell_extra(self):
         selected_item = self.extras_tree.selection()
         if not selected_item:
-            messagebox.showerror("Error", "Please select an extra to sell.")
+            tk.messagebox.showerror("Error", "Please select an extra to sell.")
             return
 
         item_ids = json.loads(self.extras_tree.item(selected_item, 'tags')[0])
@@ -256,13 +255,13 @@ class ExtrasTab(ctk.CTkFrame):
 
         if used_in_pc != 'None':
             # If the extra is used in a PC, raise an error message
-            messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be sold.")
+            tk.messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be sold.")
             return
 
         # Ask how many items to sell if there are more than one
         quantity_to_sell = 1
         if int(item_values[2]) > 1:
-            quantity_to_sell = simpledialog.askinteger("Quantity", f"Enter the quantity of {item_name} to sell (1-{item_values[2]}):", minvalue=1, maxvalue=int(item_values[2]))
+            quantity_to_sell = tk.simpledialog.askinteger("Quantity", f"Enter the quantity of {item_name} to sell (1-{item_values[2]}):", minvalue=1, maxvalue=int(item_values[2]))
             if quantity_to_sell is None:
                 return
 
@@ -283,16 +282,16 @@ class ExtrasTab(ctk.CTkFrame):
         for item_id in item_ids[:quantity_to_sell]:
             purchase_date_str = get_purchase_date(item_id)
             if not purchase_date_str:
-                messagebox.showerror("Error", f"Purchase date not found for item ID {item_id}.")
+                tk.messagebox.showerror("Error", f"Purchase date not found for item ID {item_id}.")
                 return
 
             purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d").date()
             if sale_date < purchase_date:
-                messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
+                tk.messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
                 return
 
         # Ask for confirmation before selling the item
-        confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell {quantity_to_sell} of {item_name} for €{total_selling_price:.2f}?")
+        confirm = tk.messagebox.askyesno("Confirm Sell", f"Do you want to sell {quantity_to_sell} of {item_name} for €{total_selling_price:.2f}?")
         if confirm:
             for _ in range(quantity_to_sell):
                 item_id = item_ids.pop(0)
@@ -307,7 +306,7 @@ class ExtrasTab(ctk.CTkFrame):
     def get_selling_price(self, item_name):
         while True:
             try:
-                selling_price_str = simpledialog.askstring("Selling Price", f"Enter the total selling price for {item_name}:")
+                selling_price_str = tk.simpledialog.askstring("Selling Price", f"Enter the total selling price for {item_name}:")
                 if selling_price_str is None:
                     return None
 
@@ -326,7 +325,7 @@ class ExtrasTab(ctk.CTkFrame):
                 return selling_price
 
             except ValueError as e:
-                messagebox.showerror("Invalid Selling Price", str(e))
+                tk.messagebox.showerror("Invalid Selling Price", str(e))
 
     def get_sale_date(self, item_name):
         sale_date_popup = tk.Toplevel(self)
@@ -423,7 +422,7 @@ class ExtrasTab(ctk.CTkFrame):
         self.set_treeview_style()
 
     def set_treeview_style(self):
-        style = ttk.Style()
+        style = tk.ttk.Style()
         style.theme_use("clam")
         if self.app.is_dark_mode:
             style.configure("Dark.Treeview", background="#3e3e3e", foreground="white", fieldbackground="#3e3e3e", highlightthickness=0, bd=0)
@@ -450,13 +449,13 @@ class ExtrasTab(ctk.CTkFrame):
             item_values = self.extras_tree.item(selected_item, 'values')
             old_name = item_values[0]
 
-            new_name = simpledialog.askstring("Rename Extra", f"Enter new name for {old_name}:")
+            new_name = tk.simpledialog.askstring("Rename Extra", f"Enter new name for {old_name}:")
             if new_name:
                 for item_id in item_ids:
                     rename_part(item_id, old_name, new_name)
                 self.refresh()
         else:
-            messagebox.showerror("Error", "Please select an item to rename.")
+            tk.messagebox.showerror("Error", "Please select an item to rename.")
 
     def rename_item(self):
         self.rename_extra()

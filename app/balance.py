@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
 import json
 import customtkinter as ctk
 from db.queries import get_expenses, get_inventory_items, get_sales, add_expense, get_inventory_value, get_sold_pc_parts, undo_sale, delete_expense, rename_part
@@ -16,7 +15,7 @@ class BalanceTab(ctk.CTkFrame):
         balance_panedwindow.pack(expand=1, fill="both")
 
         # Left Treeview to display expenses
-        self.left_tree = ttk.Treeview(balance_panedwindow, columns=("Name", "Type", "Price", "Purchase Date"), show="headings", selectmode="browse", style="Custom.Treeview")
+        self.left_tree = tk.ttk.Treeview(balance_panedwindow, columns=("Name", "Type", "Price", "Purchase Date"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.left_tree.heading("Name", text="Name")
         self.left_tree.heading("Type", text="Type")
         self.left_tree.heading("Price", text="Price")
@@ -24,7 +23,7 @@ class BalanceTab(ctk.CTkFrame):
         self.left_tree.pack(side=tk.LEFT, expand=1, fill="both")
 
         # Right Treeview to display sold PCs
-        self.right_tree = ttk.Treeview(balance_panedwindow, columns=("Name", "Total Cost", "Selling Price", "Profit", "Sale Date"), show="headings", selectmode="browse", style="Custom.Treeview")
+        self.right_tree = tk.ttk.Treeview(balance_panedwindow, columns=("Name", "Total Cost", "Selling Price", "Profit", "Sale Date"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.right_tree.heading("Name", text="Name")
         self.right_tree.heading("Total Cost", text="Total Cost")
         self.right_tree.heading("Selling Price", text="Selling Price")
@@ -96,7 +95,7 @@ class BalanceTab(ctk.CTkFrame):
         self.right_tree.bind("<Double-1>", self.show_sold_pc_parts)
 
         # Apply custom style for light and dark themes
-        style = ttk.Style()
+        style = tk.ttk.Style()
         style.theme_use("clam")
         style.configure("Light.Treeview", background="white", foreground="black", fieldbackground="white", highlightthickness=0, bd=0)
         style.configure("Light.Treeview.Heading", background="lightgray", foreground="black")
@@ -248,16 +247,16 @@ class BalanceTab(ctk.CTkFrame):
             parts_info = get_sold_pc_parts(income_id)
             if parts_info:
                 parts_details = "\n".join([f"{part['name']} ({part['type']}): €{part['price']} (Purchased on {part['purchase_date']})" for part in parts_info])
-                messagebox.showinfo("Sold PC Parts Information", parts_details)
+                tk.messagebox.showinfo("Sold PC Parts Information", parts_details)
             else:
-                messagebox.showinfo("Sold Item Information", f"No parts information available for the selected item: {item_name}.")
+                tk.messagebox.showinfo("Sold Item Information", f"No parts information available for the selected item: {item_name}.")
 
     def unsell_item(self):
         selected_item = self.right_tree.selection()
         if selected_item:
             income_id = json.loads(self.right_tree.item(selected_item, 'tags')[0])[0]
             item_name = self.right_tree.item(selected_item, 'values')[0]
-            confirm = messagebox.askyesno("Confirm Unsell", "Do you want to unsell the selected item?")
+            confirm = tk.messagebox.askyesno("Confirm Unsell", "Do you want to unsell the selected item?")
             if confirm:
                 undo_sale(income_id, item_name)
                 self.refresh()
@@ -265,14 +264,14 @@ class BalanceTab(ctk.CTkFrame):
     def delete_item(self):
         selected_item = self.left_tree.selection()
         if not selected_item:
-            messagebox.showerror("Error", "Please select an item to delete.")
+            tk.messagebox.showerror("Error", "Please select an item to delete.")
             return
 
         item_values = self.left_tree.item(selected_item, 'values')
         item_name = item_values[0]
 
         # Confirm deletion
-        confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete {item_name} from expenses?")
+        confirm = tk.messagebox.askyesno("Confirm Deletion", f"Do you want to delete {item_name} from expenses?")
         if confirm:
             # Get the item ID from the tags
             item_ids = json.loads(self.left_tree.item(selected_item, 'tags')[0])
@@ -290,10 +289,10 @@ class BalanceTab(ctk.CTkFrame):
             item_values = self.left_tree.item(selected_item, 'values')
             old_name = item_values[0]
 
-            new_name = simpledialog.askstring("Rename item", f"Enter new name for {old_name}:")
+            new_name = tk.simpledialog.askstring("Rename item", f"Enter new name for {old_name}:")
             if new_name:
                 for item_id in item_ids:
                     rename_part(item_id, old_name, new_name)
                 self.refresh()
         else:
-            messagebox.showerror("Error", "Please select an item to rename.")
+            tk.messagebox.showerror("Error", "Please select an item to rename.")

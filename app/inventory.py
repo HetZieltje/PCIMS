@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
 from datetime import datetime
 import json
 from tkcalendar import DateEntry
@@ -21,7 +20,7 @@ class InventoryTab(ctk.CTkFrame):
         inventory_panedwindow.pack(expand=1, fill="both")
 
         # Left Treeview to display the inventory (similar to the current inventory_tab)
-        self.left_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Type", "Price", "Quantity", "Used In"), show="headings", selectmode="browse", style="Custom.Treeview")
+        self.left_tree = tk.ttk.Treeview(inventory_panedwindow, columns=("Name", "Type", "Price", "Quantity", "Used In"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.left_tree.heading("Name", text="Name")
         self.left_tree.heading("Type", text="Type")
         self.left_tree.heading("Price", text="Price")
@@ -30,7 +29,7 @@ class InventoryTab(ctk.CTkFrame):
         self.left_tree.pack(side=tk.LEFT, expand=1, fill="both")
 
         # Right Treeview to display the assembled PCs (similar to the current assemble_tab)
-        self.right_tree = ttk.Treeview(inventory_panedwindow, columns=("Name", "Price", "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"), show="headings", selectmode="browse", style="Custom.Treeview")
+        self.right_tree = tk.ttk.Treeview(inventory_panedwindow, columns=("Name", "Price", "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD", "Case", "PSU", "Fan", "Extra"), show="headings", selectmode="browse", style="Custom.Treeview")
         self.right_tree.heading("Name", text="Name")
         self.right_tree.heading("Price", text="Price")
 
@@ -81,7 +80,7 @@ class InventoryTab(ctk.CTkFrame):
             self.right_tree.heading(col, text=col, command=lambda _col=col: self.sort_column(self.right_tree, _col, False))
 
         # Apply custom style for light and dark themes
-        style = ttk.Style()
+        style = tk.ttk.Style()
         style.theme_use("clam")
         style.configure("Light.Treeview", background="white", foreground="black", fieldbackground="white", highlightthickness=0, bd=0)
         style.configure("Light.Treeview.Heading", background="lightgray", foreground="black")
@@ -212,13 +211,13 @@ class InventoryTab(ctk.CTkFrame):
 
         if used_in_pc != 'None':
             # If the item is used in a PC, raise an error message
-            messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be sold.")
+            tk.messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be sold.")
             return
 
         # Ask how many items to sell if there are more than one
         quantity_to_sell = 1
         if len(item_ids) > 1:
-            quantity_to_sell = simpledialog.askinteger("Quantity", f"Enter the quantity of {item_name} to sell (1-{len(item_ids)}):", minvalue=1, maxvalue=len(item_ids))
+            quantity_to_sell = tk.simpledialog.askinteger("Quantity", f"Enter the quantity of {item_name} to sell (1-{len(item_ids)}):", minvalue=1, maxvalue=len(item_ids))
             if quantity_to_sell is None:
                 return
 
@@ -242,11 +241,11 @@ class InventoryTab(ctk.CTkFrame):
                 continue
             purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d").date()
             if sale_date < purchase_date:
-                messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
+                tk.messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}).")
                 return
 
         # Ask for confirmation before selling the standalone item
-        confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell {quantity_to_sell} of {item_name} for €{total_selling_price:.2f}?")
+        confirm = tk.messagebox.askyesno("Confirm Sell", f"Do you want to sell {quantity_to_sell} of {item_name} for €{total_selling_price:.2f}?")
         if confirm:
             for _ in range(quantity_to_sell):
                 # Remove one item from inventory and add to income table
@@ -287,11 +286,11 @@ class InventoryTab(ctk.CTkFrame):
                 if item[4] == pc_name:
                     purchase_date = datetime.strptime(get_purchase_date(item[0]), "%Y-%m-%d").date()
                     if sale_date < purchase_date:
-                        messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}) of any component.")
+                        tk.messagebox.showerror("Error", f"The sale date cannot be before the purchase date ({purchase_date}) of any component.")
                         return
 
             # Ask for confirmation before selling the assembled PC
-            confirm = messagebox.askyesno("Confirm Sell", f"Do you want to sell {pc_name} for €{selling_price:.2f}?")
+            confirm = tk.messagebox.askyesno("Confirm Sell", f"Do you want to sell {pc_name} for €{selling_price:.2f}?")
             if confirm:
                 total_cost = float(pc_info[1][1:])
                 profit = round(selling_price - total_cost, 2)
@@ -355,7 +354,7 @@ class InventoryTab(ctk.CTkFrame):
         while True:
             try:
                 # Prompt the user for the total selling price
-                selling_price_str = simpledialog.askstring("Selling Price", f"Enter the total selling price for {item_name}:")
+                selling_price_str = tk.simpledialog.askstring("Selling Price", f"Enter the total selling price for {item_name}:")
                 if selling_price_str is None:
                     # If the user cancels the input, return None
                     return None
@@ -383,7 +382,7 @@ class InventoryTab(ctk.CTkFrame):
 
             except ValueError as e:
                 # Handle invalid input
-                messagebox.showerror("Invalid Selling Price", str(e))
+                tk.messagebox.showerror("Invalid Selling Price", str(e))
 
     def sort_column(self, treeview, col, reverse):
         # Get the list of items in the specified column
@@ -423,11 +422,11 @@ class InventoryTab(ctk.CTkFrame):
 
             if used_in_pc != 'None':
                 # If the item is used in a PC, raise an error message
-                messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be deleted.")
+                tk.messagebox.showerror("Error", f"The {item_name} is currently used in {used_in_pc} and cannot be deleted.")
                 return
 
             # Ask for confirmation before deleting the item
-            confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete {item_name} from expenses?")
+            confirm = tk.messagebox.askyesno("Confirm Deletion", f"Do you want to delete {item_name} from expenses?")
             if confirm:
                 for item_id in item_ids:
                     delete_expense(item_id)
@@ -443,7 +442,7 @@ class InventoryTab(ctk.CTkFrame):
             pc_name = self.right_tree.item(selected_item_right, 'values')[0]
 
             # Ask for confirmation before deleting the assembled PC
-            confirm = messagebox.askyesno("Confirm Deletion", "Do you want to delete the assembled PC?")
+            confirm = tk.messagebox.askyesno("Confirm Deletion", "Do you want to delete the assembled PC?")
             if confirm:
                 # Clear the used_in field for all components used in the PC
                 update_used_in_for_deleted_pc(pc_name)
@@ -455,7 +454,7 @@ class InventoryTab(ctk.CTkFrame):
                 self.refresh()
 
         else:
-            messagebox.showerror("Error", "Please select an item to delete.")
+            tk.messagebox.showerror("Error", "Please select an item to delete.")
 
     def rename_item(self):
         selected_item_left = self.left_tree.selection()
@@ -466,7 +465,7 @@ class InventoryTab(ctk.CTkFrame):
             item_values = self.left_tree.item(selected_item_left, 'values')
             old_name = item_values[0]
 
-            new_name = simpledialog.askstring("Rename Part", f"Enter new name for {old_name}:")
+            new_name = tk.simpledialog.askstring("Rename Part", f"Enter new name for {old_name}:")
             if new_name:
                 for item_id in item_ids:
                     rename_part(item_id, old_name, new_name)
@@ -476,10 +475,10 @@ class InventoryTab(ctk.CTkFrame):
             item_values = self.right_tree.item(selected_item_right, 'values')
             old_name = item_values[0]
 
-            new_name = simpledialog.askstring("Rename PC", f"Enter new name for {old_name}:")
+            new_name = tk.simpledialog.askstring("Rename PC", f"Enter new name for {old_name}:")
             if new_name:
                 rename_pc(old_name, new_name)
                 self.refresh()
 
         else:
-            messagebox.showerror("Error", "Please select an item to rename.")
+            tk.messagebox.showerror("Error", "Please select an item to rename.")
