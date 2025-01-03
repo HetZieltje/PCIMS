@@ -183,7 +183,7 @@ class ExtrasTab(ctk.CTkFrame):
             return
 
         if self.price_entry.get():
-            price = float(self.price_entry.get().replace(',', '.').replace(' ', '.'))
+            price = round(float(self.price_entry.get().replace(',', '.').replace(' ', '.')), 2)
         else:
             tk.messagebox.showerror("Error", "Please enter a price.")
             return
@@ -210,37 +210,6 @@ class ExtrasTab(ctk.CTkFrame):
         self.quantity_entry.delete(0, tk.END)
         self.quantity_entry.insert(0, "1")  # Reset quantity to 1
         self.date_entry.set_date(datetime.today())
-
-    def delete_extra(self):
-        selected_item = self.extras_tree.selection()
-        if not selected_item:
-            tk.messagebox.showerror("Error", "Please select an extra to delete.")
-            return
-
-        item_values = self.extras_tree.item(selected_item, 'values')
-        used_in_pc = item_values[3]
-
-        if used_in_pc != 'None':
-            # If the extra is used in a PC, raise an error message
-            tk.messagebox.showerror("Error", f"The {item_values[0]} is currently used in {used_in_pc} and cannot be deleted.")
-            return
-
-        # Ask how many items to delete if there are more than one
-        quantity_to_delete = 1
-        if int(item_values[2]) > 1:
-            quantity_to_delete = tk.simpledialog.askinteger("Quantity", f"Enter the quantity of {item_values[0]} to delete (1-{item_values[2]}):", minvalue=1, maxvalue=int(item_values[2]))
-            if quantity_to_delete is None:
-                return
-
-        # Ask for confirmation before deleting the item
-        confirm = tk.messagebox.askyesno("Confirm Deletion", f"Do you want to delete {quantity_to_delete} of {item_values[0]} from inventory?")
-        if confirm:
-            item_ids = json.loads(self.extras_tree.item(selected_item, 'tags')[0])
-            for _ in range(quantity_to_delete):
-                delete_item_from_inventory(item_ids.pop(0))
-
-            self.refresh()
-
 
     def sell_extra(self):
         selected_item = self.extras_tree.selection()
@@ -435,9 +404,6 @@ class ExtrasTab(ctk.CTkFrame):
             style.map("Light.Treeview", background=[("selected", "lightgray")])
             self.extras_tree.configure(style="Light.Treeview")
 
-    def delete_item(self):
-        self.delete_extra()
-
     def sell_item(self):
         self.sell_extra()
 
@@ -449,7 +415,7 @@ class ExtrasTab(ctk.CTkFrame):
             item_values = self.extras_tree.item(selected_item, 'values')
             old_name = item_values[0]
 
-            new_name = tk.simpledialog.askstring("Rename Extra", f"Enter new name for {old_name}:")
+            new_name = tk.simpledialog.askstring("Rename Extra", f"Enter new name for {old_name}:", initialvalue=old_name)
             if new_name:
                 for item_id in item_ids:
                     rename_part(item_id, old_name, new_name)

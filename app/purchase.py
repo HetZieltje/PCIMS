@@ -194,10 +194,8 @@ class PurchaseTab(ctk.CTkFrame):
 
     def calc_price(self, price, percentage):
         # Calculate the price after applying the percentage
-        calculated_price = price * (percentage / 100)
-        # Round off the calculated price to two decimal places
-        rounded_price = round(calculated_price, 2)
-        return rounded_price
+        price = round(price * (percentage / 100), 2)
+        return price
     
     def add_bundle(self):
         # Validate form if no items are in the current purchase list

@@ -134,7 +134,6 @@ class PCIMS(ctk.CTk):
             self.add_purchase_button.pack(side="left", padx=2, pady=3)
             self.assemble_pc_button.pack(side="left", padx=2, pady=3)
             self.balance_button.pack(side="left", padx=2, pady=3)
-            self.delete_button.pack(side="left", padx=2, pady=3)
             self.sell_button.pack(side="left", padx=2, pady=3)
             self.rename_button.pack(side="left", padx=2, pady=3)
 

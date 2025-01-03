@@ -289,7 +289,7 @@ class BalanceTab(ctk.CTkFrame):
             item_values = self.left_tree.item(selected_item, 'values')
             old_name = item_values[0]
 
-            new_name = tk.simpledialog.askstring("Rename item", f"Enter new name for {old_name}:")
+            new_name = tk.simpledialog.askstring("Rename item", f"Enter new name for {old_name}:", initialvalue=old_name)
             if new_name:
                 for item_id in item_ids:
                     rename_part(item_id, old_name, new_name)
