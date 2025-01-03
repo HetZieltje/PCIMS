@@ -115,12 +115,12 @@ class ExtrasTab(ctk.CTkFrame):
         self.form_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.form_frame.grid(row=0, column=0, rowspan=6, pady=10, padx=10, sticky=tk.NW)
 
-        self.name_label = ctk.CTkLabel(self.form_frame, text="Extra Name:")
+        self.name_label = ctk.CTkLabel(self.form_frame, text="Name:")
         self.name_entry = AutocompleteEntry(self.form_frame, self.existing_extras, self.app, width=300)
         self.name_label.grid(row=0, column=0, pady=5, padx=10, sticky=tk.W)
         self.name_entry.grid(row=0, column=1, pady=5, padx=10, sticky=tk.W)
 
-        self.price_label = ctk.CTkLabel(self.form_frame, text="Price (Euro):")
+        self.price_label = ctk.CTkLabel(self.form_frame, text="Total Price (Euro):")
         self.price_entry = ctk.CTkEntry(self.form_frame, validate="key", validatecommand=(self.register(self.validate_price), "%P"), width=150)
         self.price_label.grid(row=1, column=0, pady=5, padx=10, sticky=tk.W)
         self.price_entry.grid(row=1, column=1, pady=5, padx=10, sticky=tk.W)
