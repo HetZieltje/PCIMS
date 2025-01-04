@@ -133,7 +133,7 @@ class BalanceTab(ctk.CTkFrame):
             expense_info = (
                 expense['name'],
                 expense['type'],
-                f"€{expense['price']}",  # Format as Euros
+                f"€{expense['price']:.2f}",  # Format price with 2 decimals
                 expense['purchase_date']
             )
             self.left_tree.insert("", tk.END, values=expense_info, tags=(json.dumps([expense['id']]),))
@@ -160,7 +160,7 @@ class BalanceTab(ctk.CTkFrame):
             avg_cost = total_cost / quantity
             avg_selling_price = total_selling_price / quantity
             avg_profit = total_profit / quantity
-            sold_item_info = name, f"€{avg_cost:.2f}", f"€{avg_selling_price:.2f}", f"€{avg_profit:.2f}", sale_date
+            sold_item_info = name, f"€{avg_cost:.2f}", f"€{avg_selling_price:.2f}", f"€{avg_profit:.2f}", sale_date  # Format prices with 2 decimals
             self.right_tree.insert("", tk.END, values=sold_item_info, tags=(json.dumps(ids),))
             total_income += total_selling_price
 
