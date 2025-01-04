@@ -33,7 +33,7 @@ class AssembleTab(ctk.CTkFrame):
         for component_type in component_types:
             row, col = layout_positions[component_type]
             label = ctk.CTkLabel(self, text=f"{component_type}:")
-            listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=40, bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
+            listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, exportselection=0, width=50, bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")  # Increased width by 20%
             listbox.bind('<FocusIn>', lambda event, comp_type=component_type, listbox=listbox: self.update_listbox(comp_type, listbox))
             listbox.bind('<<ListboxSelect>>', lambda event, comp_type=component_type, listbox=listbox: self.handle_selection(comp_type, listbox))
 
