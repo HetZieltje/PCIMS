@@ -19,6 +19,7 @@ class AutocompleteEntry(ctk.CTkEntry):
         self.bind("<FocusOut>", self.hide_listbox)
         self.bind("<Return>", self.hide_listbox_on_enter)
         self.bind("<Tab>", self.hide_listbox_on_enter)
+        self.bind("<Escape>", self.hide_listbox_on_escape)
         self.listbox_up = False
         self.listbox = None
 
@@ -95,6 +96,11 @@ class AutocompleteEntry(ctk.CTkEntry):
             self.listbox_up = False
 
     def hide_listbox_on_enter(self, event):
+        if self.listbox_up:
+            self.listbox.destroy()
+            self.listbox_up = False
+
+    def hide_listbox_on_escape(self, event):
         if self.listbox_up:
             self.listbox.destroy()
             self.listbox_up = False
