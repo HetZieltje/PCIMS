@@ -34,6 +34,7 @@ class AutocompleteEntry(ctk.CTkEntry):
                     self.listbox = tk.Listbox(self.master, width=min(self.winfo_width(), 50), bg="#3e3e3e" if self.master.app.is_dark_mode else "white", fg="white" if self.master.app.is_dark_mode else "black")
                     self.listbox.bind("<Button-1>", self.selection)
                     self.listbox.bind("<Right>", self.selection)
+                    self.listbox.bind("<Motion>", self.on_motion)
                     self.listbox.place(x=self.winfo_x(), y=self.winfo_y() + self.winfo_height())
                     self.listbox_up = True
 
@@ -45,12 +46,22 @@ class AutocompleteEntry(ctk.CTkEntry):
                     self.listbox.destroy()
                     self.listbox_up = False
 
+    def on_motion(self, event):
+        if self.listbox_up:
+            index = self.listbox.nearest(event.y)
+            self.listbox.selection_clear(0, tk.END)
+            self.listbox.selection_set(index)
+
     def selection(self, event):
         if self.listbox_up:
-            self.var.set(self.listbox.get(tk.ACTIVE))
+            try:
+                selected_index = self.listbox.nearest(event.y)
+                self.var.set(self.listbox.get(selected_index))
+                self.icursor(tk.END)
+            except IndexError:
+                pass
             self.listbox.destroy()
             self.listbox_up = False
-            self.icursor(tk.END)
 
     def move_up(self, event):
         if self.listbox_up:
