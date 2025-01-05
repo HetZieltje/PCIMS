@@ -347,9 +347,13 @@ def rename_part(item_id, old_name, new_name):
 
     # Update the name in the assembled PCs
     if used_in:
+        if item_type.lower() == "case":
+            column_name = "pc_case"
+        else:
+            column_name = item_type.lower()
         cursor.execute(f"""
             UPDATE assembled_pcs
-            SET {item_type.lower()} = REPLACE({item_type.lower()}, ?, ?)
+            SET "{column_name}" = REPLACE("{column_name}", ?, ?)
             WHERE name = ?
         """, (old_name, new_name, used_in))
     
