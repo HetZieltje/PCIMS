@@ -39,6 +39,7 @@ class AutocompleteEntry(ctk.CTkEntry):
                     self.listbox.bind("<Button-1>", self.selection)
                     self.listbox.bind("<Right>", self.selection)
                     self.listbox.bind("<Motion>", self.on_motion)
+                    self.listbox.bind("<Return>", self.selection)
                     self.listbox.place(x=self.winfo_x(), y=self.winfo_y() + self.winfo_height())
                     self.listbox_up = True
                 else:
@@ -47,15 +48,19 @@ class AutocompleteEntry(ctk.CTkEntry):
                 self.listbox.delete(0, tk.END)
                 for w in words:
                     self.listbox.insert(tk.END, w)
+                self.listbox.selection_set(0)  # Select the first suggestion by default
             else:
                 if self.listbox_up:
                     self.listbox.destroy()
                     self.listbox_up = False
 
-    def selection(self, event):
+    def selection(self, event=None):
         if self.listbox_up:
             try:
-                selected_index = self.listbox.nearest(event.y)
+                if event is not None and event.keysym == "Return":
+                    selected_index = self.listbox.curselection()[0]
+                else:
+                    selected_index = self.listbox.nearest(event.y)
                 self.var.set(self.listbox.get(selected_index))
                 self.icursor(tk.END)
             except IndexError:
@@ -99,8 +104,7 @@ class AutocompleteEntry(ctk.CTkEntry):
 
     def hide_listbox_on_enter(self, event):
         if self.listbox_up:
-            self.listbox.destroy()
-            self.listbox_up = False
+            self.selection(event)
 
     def hide_listbox_on_escape(self, event):
         if self.listbox_up:
