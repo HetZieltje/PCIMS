@@ -35,12 +35,14 @@ class AutocompleteEntry(ctk.CTkEntry):
             words = self.comparison()
             if words:
                 if not self.listbox_up:
-                    self.listbox = tk.Listbox(self.master, width=min(self.winfo_width(), 50), bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
+                    self.listbox = tk.Listbox(self.master, width=min(self.winfo_width(), 50), height=min(len(words), 10), bg="#3e3e3e" if self.app.is_dark_mode else "white", fg="white" if self.app.is_dark_mode else "black")
                     self.listbox.bind("<Button-1>", self.selection)
                     self.listbox.bind("<Right>", self.selection)
                     self.listbox.bind("<Motion>", self.on_motion)
                     self.listbox.place(x=self.winfo_x(), y=self.winfo_y() + self.winfo_height())
                     self.listbox_up = True
+                else:
+                    self.listbox.config(height=min(len(words), 10))
 
                 self.listbox.delete(0, tk.END)
                 for w in words:
