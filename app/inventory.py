@@ -131,8 +131,8 @@ class InventoryTab(ctk.CTkFrame):
         for key, value in combined_items.items():
             name, type_, used_in = key
             ids, total_price, quantity = value
-            avg_price = total_price / quantity
-            item_info = name, type_, f"€{avg_price}", quantity, used_in  # Format price with 2 decimals
+            avg_price = round(total_price / quantity, 2)  # Round to 2 decimals
+            item_info = name, type_, f"€{avg_price:.2f}", quantity, used_in  # Format price with 2 decimals
             self.left_tree.insert("", tk.END, values=item_info, tags=(json.dumps(ids),))
 
         # Insert each assembled PC into the Treeview on the right

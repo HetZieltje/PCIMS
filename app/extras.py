@@ -405,7 +405,7 @@ class ExtrasTab(ctk.CTkFrame):
                 combined_extras[key]["ids"].append(extra[0])
 
         for (name, used_in), data in combined_extras.items():
-            avg_price = round(data["total_price"] / data["quantity"], 2)
+            avg_price = round(data["total_price"] / data["quantity"], 2)  # Round to 2 decimals
             extra_info = (name, f"€{avg_price:.2f}", data["quantity"], used_in)  # Format price with 2 decimals
             self.extras_tree.insert("", tk.END, values=extra_info, tags=(json.dumps(data["ids"]),))
 
