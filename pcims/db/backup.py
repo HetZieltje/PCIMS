@@ -81,12 +81,14 @@ def create_backup(destination_directory=None, keep=14):
         if temporary_path.exists():
             temporary_path.unlink()
 
-    backups = sorted(
-        destination.glob("pcims_*.db"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
     cleanup_errors = []
+    try:
+        backups = sorted(destination.glob("pcims_*.db"), reverse=True)
+    except OSError as error:
+        cleanup_errors.append(
+            f"Unable to inspect old backups in {destination}: {error}"
+        )
+        backups = []
     for old_backup in backups[keep:]:
         try:
             old_backup.unlink()

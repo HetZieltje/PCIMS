@@ -176,6 +176,25 @@ def _unique_ids(values, label):
     return ids
 
 
+def _bounded_cents_total(values, label):
+    total = sum(values)
+    if total > MAX_MONEY_CENTS:
+        raise ValidationError(f"{label} is too large.")
+    return total
+
+
+def _find_pc_name_collision(database, name, exclude_id=None):
+    folded = name.casefold()
+    return next(
+        (
+            row
+            for row in database.execute("SELECT id,name FROM assembled_pcs")
+            if row["id"] != exclude_id and row["name"].casefold() == folded
+        ),
+        None,
+    )
+
+
 def _iso_date(value):
     if value is None:
         return date.today().isoformat()
@@ -232,6 +251,16 @@ def validate_current_data(database):
     ).fetchone()
     if empty_pc:
         raise DatabaseIntegrityError(f"Assembled PC {empty_pc[0]} has no components.")
+
+    seen_pc_names = {}
+    for pc_id, pc_name in database.execute("SELECT id,name FROM assembled_pcs"):
+        folded_name = pc_name.casefold()
+        if folded_name in seen_pc_names:
+            raise DatabaseIntegrityError(
+                f"Assembled PCs {seen_pc_names[folded_name]} and {pc_id} have "
+                "case-insensitively duplicate names."
+            )
+        seen_pc_names[folded_name] = pc_id
 
     invalid_sale = database.execute(
         """SELECT s.id FROM sales s
@@ -398,10 +427,9 @@ def assemble_pc(name, expense_ids):
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
     with connection() as database:
-        if database.execute(
-            "SELECT 1 FROM assembled_pcs WHERE name=?", (name,)
-        ).fetchone():
-            raise ValidationError(f"A PC named '{name}' already exists.")
+        collision = _find_pc_name_collision(database, name)
+        if collision:
+            raise ValidationError(f"A PC named '{collision['name']}' already exists.")
         rows = database.execute(
             _EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})", ids
         ).fetchall()
@@ -448,10 +476,9 @@ def rename_pc(pc_id, new_name):
     pc_id = _positive_id(pc_id, "PC ID")
     new_name = _text(new_name, "New PC name")
     with connection() as database:
-        if database.execute(
-            "SELECT 1 FROM assembled_pcs WHERE name=? AND id<>?", (new_name, pc_id)
-        ).fetchone():
-            raise ValidationError(f"A PC named '{new_name}' already exists.")
+        collision = _find_pc_name_collision(database, new_name, exclude_id=pc_id)
+        if collision:
+            raise ValidationError(f"A PC named '{collision['name']}' already exists.")
         result = database.execute(
             "UPDATE assembled_pcs SET name=? WHERE id=?", (new_name, pc_id)
         )
@@ -484,7 +511,9 @@ def sell_items(expense_ids, selling_price, sale_date=None):
         _validate_sale_date(rows, sale_day)
         names = {row["name"] for row in rows}
         name = rows[0]["name"] if len(names) == 1 else f"{len(rows)} items"
-        cost_cents = sum(row["price_cents"] for row in rows)
+        cost_cents = _bounded_cents_total(
+            (row["price_cents"] for row in rows), "Combined item cost"
+        )
         sale_id = database.execute(
             "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'item',?,?,?)",
             (name, cost_cents, selling_cents, sale_day),
@@ -515,7 +544,9 @@ def sell_pc(pc_id, selling_price, sale_date=None):
         if not rows:
             raise ValidationError(f"PC '{pc['name']}' has no components.")
         _validate_sale_date(rows, sale_day)
-        cost_cents = sum(row["price_cents"] for row in rows)
+        cost_cents = _bounded_cents_total(
+            (row["price_cents"] for row in rows), "Combined PC cost"
+        )
         expense_ids = [row["id"] for row in rows]
         database.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
         sale_id = database.execute(
@@ -576,11 +607,10 @@ def undo_sale(sale_id):
         if not item_ids:
             raise ValidationError(f"Sale {sale_id} contains no recoverable items.")
         if sale["kind"] == "pc":
-            if database.execute(
-                "SELECT 1 FROM assembled_pcs WHERE name=?", (sale["name"],)
-            ).fetchone():
+            collision = _find_pc_name_collision(database, sale["name"])
+            if collision:
                 raise ValidationError(
-                    f"Cannot undo while an assembled PC named '{sale['name']}' exists."
+                    f"Cannot undo while an assembled PC named '{collision['name']}' exists."
                 )
             database.execute("DELETE FROM sales WHERE id=?", (sale_id,))
             pc_id = database.execute(

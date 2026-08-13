@@ -31,6 +31,7 @@ from pcims.db.queries import (
     sell_pc,
     undo_sale,
 )
+from pcims.money import MAX_MONEY_CENTS
 
 
 class DatabaseWorkflowTests(unittest.TestCase):
@@ -324,6 +325,38 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(restored.name, "PC 1")
         self.assertEqual(tuple(item.id for item in restored.parts), tuple(ids))
 
+    def test_aggregate_sale_cost_cannot_create_a_self_invalid_database(self):
+        price = f"{MAX_MONEY_CENTS // 100}.{MAX_MONEY_CENTS % 100:02d}"
+        ids = [self.buy("Expensive", "Extra", price) for _ in range(2)]
+
+        with self.assertRaisesRegex(ValidationError, "Combined item cost"):
+            sell_items(ids, 1)
+
+        self.assertEqual(list_sales(), ())
+        self.assertTrue(all(item.is_available for item in list_inventory()))
+
+        pc_id = assemble_pc("Expensive PC", ids)
+        with self.assertRaisesRegex(ValidationError, "Combined PC cost"):
+            sell_pc(pc_id, 1)
+        self.assertEqual([pc.id for pc in list_pcs()], [pc_id])
+        self.assertEqual(list_sales(), ())
+        validate_database(self.database_path)
+
+    def test_pc_names_and_undo_collisions_are_case_insensitive(self):
+        original_id = self.buy("Original", "CPU", 100)
+        spare_id = self.buy("Spare", "RAM", 50)
+        pc_id = assemble_pc("Gaming PC", [original_id])
+
+        with self.assertRaisesRegex(ValidationError, "already exists"):
+            assemble_pc(" gaming pc ", [spare_id])
+
+        sale_id = sell_pc(pc_id, 120)
+        assemble_pc("GAMING PC", [spare_id])
+        with self.assertRaisesRegex(ValidationError, "Cannot undo"):
+            undo_sale(sale_id)
+        self.assertEqual([pc.name for pc in list_pcs()], ["GAMING PC"])
+        self.assertEqual(len(list_sales()), 1)
+
     def test_pc_undo_name_collision_has_no_partial_effect(self):
         old_id = self.buy("Old CPU", "CPU", 100)
         sale_id = sell_pc(assemble_pc("PC 1", [old_id]), 125)
@@ -423,6 +456,20 @@ class DatabaseWorkflowTests(unittest.TestCase):
         validate_database(result)
         self.assertTrue(result.has_cleanup_warnings)
         self.assertIn("simulated locked backup", result.cleanup_warning)
+
+    def test_backup_scan_failure_does_not_hide_verified_backup(self):
+        self.buy("Keep", "CPU", 10)
+        backup_directory = Path(self.temporary_directory.name) / "backups"
+
+        with patch.object(
+            Path, "glob", side_effect=OSError("simulated directory scan failure")
+        ):
+            result = create_backup(backup_directory)
+
+        self.assertTrue(result.path.is_file())
+        validate_database(result)
+        self.assertTrue(result.has_cleanup_warnings)
+        self.assertIn("simulated directory scan failure", result.cleanup_warning)
 
     def test_restore_rejects_old_or_corrupt_databases_without_changes(self):
         self.buy("Keep me", "CPU", 10)
