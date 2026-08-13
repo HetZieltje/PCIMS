@@ -2,20 +2,27 @@
 
 import sqlite3
 import sys
+from collections.abc import Sequence
+from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import QLockFile
 from PySide6.QtWidgets import QApplication, QMessageBox, QStyleFactory
 
 from pcims.app.errors import install_exception_hook
 from pcims.app.main_window import MainWindow
-from pcims.db.backup import create_backup
 from pcims.db.connection import get_database_path
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
-from pcims.db.schema import initialize_database
+from pcims.services import default_services
 
 
-def create_application(argv=None):
-    application = QApplication.instance() or QApplication(argv or sys.argv)
+def create_application(argv: Sequence[str] | None = None) -> QApplication:
+    existing = QApplication.instance()
+    application = (
+        cast(QApplication, existing)
+        if existing is not None
+        else QApplication(list(argv) if argv is not None else sys.argv)
+    )
     application.setApplicationName("PCIMS")
     application.setApplicationDisplayName("PC Inventory Management")
     application.setOrganizationName("PCIMS")
@@ -25,7 +32,7 @@ def create_application(argv=None):
     return application
 
 
-def acquire_instance_lock(database_path=None):
+def acquire_instance_lock(database_path: Path | None = None) -> QLockFile | None:
     """Lock one configured database so two stale GUI sessions cannot race."""
     database_path = (database_path or get_database_path()).resolve()
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,8 +41,9 @@ def acquire_instance_lock(database_path=None):
     return lock if lock.tryLock(0) else None
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     application = create_application(argv)
+    services = default_services()
     install_exception_hook()
     try:
         instance_lock = acquire_instance_lock()
@@ -55,7 +63,7 @@ def main(argv=None):
         return 3
     try:
         try:
-            initialize_database()
+            services.initialize()
         except (
             OSError,
             DatabaseIntegrityError,
@@ -65,19 +73,8 @@ def main(argv=None):
             QMessageBox.critical(None, "Database unavailable", str(error))
             return 2
 
-        backup_warning = None
         try:
-            backup = create_backup()
-            if backup.has_cleanup_warnings:
-                backup_warning = (
-                    f"The backup was created at {backup.path}, but old backup cleanup failed:\n\n"
-                    f"{backup.cleanup_warning}"
-                )
-        except (OSError, ValueError, sqlite3.DatabaseError) as error:
-            backup_warning = f"The startup backup could not be created:\n\n{error}"
-
-        try:
-            window = MainWindow()
+            window = MainWindow(services)
         except (OSError, sqlite3.DatabaseError) as error:
             QMessageBox.critical(
                 None,
@@ -86,12 +83,7 @@ def main(argv=None):
             )
             return 2
         window.show()
-        if backup_warning:
-            QMessageBox.warning(
-                window,
-                "Backup warning",
-                f"PCIMS started with a backup warning:\n\n{backup_warning}",
-            )
+        window.create_startup_backup()
         return application.exec()
     finally:
         instance_lock.unlock()

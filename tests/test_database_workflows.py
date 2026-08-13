@@ -284,12 +284,12 @@ class DatabaseWorkflowTests(unittest.TestCase):
             statements = []
 
             @contextmanager
-            def traced_connection(trace_statements=statements):
+            def traced_connection(_database=None, trace_statements=statements):
                 with connection() as database:
                     database.set_trace_callback(trace_statements.append)
                     yield database
 
-            with patch("pcims.db.queries.connection", traced_connection):
+            with patch("pcims.db.queries._transaction", traced_connection):
                 self.assertEqual(len(listing()), 2)
             selects = [
                 statement

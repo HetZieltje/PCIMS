@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pcims.db.connection import connection, get_database_path
+from pcims.db.connection import Database, get_database
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.db.schema import validate_current_data, validate_schema
 
@@ -70,12 +70,15 @@ def validate_database(path: str | os.PathLike[str]) -> None:
 
 
 def create_backup(
-    destination_directory: str | os.PathLike[str] | None = None, keep: int = 14
+    destination_directory: str | os.PathLike[str] | None = None,
+    keep: int = 14,
+    *,
+    database: Database | None = None,
 ) -> BackupResult:
     if keep < 1:
         raise ValueError("At least one backup must be retained.")
     destination = (
-        Path(destination_directory or get_database_path().parent / "backups")
+        Path(destination_directory or (database or get_database()).path.parent / "backups")
         .expanduser()
         .resolve()
     )
@@ -85,7 +88,9 @@ def create_backup(
     temporary_path = final_path.with_suffix(".tmp")
     primary_error: BaseException | None = None
     try:
-        with connection() as source, closing(sqlite3.connect(temporary_path)) as target:
+        with (database or get_database()).transaction() as source, closing(
+            sqlite3.connect(temporary_path)
+        ) as target:
             source.backup(target)
         validate_database(temporary_path)
         os.replace(temporary_path, final_path)
@@ -114,9 +119,12 @@ def create_backup(
 def restore_backup(
     backup_path: str | os.PathLike[str],
     pre_restore_directory: str | os.PathLike[str] | None = None,
+    *,
+    database: Database | None = None,
 ) -> BackupResult:
     source_path = Path(backup_path).expanduser().resolve()
-    live_path = get_database_path().resolve()
+    active_database = database or get_database()
+    live_path = active_database.path
     if not source_path.is_file():
         raise FileNotFoundError(f"Backup does not exist: {source_path}")
     if source_path == live_path:
@@ -130,7 +138,7 @@ def restore_backup(
     try:
         shutil.copy2(source_path, staged_path)
         validate_database(staged_path)
-        safety_backup = create_backup(pre_restore_directory)
+        safety_backup = create_backup(pre_restore_directory, database=active_database)
         os.replace(staged_path, live_path)
     except BaseException as error:
         primary_error = error

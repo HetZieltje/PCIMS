@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -16,18 +17,26 @@ from PySide6.QtWidgets import (
 )
 
 from pcims.app.common import ask_confirmation, show_error
-from pcims.db.backup import create_backup, restore_backup
-from pcims.db.connection import get_database_path
+from pcims.app.tasks import run_in_background
+from pcims.db.backup import BackupResult
+from pcims.services import ApplicationServices, default_services
 
 
 class SettingsPage(QWidget):
     database_restored = Signal()
     theme_changed = Signal(str)
 
-    def __init__(self, theme="system", has_pending_changes=None, parent=None):
+    def __init__(
+        self,
+        services: ApplicationServices | None = None,
+        theme: str = "system",
+        has_pending_changes: Callable[[], bool] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self.services = services or default_services()
         self._has_pending_changes = has_pending_changes or (lambda: False)
-        database_path = get_database_path()
+        database_path = self.services.database_path
         path_label = QLabel(str(database_path))
         path_label.setTextInteractionFlags(
             path_label.textInteractionFlags()
@@ -52,20 +61,20 @@ class SettingsPage(QWidget):
         index = self.theme.findData(theme)
         self.theme.setCurrentIndex(max(0, index))
         self.theme.currentIndexChanged.connect(
-            lambda: self.theme_changed.emit(self.theme.currentData())
+            lambda: self.theme_changed.emit(str(self.theme.currentData()))
         )
         appearance_form = QFormLayout()
         appearance_form.addRow("Theme", self.theme)
         appearance_box = QGroupBox("Appearance")
         appearance_box.setLayout(appearance_form)
 
-        backup_button = QPushButton("Create backup now")
-        backup_button.clicked.connect(self.create_backup)
+        self.backup_button = QPushButton("Create backup now")
+        self.backup_button.clicked.connect(self.create_backup)
         restore_button = QPushButton("Restore backup…")
         restore_button.clicked.connect(self.restore_backup)
         maintenance_form = QFormLayout()
         maintenance_form.addRow("Database", location_widget)
-        maintenance_form.addRow("Backup", backup_button)
+        maintenance_form.addRow("Backup", self.backup_button)
         maintenance_form.addRow("Restore", restore_button)
         maintenance_box = QGroupBox("Data and backups")
         maintenance_box.setLayout(maintenance_form)
@@ -81,27 +90,40 @@ class SettingsPage(QWidget):
         layout.addWidget(note)
         layout.addStretch()
 
-    def create_backup(self):
-        try:
-            path = create_backup()
-        except (OSError, ValueError, sqlite3.DatabaseError) as error:
-            show_error(self, "Backup failed", error)
-            return
-        if path.has_cleanup_warnings:
+    def create_backup(self) -> None:
+        self.backup_button.setEnabled(False)
+        self.backup_button.setText("Creating backup…")
+        self._backup_task = run_in_background(
+            self.services.create_backup,
+            self._backup_finished,
+            self._backup_failed,
+        )
+
+    def _backup_finished(self, backup: BackupResult) -> None:
+        self.backup_button.setEnabled(True)
+        self.backup_button.setText("Create backup now")
+        if backup.has_cleanup_warnings:
             QMessageBox.warning(
                 self,
                 "Backup complete with warning",
-                f"Backup saved to:\n{path.path}\n\n"
-                f"Some old backups could not be removed:\n{path.cleanup_warning}",
+                f"Backup saved to:\n{backup.path}\n\n"
+                f"Some old backups could not be removed:\n{backup.cleanup_warning}",
             )
             return
-        QMessageBox.information(self, "Backup complete", f"Backup saved to:\n{path}")
+        QMessageBox.information(
+            self, "Backup complete", f"Backup saved to:\n{backup}"
+        )
 
-    def restore_backup(self):
+    def _backup_failed(self, error: Exception) -> None:
+        self.backup_button.setEnabled(True)
+        self.backup_button.setText("Create backup now")
+        show_error(self, "Backup failed", error)
+
+    def restore_backup(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select PCIMS backup",
-            str(get_database_path().parent / "backups"),
+            str(self.services.database_path.parent / "backups"),
             "SQLite databases (*.db);;All files (*)",
         )
         if not path:
@@ -112,7 +134,7 @@ class SettingsPage(QWidget):
         if not ask_confirmation(self, "Restore backup", message):
             return
         try:
-            safety = restore_backup(path)
+            safety = self.services.restore_backup(path)
         except (OSError, ValueError, sqlite3.DatabaseError) as error:
             show_error(self, "Restore failed", error)
             return

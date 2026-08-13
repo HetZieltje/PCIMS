@@ -1,3 +1,6 @@
+from datetime import date
+from typing import TypedDict, cast
+
 from PySide6.QtCore import QDate, QStringListModel, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -30,16 +33,29 @@ from pcims.app.formatting import (
     format_cents,
     parse_money_cents,
 )
-from pcims.db.queries import add_expenses, list_expenses
-from pcims.domain import ITEM_TYPES
+from pcims.domain import ITEM_TYPES, ItemType, PurchaseInput
+from pcims.services import ApplicationServices, default_services
+
+
+class StagedPurchase(TypedDict):
+    staged_id: int
+    name: str
+    item_type: ItemType
+    price_cents: int
+    purchase_date: date
 
 
 class PurchasesPage(QWidget):
     data_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        services: ApplicationServices | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._staged = []
+        self.services = services or default_services()
+        self._staged: list[StagedPurchase] = []
         self._next_staged_id = 1
 
         self.name = QLineEdit()
@@ -99,20 +115,23 @@ class PurchasesPage(QWidget):
         self._render_staged()
         self.refresh()
 
-    def refresh(self):
-        names = sorted({expense.name for expense in list_expenses()}, key=str.casefold)
+    def refresh(self) -> None:
+        names = sorted(
+            {expense.name for expense in self.services.list_expenses()},
+            key=str.casefold,
+        )
         self._completion_model.setStringList(names)
 
     @property
-    def has_staged_items(self):
+    def has_staged_items(self) -> bool:
         return bool(self._staged)
 
-    def discard_staged(self):
+    def discard_staged(self) -> None:
         """Discard purchase lines that have not been written to the database."""
         self._staged.clear()
         self._render_staged()
 
-    def add_line(self):
+    def add_line(self) -> None:
         name = self.name.text().strip()
         if not name:
             QMessageBox.warning(self, "Missing name", "Enter an item name.")
@@ -128,13 +147,13 @@ class PurchasesPage(QWidget):
             if self.total_for_quantity.isChecked()
             else [entered_cents] * quantity
         )
-        purchase_date = self.purchase_date.date().toPython()
+        purchase_date = cast(date, self.purchase_date.date().toPython())
         for price_cents in prices:
             self._staged.append(
                 {
                     "staged_id": self._next_staged_id,
                     "name": name,
-                    "item_type": self.type.currentText(),
+                    "item_type": cast(ItemType, self.type.currentText()),
                     "price_cents": price_cents,
                     "purchase_date": purchase_date,
                 }
@@ -146,18 +165,18 @@ class PurchasesPage(QWidget):
         self.name.setFocus()
         self._render_staged()
 
-    def remove_selected(self):
+    def remove_selected(self) -> None:
         ids = set(selected_ids(self.table))
         self._staged = [item for item in self._staged if item["staged_id"] not in ids]
         self._render_staged()
 
-    def commit_purchase(self):
+    def commit_purchase(self) -> None:
         if not self._staged:
             QMessageBox.information(
                 self, "Nothing to record", "Add at least one item first."
             )
             return
-        items = [
+        items: list[PurchaseInput] = [
             {
                 "name": item["name"],
                 "item_type": item["item_type"],
@@ -167,7 +186,7 @@ class PurchasesPage(QWidget):
             for item in self._staged
         ]
         try:
-            add_expenses(items)
+            self.services.add_expenses(items)
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to record purchase", error)
             return
@@ -177,7 +196,7 @@ class PurchasesPage(QWidget):
         self.data_changed.emit()
         QMessageBox.information(self, "Purchase recorded", f"Recorded {count} item(s).")
 
-    def _render_staged(self):
+    def _render_staged(self) -> None:
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self._staged))
         for row, item in enumerate(self._staged):

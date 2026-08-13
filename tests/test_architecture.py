@@ -48,6 +48,14 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("SCHEMA_DEFINITIONS", schema)
         self.assertIn("validate_current_data", schema)
 
+    def test_qt_pages_depend_on_application_services_not_query_globals(self):
+        pages = Path(__file__).parents[1] / "pcims" / "app" / "pages"
+        for path in pages.glob("*.py"):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertNotIn("from pcims.db.queries import", source)
+                self.assertNotIn("from pcims.db.backup import create_backup", source)
+
     def test_linux_desktop_install_assets_are_present_and_user_scoped(self):
         root = Path(__file__).parents[1]
         installer = (root / "scripts" / "install-linux.sh").read_text(encoding="utf-8")

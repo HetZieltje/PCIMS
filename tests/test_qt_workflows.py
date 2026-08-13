@@ -2,6 +2,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import date
 from decimal import Decimal
@@ -10,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QMessageBox,
@@ -26,6 +27,7 @@ from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
 from pcims.app.pages.sales import SalesPage
+from pcims.app.tasks import run_in_background
 from pcims.db.backup import BackupResult, create_backup
 from pcims.db.connection import configure_database
 from pcims.db.queries import (
@@ -35,6 +37,7 @@ from pcims.db.queries import (
     list_sales,
 )
 from pcims.db.schema import initialize_database
+from pcims.services import ApplicationServices
 
 TEST_DATE = date(2026, 8, 14)
 
@@ -122,8 +125,8 @@ class QtWorkflowTests(unittest.TestCase):
         self.purchase("Case fan", "Fan", 10)
         page = InventoryPage()
         with (
-            patch("pcims.app.pages.inventory.list_inventory") as inventory_query,
-            patch("pcims.app.pages.inventory.list_pcs") as pc_query,
+            patch("pcims.services.ApplicationServices.list_inventory") as inventory_query,
+            patch("pcims.services.ApplicationServices.list_pcs") as pc_query,
         ):
             page.search.setText("fan")
             page.type_filter.setCurrentText("Fan")
@@ -200,7 +203,7 @@ class QtWorkflowTests(unittest.TestCase):
 
         with (
             patch(
-                "pcims.app.pages.purchases.add_expenses",
+                "pcims.services.ApplicationServices.add_expenses",
                 side_effect=sqlite3.OperationalError("simulated disk failure"),
             ),
             patch("pcims.app.pages.purchases.show_error") as show_error,
@@ -226,21 +229,60 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_close_accepts_verified_backup_with_retention_warning(self):
         window = MainWindow()
+        window.show()
         event = QCloseEvent()
+        loop = QEventLoop()
         outcome = BackupResult(
             Path(self.temporary_directory.name) / "verified.db",
             ("old.db: simulated lock",),
         )
         with (
-            patch("pcims.app.main_window.create_backup", return_value=outcome),
-            patch("pcims.app.main_window.QMessageBox.warning") as warning,
+            patch(
+                "pcims.services.ApplicationServices.create_backup",
+                return_value=outcome,
+            ),
+            patch(
+                "pcims.app.main_window.QMessageBox.warning",
+                side_effect=lambda *_: loop.quit(),
+            ) as warning,
             patch("pcims.app.main_window.QMessageBox.question") as question,
         ):
             window.closeEvent(event)
+            self.assertFalse(event.isAccepted())
+            self.assertFalse(window.isEnabled())
+            QTimer.singleShot(3000, loop.quit)
+            loop.exec()
 
-        self.assertTrue(event.isAccepted())
+        self.assertTrue(window._closing_after_backup)
+        self.assertTrue(window.isEnabled())
         warning.assert_called_once()
         question.assert_not_called()
+        window.deleteLater()
+
+    def test_failed_close_backup_returns_control_when_close_is_declined(self):
+        window = MainWindow()
+        window.show()
+        event = QCloseEvent()
+        loop = QEventLoop()
+        with (
+            patch(
+                "pcims.services.ApplicationServices.create_backup",
+                side_effect=OSError("simulated disk failure"),
+            ),
+            patch(
+                "pcims.app.main_window.QMessageBox.question",
+                side_effect=lambda *_: (loop.quit(), QMessageBox.StandardButton.No)[1],
+            ) as question,
+        ):
+            window.closeEvent(event)
+            QTimer.singleShot(3000, loop.quit)
+            loop.exec()
+
+        self.assertFalse(window._closing_after_backup)
+        self.assertFalse(window._close_backup_running)
+        self.assertTrue(window.isEnabled())
+        self.assertTrue(window.isVisible())
+        question.assert_called_once()
         window.deleteLater()
 
     def test_restore_discards_staged_purchase_only_after_success(self):
@@ -305,13 +347,90 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertIsNotNone(third)
         third.unlock()
 
+    def test_background_service_keeps_qt_event_loop_responsive(self):
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        gui_ticks = []
+        outcomes = []
+        loop = QEventLoop()
+
+        def blocking_operation():
+            worker_started.set()
+            release_worker.wait(2)
+            return "complete"
+
+        task = run_in_background(
+            blocking_operation,
+            lambda result: (outcomes.append(result), loop.quit()),
+            lambda error: (outcomes.append(error), loop.quit()),
+        )
+        self.assertTrue(worker_started.wait(1))
+        QTimer.singleShot(
+            0, lambda: (gui_ticks.append("responsive"), release_worker.set())
+        )
+        QTimer.singleShot(2000, loop.quit)
+        loop.exec()
+
+        self.assertEqual(gui_ticks, ["responsive"])
+        self.assertEqual(outcomes, ["complete"])
+        self.assertIsNotNone(task)
+
+    def test_manual_backup_runs_asynchronously_and_restores_button_state(self):
+        window = MainWindow()
+        page = window.settings_page
+        loop = QEventLoop()
+        original_finished = page._backup_finished
+
+        def finished(backup):
+            original_finished(backup)
+            loop.quit()
+
+        with (
+            patch.object(page, "_backup_finished", side_effect=finished),
+            patch("pcims.app.pages.settings.QMessageBox.information") as information,
+        ):
+            page.create_backup()
+            self.assertFalse(page.backup_button.isEnabled())
+            self.assertIn("Creating", page.backup_button.text())
+            QTimer.singleShot(3000, loop.quit)
+            loop.exec()
+
+        self.assertTrue(page.backup_button.isEnabled())
+        self.assertEqual(page.backup_button.text(), "Create backup now")
+        information.assert_called_once()
+        window.deleteLater()
+
+    def test_page_uses_injected_services_not_process_database(self):
+        isolated_database = Path(self.temporary_directory.name) / "injected.db"
+        services = ApplicationServices(configure_database(isolated_database))
+        services.initialize()
+        services.add_expenses(
+            [
+                {
+                    "name": "Injected item",
+                    "item_type": "Extra",
+                    "price": 1,
+                    "purchase_date": TEST_DATE,
+                }
+            ]
+        )
+        other_database = Path(self.temporary_directory.name) / "other.db"
+        configure_database(other_database)
+        initialize_database()
+
+        page = InventoryPage(services)
+        self.assertEqual(page.parts_table.rowCount(), 1)
+        self.assertEqual(page.parts_table.item(0, 1).text(), "Injected item")
+        self.assertEqual(list_expenses(), ())
+        page.deleteLater()
+
     def test_startup_io_failure_is_reported_and_releases_instance_lock(self):
         lock = MagicMock()
         with (
             patch("pcims.app.application.install_exception_hook"),
             patch("pcims.app.application.acquire_instance_lock", return_value=lock),
             patch(
-                "pcims.app.application.initialize_database",
+                "pcims.services.ApplicationServices.initialize",
                 side_effect=OSError("permission denied"),
             ),
             patch("pcims.app.application.QMessageBox.critical") as critical,

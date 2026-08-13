@@ -21,21 +21,22 @@ from pcims.app.common import (
     table_item,
 )
 from pcims.app.formatting import format_cents
-from pcims.db.queries import (
-    get_financial_summary,
-    list_expenses,
-    list_sales,
-    undo_sale,
-)
+from pcims.db.models import Sale
+from pcims.services import ApplicationServices, default_services
 
 
 class SalesPage(QWidget):
     data_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        services: ApplicationServices | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._sales = {}
-        self.summary_labels = {}
+        self.services = services or default_services()
+        self._sales: dict[int, Sale] = {}
+        self.summary_labels: dict[str, QLabel] = {}
         summary_box = QGroupBox("Financial summary")
         summary_layout = QGridLayout(summary_box)
         for column, (key, title) in enumerate(
@@ -101,8 +102,8 @@ class SalesPage(QWidget):
         layout.addWidget(self.splitter, 1)
         self.refresh()
 
-    def refresh(self):
-        summary = get_financial_summary()
+    def refresh(self) -> None:
+        summary = self.services.financial_summary()
         for key, cents in (
             ("expense", summary.expense_cents),
             ("income", summary.income_cents),
@@ -112,7 +113,7 @@ class SalesPage(QWidget):
         ):
             self.summary_labels[key].setText(format_cents(cents))
 
-        expenses = list_expenses()
+        expenses = self.services.list_expenses()
         self.expense_table.setSortingEnabled(False)
         self.expense_table.setRowCount(len(expenses))
         for row, item in enumerate(expenses):
@@ -121,7 +122,7 @@ class SalesPage(QWidget):
                 if item.sale_id
                 else (item.pc_name or "Available")
             )
-            values = (
+            expense_values: tuple[object, ...] = (
                 item.id,
                 item.name,
                 item.item_type,
@@ -129,7 +130,7 @@ class SalesPage(QWidget):
                 item.purchase_date.isoformat(),
                 status,
             )
-            sort_values = (
+            expense_sort_values: tuple[object, ...] = (
                 item.id,
                 item.name.casefold(),
                 item.item_type,
@@ -137,24 +138,24 @@ class SalesPage(QWidget):
                 item.purchase_date.toordinal(),
                 status.casefold(),
             )
-            for column, value in enumerate(values):
+            for column, value in enumerate(expense_values):
                 self.expense_table.setItem(
                     row,
                     column,
                     table_item(
                         value,
                         item.id if column == 0 else None,
-                        sort_value=sort_values[column],
+                        sort_value=expense_sort_values[column],
                     ),
                 )
         self.expense_table.setSortingEnabled(True)
 
-        sales = list_sales()
+        sales = self.services.list_sales()
         self._sales = {sale.id: sale for sale in sales}
         self.sale_table.setSortingEnabled(False)
         self.sale_table.setRowCount(len(sales))
         for row, sale in enumerate(sales):
-            values = (
+            sale_values: tuple[object, ...] = (
                 sale.id,
                 sale.sale_date.isoformat(),
                 sale.kind.upper(),
@@ -164,7 +165,7 @@ class SalesPage(QWidget):
                 format_cents(sale.profit_cents),
                 len(sale.items),
             )
-            sort_values = (
+            sale_sort_values: tuple[object, ...] = (
                 sale.id,
                 sale.sale_date.toordinal(),
                 sale.kind,
@@ -174,20 +175,20 @@ class SalesPage(QWidget):
                 sale.profit_cents,
                 len(sale.items),
             )
-            for column, value in enumerate(values):
+            for column, value in enumerate(sale_values):
                 self.sale_table.setItem(
                     row,
                     column,
                     table_item(
                         value,
                         sale.id if column == 0 else None,
-                        sort_value=sort_values[column],
+                        sort_value=sale_sort_values[column],
                     ),
                 )
         self.sale_table.setSortingEnabled(True)
         self._render_details()
 
-    def _render_details(self):
+    def _render_details(self) -> None:
         ids = selected_ids(self.sale_table)
         items = (
             self._sales[ids[0]].items if len(ids) == 1 and ids[0] in self._sales else ()
@@ -195,33 +196,33 @@ class SalesPage(QWidget):
         self.detail_table.setSortingEnabled(False)
         self.detail_table.setRowCount(len(items))
         for row, item in enumerate(items):
-            values = (
+            detail_values: tuple[object, ...] = (
                 item.id,
                 item.name,
                 item.item_type,
                 format_cents(item.price_cents),
                 item.purchase_date.isoformat(),
             )
-            sort_values = (
+            detail_sort_values: tuple[object, ...] = (
                 item.id,
                 item.name.casefold(),
                 item.item_type,
                 item.price_cents,
                 item.purchase_date.toordinal(),
             )
-            for column, value in enumerate(values):
+            for column, value in enumerate(detail_values):
                 self.detail_table.setItem(
                     row,
                     column,
                     table_item(
                         value,
                         item.id if column == 0 else None,
-                        sort_value=sort_values[column],
+                        sort_value=detail_sort_values[column],
                     ),
                 )
         self.detail_table.setSortingEnabled(True)
 
-    def undo_selected(self):
+    def undo_selected(self) -> None:
         ids = selected_ids(self.sale_table)
         if len(ids) != 1:
             QMessageBox.information(
@@ -232,7 +233,7 @@ class SalesPage(QWidget):
         if not ask_confirmation(self, "Undo sale", f"Undo the sale of '{sale.name}'?"):
             return
         try:
-            undo_sale(sale.id)
+            self.services.undo_sale(sale.id)
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to undo sale", error)
             return

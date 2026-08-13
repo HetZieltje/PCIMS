@@ -12,17 +12,17 @@ __all__ = (
 )
 
 
-def cents_as_decimal(cents):
+def cents_as_decimal(cents: int) -> Decimal:
     return Decimal(int(cents)) / 100
 
 
-def format_cents(cents):
+def format_cents(cents: int) -> str:
     cents = int(cents)
     sign = "-" if cents < 0 else ""
     return f"{sign}€{Decimal(abs(cents)) / 100:,.2f}"
 
 
-def allocate_cents(total_cents, count):
+def allocate_cents(total_cents: int, count: int) -> list[int]:
     if count < 1:
         raise ValueError("Quantity must be at least one.")
     base, remainder = divmod(int(total_cents), count)

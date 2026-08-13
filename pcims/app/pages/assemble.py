@@ -16,15 +16,21 @@ from PySide6.QtWidgets import (
 
 from pcims.app.common import DATA_OPERATION_ERRORS, ID_ROLE, show_error
 from pcims.app.formatting import format_cents
-from pcims.db.queries import assemble_pc, list_inventory, list_pcs
-from pcims.domain import ITEM_TYPES
+from pcims.db.models import Expense
+from pcims.domain import ITEM_TYPES, ItemType
+from pcims.services import ApplicationServices, default_services
 
 
 class AssemblePage(QWidget):
     data_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        services: ApplicationServices | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self.services = services or default_services()
         self.name = QLineEdit()
         self.name.setMaximumWidth(360)
         self.tree = QTreeWidget()
@@ -46,15 +52,15 @@ class AssemblePage(QWidget):
         layout.addWidget(self.tree)
         self.refresh()
 
-    def refresh(self):
+    def refresh(self) -> None:
         selected_ids = {
-            item.data(0, ID_ROLE)
+            int(item.data(0, ID_ROLE))
             for index in range(self.tree.topLevelItemCount())
             for item in self._children(self.tree.topLevelItem(index))
             if item.checkState(0) == Qt.CheckState.Checked
         }
-        grouped = defaultdict(list)
-        for expense in list_inventory(available_only=True):
+        grouped: defaultdict[ItemType, list[Expense]] = defaultdict(list)
+        for expense in self.services.list_inventory(available_only=True):
             grouped[expense.item_type].append(expense)
         self.tree.clear()
         for item_type in ITEM_TYPES:
@@ -92,19 +98,21 @@ class AssemblePage(QWidget):
             self.name.setText(self._next_name())
 
     @staticmethod
-    def _children(parent):
+    def _children(parent: QTreeWidgetItem | None) -> list[QTreeWidgetItem]:
+        if parent is None:
+            return []
         return [parent.child(index) for index in range(parent.childCount())]
 
-    def _next_name(self):
-        names = {pc.name for pc in list_pcs()}
+    def _next_name(self) -> str:
+        names = {pc.name for pc in self.services.list_pcs()}
         index = 1
         while f"PC {index}" in names:
             index += 1
         return f"PC {index}"
 
-    def assemble(self):
+    def assemble(self) -> None:
         ids = [
-            child.data(0, ID_ROLE)
+            int(child.data(0, ID_ROLE))
             for group_index in range(self.tree.topLevelItemCount())
             for child in self._children(self.tree.topLevelItem(group_index))
             if child.checkState(0) == Qt.CheckState.Checked
@@ -113,7 +121,7 @@ class AssemblePage(QWidget):
             QMessageBox.warning(self, "No components", "Select at least one component.")
             return
         try:
-            assemble_pc(self.name.text(), ids)
+            self.services.assemble_pc(self.name.text(), ids)
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to assemble PC", error)
             return

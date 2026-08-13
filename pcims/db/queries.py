@@ -2,21 +2,21 @@
 
 import sqlite3
 from collections.abc import Iterable
+from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime
-from typing import NotRequired, TypedDict, cast
+from typing import cast
 
-from pcims.db.connection import connection
+from pcims.db.connection import Database, get_database
 from pcims.db.errors import NotFoundError, ValidationError
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
-from pcims.domain import ITEM_TYPES, ItemType, SaleKind
+from pcims.domain import ITEM_TYPES, ItemType, PurchaseInput, SaleKind
 from pcims.money import MAX_MONEY_CENTS, parse_money_cents
 
 
-class PurchaseInput(TypedDict):
-    name: object
-    item_type: object
-    price: object
-    purchase_date: NotRequired[object]
+def _transaction(
+    database: Database | None,
+) -> AbstractContextManager[sqlite3.Connection]:
+    return (database or get_database()).transaction()
 
 
 def _text(value: object, label: str) -> str:
@@ -124,7 +124,9 @@ def _insert_id(cursor: sqlite3.Cursor) -> int:
     return row_id
 
 
-def add_expenses(items: Iterable[PurchaseInput]) -> list[int]:
+def add_expenses(
+    items: Iterable[PurchaseInput], *, database: Database | None = None
+) -> list[int]:
     """Record one or more purchased items atomically."""
     normalized = [
         (
@@ -137,10 +139,10 @@ def add_expenses(items: Iterable[PurchaseInput]) -> list[int]:
     ]
     if not normalized:
         raise ValidationError("At least one purchase item is required.")
-    with connection() as database:
+    with _transaction(database) as connection:
         return [
             _insert_id(
-                database.execute(
+                connection.execute(
                     "INSERT INTO expenses (name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
                     item,
                 )
@@ -149,14 +151,17 @@ def add_expenses(items: Iterable[PurchaseInput]) -> list[int]:
         ]
 
 
-def list_expenses() -> tuple[Expense, ...]:
-    with connection() as database:
-        rows = database.execute(_EXPENSE_SELECT + " ORDER BY e.id").fetchall()
+def list_expenses(*, database: Database | None = None) -> tuple[Expense, ...]:
+    with _transaction(database) as connection:
+        rows = connection.execute(_EXPENSE_SELECT + " ORDER BY e.id").fetchall()
     return tuple(_expense_from_row(row) for row in rows)
 
 
 def list_inventory(
-    item_type: object | None = None, available_only: bool = False
+    item_type: object | None = None,
+    available_only: bool = False,
+    *,
+    database: Database | None = None,
 ) -> tuple[Expense, ...]:
     clauses = ["si.sale_id IS NULL"]
     parameters: list[object] = []
@@ -171,16 +176,18 @@ def list_inventory(
         + " AND ".join(clauses)
         + " ORDER BY e.item_type,e.name,e.id"
     )
-    with connection() as database:
-        rows = database.execute(sql, parameters).fetchall()
+    with _transaction(database) as connection:
+        rows = connection.execute(sql, parameters).fetchall()
     return tuple(_expense_from_row(row) for row in rows)
 
 
-def delete_expenses(expense_ids: Iterable[object]) -> None:
+def delete_expenses(
+    expense_ids: Iterable[object], *, database: Database | None = None
+) -> None:
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
-    with connection() as database:
-        rows = database.execute(
+    with _transaction(database) as connection:
+        rows = connection.execute(
             _EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})", ids
         ).fetchall()
         if len(rows) != len(ids):
@@ -196,39 +203,49 @@ def delete_expenses(expense_ids: Iterable[object]) -> None:
                 raise ValidationError(
                     f"Expense {row['id']} has sale history. Undo the sale first."
                 )
-        database.executemany(
+        connection.executemany(
             "DELETE FROM expenses WHERE id=?", ((item_id,) for item_id in ids)
         )
 
 
-def rename_expenses(expense_ids: Iterable[object], new_name: object) -> None:
+def rename_expenses(
+    expense_ids: Iterable[object],
+    new_name: object,
+    *,
+    database: Database | None = None,
+) -> None:
     ids = _unique_ids(expense_ids, "Expense ID")
     new_name = _text(new_name, "New item name")
     placeholders = ",".join("?" for _ in ids)
-    with connection() as database:
-        count = database.execute(
+    with _transaction(database) as connection:
+        count = connection.execute(
             # IDs are validated integers; only the number of bound placeholders varies.
             f"SELECT COUNT(*) FROM expenses WHERE id IN ({placeholders})",  # nosec B608
             ids,
         ).fetchone()[0]
         if count != len(ids):
             raise NotFoundError("One or more selected expenses no longer exist.")
-        database.execute(
+        connection.execute(
             # IDs and name remain bound parameters; no user text enters the SQL string.
             f"UPDATE expenses SET name=? WHERE id IN ({placeholders})",  # nosec B608
             [new_name, *ids],
         )
 
 
-def assemble_pc(name: object, expense_ids: Iterable[object]) -> int:
+def assemble_pc(
+    name: object,
+    expense_ids: Iterable[object],
+    *,
+    database: Database | None = None,
+) -> int:
     name = _text(name, "PC name")
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
-    with connection() as database:
-        collision = _find_pc_name_collision(database, name)
+    with _transaction(database) as connection:
+        collision = _find_pc_name_collision(connection, name)
         if collision:
             raise ValidationError(f"A PC named '{collision['name']}' already exists.")
-        rows = database.execute(
+        rows = connection.execute(
             _EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})", ids
         ).fetchall()
         if len(rows) != len(ids):
@@ -237,21 +254,21 @@ def assemble_pc(name: object, expense_ids: Iterable[object]) -> int:
             if row["pc_id"] is not None or row["sale_id"] is not None:
                 raise ValidationError(f"'{row['name']}' is not available for assembly.")
         pc_id = _insert_id(
-            database.execute("INSERT INTO assembled_pcs (name) VALUES (?)", (name,))
+            connection.execute("INSERT INTO assembled_pcs (name) VALUES (?)", (name,))
         )
-        database.executemany(
+        connection.executemany(
             "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
             ((pc_id, expense_id, position) for position, expense_id in enumerate(ids)),
         )
         return pc_id
 
 
-def list_pcs() -> tuple[AssembledPC, ...]:
-    with connection() as database:
-        pcs = database.execute(
+def list_pcs(*, database: Database | None = None) -> tuple[AssembledPC, ...]:
+    with _transaction(database) as connection:
+        pcs = connection.execute(
             "SELECT id,name FROM assembled_pcs ORDER BY name,id"
         ).fetchall()
-        rows = database.execute(
+        rows = connection.execute(
             _EXPENSE_SELECT + " WHERE p.id IS NOT NULL ORDER BY p.id,pp.position"
         ).fetchall()
     parts_by_pc: dict[int, list[Expense]] = {int(pc["id"]): [] for pc in pcs}
@@ -262,22 +279,24 @@ def list_pcs() -> tuple[AssembledPC, ...]:
     )
 
 
-def disassemble_pc(pc_id: object) -> None:
+def disassemble_pc(pc_id: object, *, database: Database | None = None) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
-    with connection() as database:
-        result = database.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
+    with _transaction(database) as connection:
+        result = connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
         if result.rowcount != 1:
             raise NotFoundError(f"PC {pc_id} does not exist.")
 
 
-def rename_pc(pc_id: object, new_name: object) -> None:
+def rename_pc(
+    pc_id: object, new_name: object, *, database: Database | None = None
+) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
     new_name = _text(new_name, "New PC name")
-    with connection() as database:
-        collision = _find_pc_name_collision(database, new_name, exclude_id=pc_id)
+    with _transaction(database) as connection:
+        collision = _find_pc_name_collision(connection, new_name, exclude_id=pc_id)
         if collision:
             raise ValidationError(f"A PC named '{collision['name']}' already exists.")
-        result = database.execute(
+        result = connection.execute(
             "UPDATE assembled_pcs SET name=? WHERE id=?", (new_name, pc_id)
         )
         if result.rowcount != 1:
@@ -293,14 +312,18 @@ def _validate_sale_date(rows: Iterable[sqlite3.Row], sale_day: str) -> None:
 
 
 def sell_items(
-    expense_ids: Iterable[object], selling_price: object, sale_date: object | None = None
+    expense_ids: Iterable[object],
+    selling_price: object,
+    sale_date: object | None = None,
+    *,
+    database: Database | None = None,
 ) -> int:
     ids = _unique_ids(expense_ids, "Expense ID")
     selling_cents = _money_cents(selling_price, "Selling price")
     sale_day = _iso_date(sale_date)
     placeholders = ",".join("?" for _ in ids)
-    with connection() as database:
-        rows = database.execute(
+    with _transaction(database) as connection:
+        rows = connection.execute(
             _EXPENSE_SELECT + f" WHERE e.id IN ({placeholders}) ORDER BY e.id", ids
         ).fetchall()
         if len(rows) != len(ids):
@@ -315,12 +338,12 @@ def sell_items(
             (row["price_cents"] for row in rows), "Combined item cost"
         )
         sale_id = _insert_id(
-            database.execute(
+            connection.execute(
                 "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'item',?,?,?)",
                 (name, cost_cents, selling_cents, sale_day),
             )
         )
-        database.executemany(
+        connection.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
             (
                 (sale_id, expense_id, position)
@@ -331,18 +354,22 @@ def sell_items(
 
 
 def sell_pc(
-    pc_id: object, selling_price: object, sale_date: object | None = None
+    pc_id: object,
+    selling_price: object,
+    sale_date: object | None = None,
+    *,
+    database: Database | None = None,
 ) -> int:
     pc_id = _positive_id(pc_id, "PC ID")
     selling_cents = _money_cents(selling_price, "Selling price")
     sale_day = _iso_date(sale_date)
-    with connection() as database:
-        pc = database.execute(
+    with _transaction(database) as connection:
+        pc = connection.execute(
             "SELECT id,name FROM assembled_pcs WHERE id=?", (pc_id,)
         ).fetchone()
         if pc is None:
             raise NotFoundError(f"PC {pc_id} does not exist.")
-        rows = database.execute(
+        rows = connection.execute(
             _EXPENSE_SELECT + " WHERE p.id=? ORDER BY pp.position", (pc_id,)
         ).fetchall()
         if not rows:
@@ -352,14 +379,14 @@ def sell_pc(
             (row["price_cents"] for row in rows), "Combined PC cost"
         )
         expense_ids = [row["id"] for row in rows]
-        database.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
+        connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
         sale_id = _insert_id(
-            database.execute(
+            connection.execute(
                 "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'pc',?,?,?)",
                 (pc["name"], cost_cents, selling_cents, sale_day),
             )
         )
-        database.executemany(
+        connection.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
             (
                 (sale_id, expense_id, position)
@@ -369,12 +396,12 @@ def sell_pc(
         return sale_id
 
 
-def list_sales() -> tuple[Sale, ...]:
-    with connection() as database:
-        sales = database.execute(
+def list_sales(*, database: Database | None = None) -> tuple[Sale, ...]:
+    with _transaction(database) as connection:
+        sales = connection.execute(
             "SELECT id,name,kind,cost_cents,selling_price_cents,sale_date FROM sales ORDER BY id"
         ).fetchall()
-        rows = database.execute(
+        rows = connection.execute(
             _EXPENSE_SELECT
             + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
         ).fetchall()
@@ -397,17 +424,17 @@ def list_sales() -> tuple[Sale, ...]:
     )
 
 
-def undo_sale(sale_id: object) -> None:
+def undo_sale(sale_id: object, *, database: Database | None = None) -> None:
     sale_id = _positive_id(sale_id, "Sale ID")
-    with connection() as database:
-        sale = database.execute(
+    with _transaction(database) as connection:
+        sale = connection.execute(
             "SELECT id,name,kind FROM sales WHERE id=?", (sale_id,)
         ).fetchone()
         if sale is None:
             raise NotFoundError(f"Sale {sale_id} does not exist.")
         item_ids = [
             row[0]
-            for row in database.execute(
+            for row in connection.execute(
                 "SELECT expense_id FROM sale_items WHERE sale_id=? ORDER BY position",
                 (sale_id,),
             )
@@ -415,18 +442,18 @@ def undo_sale(sale_id: object) -> None:
         if not item_ids:
             raise ValidationError(f"Sale {sale_id} contains no recoverable items.")
         if sale["kind"] == "pc":
-            collision = _find_pc_name_collision(database, sale["name"])
+            collision = _find_pc_name_collision(connection, sale["name"])
             if collision:
                 raise ValidationError(
                     f"Cannot undo while an assembled PC named '{collision['name']}' exists."
                 )
-            database.execute("DELETE FROM sales WHERE id=?", (sale_id,))
+            connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))
             pc_id = _insert_id(
-                database.execute(
+                connection.execute(
                     "INSERT INTO assembled_pcs (name) VALUES (?)", (sale["name"],)
                 )
             )
-            database.executemany(
+            connection.executemany(
                 "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
                 (
                     (pc_id, expense_id, position)
@@ -434,18 +461,18 @@ def undo_sale(sale_id: object) -> None:
                 ),
             )
         else:
-            database.execute("DELETE FROM sales WHERE id=?", (sale_id,))
+            connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))
 
 
-def get_financial_summary() -> FinancialSummary:
-    with connection() as database:
-        expense_cents = database.execute(
+def get_financial_summary(*, database: Database | None = None) -> FinancialSummary:
+    with _transaction(database) as connection:
+        expense_cents = connection.execute(
             "SELECT COALESCE(SUM(price_cents),0) FROM expenses"
         ).fetchone()[0]
-        income_cents, cost_cents = database.execute(
+        income_cents, cost_cents = connection.execute(
             "SELECT COALESCE(SUM(selling_price_cents),0),COALESCE(SUM(cost_cents),0) FROM sales"
         ).fetchone()
-        inventory_cents = database.execute(
+        inventory_cents = connection.execute(
             """SELECT COALESCE(SUM(e.price_cents),0) FROM expenses e
                LEFT JOIN sale_items si ON si.expense_id=e.id
                WHERE si.sale_id IS NULL"""

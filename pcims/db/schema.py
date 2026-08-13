@@ -3,7 +3,7 @@
 import sqlite3
 from datetime import date
 
-from pcims.db.connection import connection
+from pcims.db.connection import Database, get_database
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES
 from pcims.money import MAX_MONEY_CENTS
@@ -199,20 +199,20 @@ def validate_current_data(database: sqlite3.Connection) -> None:
     _validate_relationships(database)
 
 
-def initialize_database() -> None:
+def initialize_database(database: Database | None = None) -> None:
     """Create the current schema, or reject any incompatible existing schema."""
-    with connection() as database:
-        objects_exist = database.execute(
+    with (database or get_database()).transaction() as connection:
+        objects_exist = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
         ).fetchone()
         if objects_exist:
-            validate_schema(database)
-            integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
+            validate_schema(connection)
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
             if integrity != "ok":
                 raise DatabaseIntegrityError(
                     f"Database integrity check failed: {integrity}"
                 )
-            foreign_key_violations = database.execute(
+            foreign_key_violations = connection.execute(
                 "PRAGMA foreign_key_check"
             ).fetchall()
             if foreign_key_violations:
@@ -221,12 +221,12 @@ def initialize_database() -> None:
                     f"Database foreign-key check failed at {table} row {row_id} "
                     f"(missing {referenced_table} record)."
                 )
-            validate_current_data(database)
+            validate_current_data(connection)
             return
 
         statements = ";\n".join(SCHEMA_DEFINITIONS.values())
-        database.executescript(
+        connection.executescript(
             f"BEGIN IMMEDIATE;\n{statements};\n"
             f"PRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
         )
-        validate_schema(database)
+        validate_schema(connection)

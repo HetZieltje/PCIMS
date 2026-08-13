@@ -1,5 +1,9 @@
 """Reusable Qt dialogs for PCIMS workflows."""
 
+from datetime import date
+from decimal import Decimal
+from typing import cast
+
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
     QDateEdit,
@@ -9,13 +13,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 from pcims.app.formatting import cents_as_decimal, parse_money_cents
 
 
 class SaleDialog(QDialog):
-    def __init__(self, item_name, parent=None):
+    def __init__(self, item_name: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Record sale")
         self.setModal(True)
@@ -25,6 +30,7 @@ class SaleDialog(QDialog):
         self.sale_date.setCalendarPopup(True)
         self.sale_date.setDisplayFormat("yyyy-MM-dd")
         self.error_label = QLabel()
+        self._amount_cents = 0
         self.error_label.setStyleSheet("color: #c62828")
 
         form = QFormLayout()
@@ -43,7 +49,7 @@ class SaleDialog(QDialog):
         layout.addWidget(buttons)
         self.amount.setFocus()
 
-    def _validate(self):
+    def _validate(self) -> None:
         try:
             self._amount_cents = parse_money_cents(self.amount.text())
         except ValueError as error:
@@ -52,10 +58,12 @@ class SaleDialog(QDialog):
         self.accept()
 
     @classmethod
-    def get_sale(cls, item_name, parent=None):
+    def get_sale(
+        cls, item_name: str, parent: QWidget | None = None
+    ) -> tuple[Decimal, date] | None:
         dialog = cls(item_name, parent)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
-        return cents_as_decimal(
-            dialog._amount_cents
-        ), dialog.sale_date.date().toPython()
+        return cents_as_decimal(dialog._amount_cents), cast(
+            date, dialog.sale_date.date().toPython()
+        )

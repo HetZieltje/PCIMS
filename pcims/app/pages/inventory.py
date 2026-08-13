@@ -24,27 +24,24 @@ from pcims.app.common import (
 )
 from pcims.app.dialogs import SaleDialog
 from pcims.app.formatting import format_cents
-from pcims.db.queries import (
-    delete_expenses,
-    disassemble_pc,
-    list_inventory,
-    list_pcs,
-    rename_expenses,
-    rename_pc,
-    sell_items,
-    sell_pc,
-)
+from pcims.db.models import AssembledPC, Expense
 from pcims.domain import ITEM_TYPES
+from pcims.services import ApplicationServices, default_services
 
 
 class InventoryPage(QWidget):
     data_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        services: ApplicationServices | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._all_parts = ()
-        self._parts = {}
-        self._pcs = {}
+        self.services = services or default_services()
+        self._all_parts: tuple[Expense, ...] = ()
+        self._parts: dict[int, Expense] = {}
+        self._pcs: dict[int, AssembledPC] = {}
         self.search = QLineEdit()
         self.search.setPlaceholderText("Filter by name…")
         self.type_filter = QComboBox()
@@ -115,15 +112,15 @@ class InventoryPage(QWidget):
         layout.addWidget(self.splitter)
         self.refresh()
 
-    def refresh(self):
-        self._all_parts = list_inventory()
+    def refresh(self) -> None:
+        self._all_parts = self.services.list_inventory()
         self._render_parts()
-        self._render_pcs(list_pcs())
+        self._render_pcs(self.services.list_pcs())
 
-    def _apply_filters(self, *_):
+    def _apply_filters(self, *_: object) -> None:
         self._render_parts()
 
-    def _render_parts(self):
+    def _render_parts(self) -> None:
         search = self.search.text().strip().casefold()
         item_type = self.type_filter.currentData()
         status = self.status_filter.currentData()
@@ -169,12 +166,12 @@ class InventoryPage(QWidget):
                 )
         self.parts_table.setSortingEnabled(True)
 
-    def _render_pcs(self, pcs):
+    def _render_pcs(self, pcs: tuple[AssembledPC, ...]) -> None:
         self._pcs = {pc.id: pc for pc in pcs}
         self.pc_table.setSortingEnabled(False)
         self.pc_table.setRowCount(len(pcs))
         for row, pc in enumerate(pcs):
-            counts = {}
+            counts: dict[str, int] = {}
             for part in pc.parts:
                 counts[part.item_type] = counts.get(part.item_type, 0) + 1
             summary = ", ".join(
@@ -195,10 +192,10 @@ class InventoryPage(QWidget):
                 )
         self.pc_table.setSortingEnabled(True)
 
-    def _selected_parts(self):
+    def _selected_parts(self) -> list[Expense]:
         return [self._parts[item_id] for item_id in selected_ids(self.parts_table)]
 
-    def _selected_pc(self):
+    def _selected_pc(self) -> AssembledPC | None:
         ids = selected_ids(self.pc_table)
         if len(ids) != 1:
             QMessageBox.information(
@@ -207,7 +204,7 @@ class InventoryPage(QWidget):
             return None
         return self._pcs[ids[0]]
 
-    def sell_selected_parts(self):
+    def sell_selected_parts(self) -> None:
         parts = self._selected_parts()
         if not parts:
             QMessageBox.information(
@@ -226,13 +223,13 @@ class InventoryPage(QWidget):
         if values is None:
             return
         try:
-            sell_items([part.id for part in parts], *values)
+            self.services.sell_items([part.id for part in parts], *values)
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to sell items", error)
             return
         self.data_changed.emit()
 
-    def rename_selected_parts(self):
+    def rename_selected_parts(self) -> None:
         parts = self._selected_parts()
         if not parts:
             QMessageBox.information(
@@ -246,13 +243,13 @@ class InventoryPage(QWidget):
         if not accepted:
             return
         try:
-            rename_expenses([part.id for part in parts], name)
+            self.services.rename_expenses([part.id for part in parts], name)
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to rename items", error)
             return
         self.data_changed.emit()
 
-    def delete_selected_parts(self):
+    def delete_selected_parts(self) -> None:
         parts = self._selected_parts()
         if not parts:
             QMessageBox.information(
@@ -266,13 +263,13 @@ class InventoryPage(QWidget):
         ):
             return
         try:
-            delete_expenses([part.id for part in parts])
+            self.services.delete_expenses([part.id for part in parts])
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to delete items", error)
             return
         self.data_changed.emit()
 
-    def sell_selected_pc(self):
+    def sell_selected_pc(self) -> None:
         pc = self._selected_pc()
         if pc is None:
             return
@@ -280,13 +277,13 @@ class InventoryPage(QWidget):
         if values is None:
             return
         try:
-            sell_pc(pc.id, *values)
+            self.services.sell_pc(pc.id, *values)
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to sell PC", error)
             return
         self.data_changed.emit()
 
-    def rename_selected_pc(self):
+    def rename_selected_pc(self) -> None:
         pc = self._selected_pc()
         if pc is None:
             return
@@ -296,13 +293,13 @@ class InventoryPage(QWidget):
         if not accepted:
             return
         try:
-            rename_pc(pc.id, name)
+            self.services.rename_pc(pc.id, name)
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to rename PC", error)
             return
         self.data_changed.emit()
 
-    def disassemble_selected_pc(self):
+    def disassemble_selected_pc(self) -> None:
         pc = self._selected_pc()
         if pc is None or not ask_confirmation(
             self,
@@ -311,7 +308,7 @@ class InventoryPage(QWidget):
         ):
             return
         try:
-            disassemble_pc(pc.id)
+            self.services.disassemble_pc(pc.id)
         except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to disassemble PC", error)
             return
