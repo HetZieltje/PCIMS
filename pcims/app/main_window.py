@@ -40,12 +40,13 @@ class MainWindow(QMainWindow):
             self.sales_page,
             self.settings_page,
         )
+        self._dirty_pages = set()
         for page, title in zip(
             self.pages,
             ("Inventory", "Purchases", "Assemble", "Sales and History", "Settings"),
         ):
             self.tabs.addTab(page, title)
-            page.data_changed.connect(self.refresh_all)
+            page.data_changed.connect(self._on_data_changed)
         self.settings_page.theme_changed.connect(self.apply_theme)
         self.settings_page.database_restored.connect(self._after_database_restore)
         self.tabs.currentChanged.connect(self.refresh_current)
@@ -56,20 +57,29 @@ class MainWindow(QMainWindow):
     def refresh_current(self, index=None):
         index = self.tabs.currentIndex() if index is None else index
         page = self.tabs.widget(index)
+        if page not in self._dirty_pages:
+            return
         refresh = getattr(page, "refresh", None)
         if callable(refresh):
             refresh()
+        self._dirty_pages.discard(page)
 
     def refresh_all(self):
         for page in self.pages:
             refresh = getattr(page, "refresh", None)
             if callable(refresh):
                 refresh()
+        self._dirty_pages.clear()
         self.statusBar().showMessage("Data refreshed", 2500)
+
+    def _on_data_changed(self):
+        self._dirty_pages.update(self.pages)
+        self.refresh_current()
+        self.statusBar().showMessage("Data updated", 2500)
 
     def _after_database_restore(self):
         self.purchases_page.discard_staged()
-        self.refresh_all()
+        self._on_data_changed()
         self.statusBar().showMessage("Backup restored", 5000)
 
     def _restore_window_state(self):

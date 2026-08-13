@@ -89,10 +89,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def test_membership_indexes_cover_display_order(self):
         with connection() as database:
-            for table, index_name in (
-                ("pc_parts", "pc_parts_in_display_order"),
-                ("sale_items", "sale_items_in_display_order"),
-            ):
+            for table in ("pc_parts", "sale_items"):
                 plan = " ".join(
                     row[3]
                     for row in database.execute(
@@ -102,25 +99,22 @@ class DatabaseWorkflowTests(unittest.TestCase):
                         + "=1 ORDER BY position"
                     )
                 )
-                self.assertIn(index_name, plan)
+                self.assertIn("USING INDEX", plan)
                 self.assertNotIn("TEMP B-TREE", plan)
 
-    def test_initialize_restores_current_schema_indexes_idempotently(self):
+    def test_missing_or_changed_schema_objects_are_rejected(self):
         with connection() as database:
-            database.execute("DROP INDEX pc_parts_in_display_order")
-            database.execute("DROP INDEX sale_items_in_display_order")
-
-        initialize_database()
+            database.execute("DROP TRIGGER pc_part_must_not_be_sold")
+        with self.assertRaisesRegex(SchemaVersionError, "missing"):
+            initialize_database()
 
         with connection() as database:
-            indexes = {
-                row[0]
-                for row in database.execute(
-                    "SELECT name FROM sqlite_master WHERE type='index'"
-                )
-            }
-        self.assertIn("pc_parts_in_display_order", indexes)
-        self.assertIn("sale_items_in_display_order", indexes)
+            database.execute(
+                """CREATE TRIGGER pc_part_must_not_be_sold
+                   AFTER INSERT ON expenses BEGIN SELECT 1; END"""
+            )
+        with self.assertRaisesRegex(SchemaVersionError, "changed"):
+            initialize_database()
 
     def test_incompatible_schema_is_rejected_instead_of_mutated(self):
         legacy_path = Path(self.temporary_directory.name) / "legacy.db"
@@ -226,6 +220,16 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         disassemble_pc(pc_id)
         self.assertTrue(all(item.is_available for item in list_inventory()))
+
+    def test_membership_positions_are_unique_within_each_record(self):
+        ids = [self.buy("RAM", "RAM", 40), self.buy("RAM", "RAM", 45)]
+        pc_id = assemble_pc("PC 1", ids)
+
+        with self.assertRaises(sqlite3.IntegrityError), connection() as database:
+            database.execute(
+                "UPDATE pc_parts SET position=0 WHERE pc_id=? AND expense_id=?",
+                (pc_id, ids[1]),
+            )
 
     def test_pc_and_sale_listing_use_constant_query_counts(self):
         pc_parts = [self.buy(f"PC part {index}", "Extra", 10) for index in range(4)]

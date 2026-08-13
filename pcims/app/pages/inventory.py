@@ -42,6 +42,7 @@ class InventoryPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._all_parts = ()
         self._parts = {}
         self._pcs = {}
         self.search = QLineEdit()
@@ -54,9 +55,9 @@ class InventoryPage(QWidget):
         self.status_filter.addItem("All unsold", "all")
         self.status_filter.addItem("Available only", "available")
         self.status_filter.addItem("Assigned to PC", "assigned")
-        self.search.textChanged.connect(self.refresh)
-        self.type_filter.currentIndexChanged.connect(self.refresh)
-        self.status_filter.currentIndexChanged.connect(self.refresh)
+        self.search.textChanged.connect(self._apply_filters)
+        self.type_filter.currentIndexChanged.connect(self._apply_filters)
+        self.status_filter.currentIndexChanged.connect(self._apply_filters)
 
         filters = QHBoxLayout()
         filters.addWidget(QLabel("Search"))
@@ -115,12 +116,20 @@ class InventoryPage(QWidget):
         self.refresh()
 
     def refresh(self):
-        if not hasattr(self, "parts_table"):
-            return
+        self._all_parts = list_inventory()
+        self._render_parts()
+        self._render_pcs(list_pcs())
+
+    def _apply_filters(self, *_):
+        self._render_parts()
+
+    def _render_parts(self):
         search = self.search.text().strip().casefold()
         item_type = self.type_filter.currentData()
         status = self.status_filter.currentData()
-        parts = list_inventory(item_type=item_type)
+        parts = self._all_parts
+        if item_type is not None:
+            parts = tuple(item for item in parts if item.item_type == item_type)
         if search:
             parts = tuple(item for item in parts if search in item.name.casefold())
         if status == "available":
@@ -160,7 +169,7 @@ class InventoryPage(QWidget):
                 )
         self.parts_table.setSortingEnabled(True)
 
-        pcs = list_pcs()
+    def _render_pcs(self, pcs):
         self._pcs = {pc.id: pc for pc in pcs}
         self.pc_table.setSortingEnabled(False)
         self.pc_table.setRowCount(len(pcs))

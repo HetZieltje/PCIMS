@@ -11,12 +11,10 @@ from pathlib import Path
 
 from pcims.db.connection import connection, get_database_path
 from pcims.db.queries import (
-    REQUIRED_TABLES,
-    REQUIRED_TRIGGERS,
-    SCHEMA_COLUMNS,
-    SCHEMA_VERSION,
     DatabaseIntegrityError,
+    SchemaVersionError,
     validate_current_data,
+    validate_schema,
 )
 
 
@@ -57,49 +55,10 @@ def validate_database(path):
                 f"Database foreign-key check failed at {table} row {row_id} "
                 f"(missing {referenced_table} record)."
             )
-        version = database.execute("PRAGMA user_version").fetchone()[0]
-        if version != SCHEMA_VERSION:
-            raise sqlite3.DatabaseError(
-                f"Backup schema {version} is incompatible with required schema {SCHEMA_VERSION}."
-            )
-        tables = {
-            row[0]
-            for row in database.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-        }
-        if tables != REQUIRED_TABLES:
-            missing = REQUIRED_TABLES - tables
-            extra = tables - REQUIRED_TABLES
-            differences = []
-            if missing:
-                differences.append(f"missing {', '.join(sorted(missing))}")
-            if extra:
-                differences.append(f"unexpected {', '.join(sorted(extra))}")
-            raise sqlite3.DatabaseError(
-                f"Database has incompatible tables: {'; '.join(differences)}"
-            )
-        for table, expected in SCHEMA_COLUMNS.items():
-            actual = tuple(
-                row[1] for row in database.execute(f'PRAGMA table_info("{table}")')
-            )
-            if actual != expected:
-                raise sqlite3.DatabaseError(
-                    f"Database table '{table}' has an incompatible layout."
-                )
-        triggers = {
-            row[0]
-            for row in database.execute(
-                "SELECT name FROM sqlite_master WHERE type='trigger'"
-            )
-        }
-        if triggers != REQUIRED_TRIGGERS:
-            raise sqlite3.DatabaseError(
-                "Database integrity triggers do not match the current schema."
-            )
         try:
+            validate_schema(database)
             validate_current_data(database)
-        except DatabaseIntegrityError as error:
+        except (DatabaseIntegrityError, SchemaVersionError) as error:
             raise sqlite3.DatabaseError(str(error)) from error
 
 

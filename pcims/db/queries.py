@@ -6,7 +6,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pcims.db.connection import connection
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MAX_MONEY_CENTS = 99_999_999_999
 ITEM_TYPES = (
     "CPU",
@@ -21,23 +21,58 @@ ITEM_TYPES = (
     "Fan",
     "Extra",
 )
-REQUIRED_TABLES = {
-    "expenses",
-    "assembled_pcs",
-    "pc_parts",
-    "sales",
-    "sale_items",
-}
-REQUIRED_TRIGGERS = {
-    "pc_part_must_not_be_sold",
-    "sale_item_must_not_be_in_pc",
-}
-SCHEMA_COLUMNS = {
-    "expenses": ("id", "name", "item_type", "price_cents", "purchase_date"),
-    "assembled_pcs": ("id", "name"),
-    "pc_parts": ("pc_id", "expense_id", "position"),
-    "sales": ("id", "name", "kind", "cost_cents", "selling_price_cents", "sale_date"),
-    "sale_items": ("sale_id", "expense_id", "position"),
+_ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
+SCHEMA_DEFINITIONS = {
+    ("table", "expenses"): f"""CREATE TABLE expenses (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        item_type TEXT NOT NULL CHECK (item_type IN ({_ALLOWED_TYPES_SQL})),
+        price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+        purchase_date TEXT NOT NULL
+            CHECK (purchase_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+    )""",
+    ("table", "assembled_pcs"): """CREATE TABLE assembled_pcs (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0)
+    )""",
+    ("table", "pc_parts"): """CREATE TABLE pc_parts (
+        pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE,
+        expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        PRIMARY KEY (pc_id, expense_id),
+        UNIQUE (pc_id, position)
+    )""",
+    ("table", "sales"): """CREATE TABLE sales (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        kind TEXT NOT NULL CHECK (kind IN ('item', 'pc')),
+        cost_cents INTEGER NOT NULL CHECK (cost_cents >= 0),
+        selling_price_cents INTEGER NOT NULL CHECK (selling_price_cents >= 0),
+        sale_date TEXT NOT NULL
+            CHECK (sale_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+    )""",
+    ("table", "sale_items"): """CREATE TABLE sale_items (
+        sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+        expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        PRIMARY KEY (sale_id, expense_id),
+        UNIQUE (sale_id, position)
+    )""",
+    ("trigger", "pc_part_must_not_be_sold"): """CREATE TRIGGER pc_part_must_not_be_sold
+        BEFORE INSERT ON pc_parts
+        WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=NEW.expense_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'sold expense cannot be assigned to a PC');
+        END""",
+    (
+        "trigger",
+        "sale_item_must_not_be_in_pc",
+    ): """CREATE TRIGGER sale_item_must_not_be_in_pc
+        BEFORE INSERT ON sale_items
+        WHEN EXISTS (SELECT 1 FROM pc_parts WHERE expense_id=NEW.expense_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'assembled expense cannot be sold separately');
+        END""",
 }
 
 
@@ -55,6 +90,50 @@ class SchemaVersionError(RuntimeError):
 
 class DatabaseIntegrityError(RuntimeError):
     pass
+
+
+def _normalize_schema_sql(sql):
+    return " ".join(str(sql).split()).casefold()
+
+
+def validate_schema(database):
+    """Require the exact current tables, constraints, indexes, and triggers."""
+    version = database.execute("PRAGMA user_version").fetchone()[0]
+    actual = {
+        (row[0], row[1]): _normalize_schema_sql(row[2])
+        for row in database.execute(
+            """SELECT type,name,sql FROM sqlite_master
+               WHERE name NOT LIKE 'sqlite_%'
+                 AND type IN ('table','index','trigger','view')"""
+        )
+    }
+    expected = {
+        key: _normalize_schema_sql(sql) for key, sql in SCHEMA_DEFINITIONS.items()
+    }
+    if version == SCHEMA_VERSION and actual == expected:
+        return
+
+    missing = sorted(name for key, name in expected.keys() - actual.keys())
+    unexpected = sorted(name for key, name in actual.keys() - expected.keys())
+    changed = sorted(
+        name
+        for key, name in expected.keys() & actual.keys()
+        if expected[(key, name)] != actual[(key, name)]
+    )
+    differences = []
+    if version != SCHEMA_VERSION:
+        differences.append(f"version {version}, expected {SCHEMA_VERSION}")
+    if missing:
+        differences.append(f"missing {', '.join(missing)}")
+    if unexpected:
+        differences.append(f"unexpected {', '.join(unexpected)}")
+    if changed:
+        differences.append(f"changed {', '.join(changed)}")
+    raise SchemaVersionError(
+        "Database schema is incompatible with the current format"
+        f" ({'; '.join(differences)}). Restore a current-format backup or choose "
+        "a new database."
+    )
 
 
 def _text(value, label):
@@ -117,18 +196,6 @@ def _iso_date(value):
         return date.fromisoformat(str(value).strip()).isoformat()
     except (TypeError, ValueError) as exc:
         raise ValidationError("Date must use the YYYY-MM-DD format.") from exc
-
-
-def _ensure_current_indexes(database):
-    """Apply idempotent performance indexes within the current schema version."""
-    database.executescript(
-        """
-        CREATE INDEX IF NOT EXISTS pc_parts_in_display_order
-            ON pc_parts (pc_id, position);
-        CREATE INDEX IF NOT EXISTS sale_items_in_display_order
-            ON sale_items (sale_id, position);
-        """
-    )
 
 
 def validate_current_data(database):
@@ -194,36 +261,11 @@ def validate_current_data(database):
 def initialize_database():
     """Create the current schema, or reject any incompatible existing schema."""
     with connection() as database:
-        tables = {
-            row[0]
-            for row in database.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-        }
-        version = database.execute("PRAGMA user_version").fetchone()[0]
-        if tables:
-            columns_match = tables == REQUIRED_TABLES and all(
-                tuple(
-                    row[1] for row in database.execute(f'PRAGMA table_info("{table}")')
-                )
-                == expected
-                for table, expected in SCHEMA_COLUMNS.items()
-            )
-            triggers = {
-                row[0]
-                for row in database.execute(
-                    "SELECT name FROM sqlite_master WHERE type='trigger'"
-                )
-            }
-            if (
-                version != SCHEMA_VERSION
-                or not columns_match
-                or triggers != REQUIRED_TRIGGERS
-            ):
-                raise SchemaVersionError(
-                    f"Database schema {version} is incompatible with required schema "
-                    f"{SCHEMA_VERSION}. Restore a current-format backup or choose a new database."
-                )
+        objects_exist = database.execute(
+            "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone()
+        if objects_exist:
+            validate_schema(database)
             integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
             if integrity != "ok":
                 raise DatabaseIntegrityError(
@@ -239,68 +281,13 @@ def initialize_database():
                     f"(missing {referenced_table} record)."
                 )
             validate_current_data(database)
-            _ensure_current_indexes(database)
             return
 
-        allowed_types = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
+        statements = ";\n".join(SCHEMA_DEFINITIONS.values())
         database.executescript(
-            f"""
-            CREATE TABLE expenses (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL CHECK (length(trim(name)) > 0),
-                item_type TEXT NOT NULL CHECK (item_type IN ({allowed_types})),
-                price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
-                purchase_date TEXT NOT NULL
-                    CHECK (purchase_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
-            );
-
-            CREATE TABLE assembled_pcs (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0)
-            );
-
-            CREATE TABLE pc_parts (
-                pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE,
-                expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
-                position INTEGER NOT NULL CHECK (position >= 0),
-                PRIMARY KEY (pc_id, expense_id)
-            );
-
-            CREATE TABLE sales (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL CHECK (length(trim(name)) > 0),
-                kind TEXT NOT NULL CHECK (kind IN ('item', 'pc')),
-                cost_cents INTEGER NOT NULL CHECK (cost_cents >= 0),
-                selling_price_cents INTEGER NOT NULL CHECK (selling_price_cents >= 0),
-                sale_date TEXT NOT NULL
-                    CHECK (sale_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
-            );
-
-            CREATE TABLE sale_items (
-                sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
-                expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
-                position INTEGER NOT NULL CHECK (position >= 0),
-                PRIMARY KEY (sale_id, expense_id)
-            );
-
-            CREATE TRIGGER pc_part_must_not_be_sold
-            BEFORE INSERT ON pc_parts
-            WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=NEW.expense_id)
-            BEGIN
-                SELECT RAISE(ABORT, 'sold expense cannot be assigned to a PC');
-            END;
-
-            CREATE TRIGGER sale_item_must_not_be_in_pc
-            BEFORE INSERT ON sale_items
-            WHEN EXISTS (SELECT 1 FROM pc_parts WHERE expense_id=NEW.expense_id)
-            BEGIN
-                SELECT RAISE(ABORT, 'assembled expense cannot be sold separately');
-            END;
-
-            PRAGMA user_version = {SCHEMA_VERSION};
-            """
+            f"{statements};\nPRAGMA user_version = {SCHEMA_VERSION};"
         )
-        _ensure_current_indexes(database)
+        validate_schema(database)
 
 
 def _expense_from_row(row):

@@ -95,6 +95,42 @@ class QtWorkflowTests(unittest.TestCase):
         self.application.processEvents()
         window.deleteLater()
 
+    def test_data_changes_refresh_only_visible_page_until_tab_is_opened(self):
+        window = MainWindow()
+        window.tabs.setCurrentWidget(window.inventory_page)
+        with (
+            patch.object(window.inventory_page, "refresh") as inventory_refresh,
+            patch.object(window.purchases_page, "refresh") as purchases_refresh,
+            patch.object(window.assemble_page, "refresh") as assemble_refresh,
+            patch.object(window.sales_page, "refresh") as sales_refresh,
+        ):
+            window.inventory_page.data_changed.emit()
+            inventory_refresh.assert_called_once()
+            purchases_refresh.assert_not_called()
+            assemble_refresh.assert_not_called()
+            sales_refresh.assert_not_called()
+
+            window.tabs.setCurrentWidget(window.purchases_page)
+            purchases_refresh.assert_called_once()
+            assemble_refresh.assert_not_called()
+            sales_refresh.assert_not_called()
+        window.deleteLater()
+
+    def test_inventory_filters_use_loaded_data_without_database_queries(self):
+        self.purchase("Case fan", "Fan", 10)
+        page = InventoryPage()
+        with (
+            patch("pcims.app.pages.inventory.list_inventory") as inventory_query,
+            patch("pcims.app.pages.inventory.list_pcs") as pc_query,
+        ):
+            page.search.setText("fan")
+            page.type_filter.setCurrentText("Fan")
+            page.status_filter.setCurrentText("Available only")
+        inventory_query.assert_not_called()
+        pc_query.assert_not_called()
+        self.assertEqual(page.parts_table.rowCount(), 1)
+        page.deleteLater()
+
     def test_main_window_restores_geometry_tab_and_splitters(self):
         first = MainWindow()
         first.resize(1080, 720)
