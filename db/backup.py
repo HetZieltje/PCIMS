@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import uuid
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +18,28 @@ from db.queries import (
     DatabaseIntegrityError,
     validate_current_data,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class BackupResult(os.PathLike):
+    """A verified backup plus any non-fatal retention cleanup failures."""
+
+    path: Path
+    cleanup_errors: tuple[str, ...] = ()
+
+    def __fspath__(self):
+        return str(self.path)
+
+    def __str__(self):
+        return str(self.path)
+
+    @property
+    def has_cleanup_warnings(self):
+        return bool(self.cleanup_errors)
+
+    @property
+    def cleanup_warning(self):
+        return "\n".join(self.cleanup_errors)
 
 
 def validate_database(path):
@@ -106,9 +129,13 @@ def create_backup(destination_directory=None, keep=14):
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+    cleanup_errors = []
     for old_backup in backups[keep:]:
-        old_backup.unlink()
-    return final_path
+        try:
+            old_backup.unlink()
+        except OSError as error:
+            cleanup_errors.append(f"{old_backup}: {error}")
+    return BackupResult(final_path, tuple(cleanup_errors))
 
 
 def restore_backup(backup_path, pre_restore_directory=None):

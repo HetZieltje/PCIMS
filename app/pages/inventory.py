@@ -104,13 +104,13 @@ class InventoryPage(QWidget):
         pc_box = QGroupBox("Assembled PCs")
         pc_box.setLayout(pc_layout)
 
-        splitter = QSplitter()
-        splitter.addWidget(parts_box)
-        splitter.addWidget(pc_box)
-        splitter.setSizes((650, 550))
+        self.splitter = QSplitter()
+        self.splitter.addWidget(parts_box)
+        self.splitter.addWidget(pc_box)
+        self.splitter.setSizes((650, 550))
         layout = QVBoxLayout(self)
         layout.addLayout(filters)
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
         self.refresh()
 
     def refresh(self):

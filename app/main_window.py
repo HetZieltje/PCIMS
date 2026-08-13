@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
         self.settings_page.database_restored.connect(self._after_database_restore)
         self.tabs.currentChanged.connect(self.refresh_current)
         self.apply_theme(self.settings.value("theme", "system"))
+        self._restore_window_state()
         self.statusBar().showMessage("Ready")
 
     def refresh_current(self, index=None):
@@ -70,6 +71,36 @@ class MainWindow(QMainWindow):
         self.purchases_page.discard_staged()
         self.refresh_all()
         self.statusBar().showMessage("Backup restored", 5000)
+
+    def _restore_window_state(self):
+        geometry = self.settings.value("window/geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+        try:
+            tab_index = int(self.settings.value("window/active_tab", 0))
+        except (TypeError, ValueError):
+            tab_index = 0
+        if 0 <= tab_index < self.tabs.count():
+            self.tabs.setCurrentIndex(tab_index)
+        for key, splitter in (
+            ("inventory", self.inventory_page.splitter),
+            ("sales", self.sales_page.splitter),
+            ("sales_details", self.sales_page.detail_splitter),
+        ):
+            state = self.settings.value(f"window/splitters/{key}")
+            if state:
+                splitter.restoreState(state)
+
+    def _save_window_state(self):
+        self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue("window/active_tab", self.tabs.currentIndex())
+        for key, splitter in (
+            ("inventory", self.inventory_page.splitter),
+            ("sales", self.sales_page.splitter),
+            ("sales_details", self.sales_page.detail_splitter),
+        ):
+            self.settings.setValue(f"window/splitters/{key}", splitter.saveState())
+        self.settings.sync()
 
     def apply_theme(self, theme):
         theme = theme if theme in {"system", "light", "dark"} else "system"
@@ -135,7 +166,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         try:
-            create_backup()
+            backup = create_backup()
         except (OSError, ValueError, sqlite3.DatabaseError) as error:
             answer = QMessageBox.question(
                 self,
@@ -147,4 +178,13 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        else:
+            if backup.has_cleanup_warnings:
+                QMessageBox.warning(
+                    self,
+                    "Backup cleanup warning",
+                    f"The latest changes were backed up to:\n{backup.path}\n\n"
+                    f"Some old backups could not be removed:\n{backup.cleanup_warning}",
+                )
+        self._save_window_state()
         event.accept()

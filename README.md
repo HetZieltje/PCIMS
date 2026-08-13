@@ -25,6 +25,16 @@ python3 -m venv .venv
 .venv/bin/python app.py
 ```
 
+For a user-scoped Linux installation with an isolated environment and a desktop
+menu entry, run this from the project directory:
+
+```bash
+sh scripts/install-linux.sh
+```
+
+This writes only beneath `$XDG_DATA_HOME` (or `~/.local/share`) and does not
+require `sudo`. Rerunning it upgrades the installed application in place.
+
 Application data follows platform conventions:
 
 - Windows: `%LOCALAPPDATA%\PCIMS`

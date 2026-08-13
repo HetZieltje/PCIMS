@@ -57,9 +57,14 @@ def main(argv=None):
 
         backup_warning = None
         try:
-            create_backup()
+            backup = create_backup()
+            if backup.has_cleanup_warnings:
+                backup_warning = (
+                    f"The backup was created at {backup.path}, but old backup cleanup failed:\n\n"
+                    f"{backup.cleanup_warning}"
+                )
         except (OSError, ValueError, sqlite3.DatabaseError) as error:
-            backup_warning = str(error)
+            backup_warning = f"The startup backup could not be created:\n\n{error}"
 
         window = MainWindow()
         window.show()
@@ -67,7 +72,7 @@ def main(argv=None):
             QMessageBox.warning(
                 window,
                 "Backup warning",
-                f"PCIMS started, but the startup backup failed:\n\n{backup_warning}",
+                f"PCIMS started with a backup warning:\n\n{backup_warning}",
             )
         return application.exec()
     finally:

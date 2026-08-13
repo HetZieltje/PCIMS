@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PCIMS
+GenericName=PC Inventory Manager
+Comment=Manage PC components, assemblies, purchases, and sales
+Exec="@PCIMS_EXECUTABLE@"
+TryExec=@PCIMS_EXECUTABLE@
+Icon=computer
+Terminal=false
+Categories=Office;Utility;
+StartupNotify=true

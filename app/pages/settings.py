@@ -88,6 +88,14 @@ class SettingsPage(QWidget):
         except (OSError, ValueError, sqlite3.DatabaseError) as error:
             show_error(self, "Backup failed", error)
             return
+        if path.has_cleanup_warnings:
+            QMessageBox.warning(
+                self,
+                "Backup complete with warning",
+                f"Backup saved to:\n{path.path}\n\n"
+                f"Some old backups could not be removed:\n{path.cleanup_warning}",
+            )
+            return
         QMessageBox.information(self, "Backup complete", f"Backup saved to:\n{path}")
 
     def restore_backup(self):
@@ -110,8 +118,21 @@ class SettingsPage(QWidget):
             show_error(self, "Restore failed", error)
             return
         self.database_restored.emit()
-        QMessageBox.information(
+        cleanup_note = (
+            f"\n\nSome old backups could not be removed:\n{safety.cleanup_warning}"
+            if safety.has_cleanup_warnings
+            else ""
+        )
+        message_box = (
+            QMessageBox.warning
+            if safety.has_cleanup_warnings
+            else QMessageBox.information
+        )
+        message_box(
             self,
-            "Restore complete",
-            f"The database was restored. Previous data was saved to:\n{safety}",
+            "Restore complete with warning"
+            if safety.has_cleanup_warnings
+            else "Restore complete",
+            f"The database was restored. Previous data was saved to:\n{safety}"
+            f"{cleanup_note}",
         )

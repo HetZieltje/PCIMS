@@ -25,7 +25,7 @@ from app.pages.assemble import AssemblePage
 from app.pages.inventory import InventoryPage
 from app.pages.purchases import PurchasesPage
 from app.pages.sales import SalesPage
-from db.backup import create_backup
+from db.backup import BackupResult, create_backup
 from db.connection import configure_database
 from db.queries import (
     add_expenses,
@@ -55,6 +55,9 @@ class QtWorkflowTests(unittest.TestCase):
 
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
+        settings = QSettings("PCIMS", "PCIMS")
+        settings.clear()
+        settings.sync()
         configure_database(Path(self.temporary_directory.name) / "qt-test.db")
         initialize_database()
 
@@ -91,6 +94,43 @@ class QtWorkflowTests(unittest.TestCase):
         self.application.processEvents()
         window.deleteLater()
 
+    def test_main_window_restores_geometry_tab_and_splitters(self):
+        first = MainWindow()
+        first.resize(1080, 720)
+        first.tabs.setCurrentIndex(3)
+        first.inventory_page.splitter.setSizes((800, 200))
+        first.sales_page.splitter.setSizes((300, 700))
+        first.sales_page.detail_splitter.setSizes((500, 100))
+        first.show()
+        self.application.processEvents()
+        expected_geometry = first.saveGeometry()
+        expected_splitters = (
+            first.inventory_page.splitter.saveState(),
+            first.sales_page.splitter.saveState(),
+            first.sales_page.detail_splitter.saveState(),
+        )
+        first._save_window_state()
+        self.assertEqual(
+            QSettings("PCIMS", "PCIMS").value("window/geometry"), expected_geometry
+        )
+        first.deleteLater()
+
+        with patch.object(MainWindow, "restoreGeometry", return_value=True) as restore:
+            second = MainWindow()
+        restore.assert_called_once_with(expected_geometry)
+        second.show()
+        self.application.processEvents()
+        self.assertEqual(second.tabs.currentIndex(), 3)
+        self.assertEqual(
+            (
+                second.inventory_page.splitter.saveState(),
+                second.sales_page.splitter.saveState(),
+                second.sales_page.detail_splitter.saveState(),
+            ),
+            expected_splitters,
+        )
+        second.deleteLater()
+
     def test_purchase_page_allocates_quantity_total_and_commits(self):
         page = PurchasesPage()
         page.name.setText("Case fan")
@@ -122,6 +162,25 @@ class QtWorkflowTests(unittest.TestCase):
         ):
             window.closeEvent(event)
         self.assertFalse(event.isAccepted())
+        window.deleteLater()
+
+    def test_close_accepts_verified_backup_with_retention_warning(self):
+        window = MainWindow()
+        event = QCloseEvent()
+        outcome = BackupResult(
+            Path(self.temporary_directory.name) / "verified.db",
+            ("old.db: simulated lock",),
+        )
+        with (
+            patch("app.main_window.create_backup", return_value=outcome),
+            patch("app.main_window.QMessageBox.warning") as warning,
+            patch("app.main_window.QMessageBox.question") as question,
+        ):
+            window.closeEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        warning.assert_called_once()
+        question.assert_not_called()
         window.deleteLater()
 
     def test_restore_discards_staged_purchase_only_after_success(self):

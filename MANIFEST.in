@@ -1,0 +1,2 @@
+include packaging/linux/pcims.desktop
+include scripts/install-linux.sh

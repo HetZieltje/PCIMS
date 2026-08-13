@@ -361,6 +361,25 @@ class DatabaseWorkflowTests(unittest.TestCase):
         validate_database(safety)
         self.assertLessEqual(len(list(backup_directory.glob("pcims_*.db"))), 14)
 
+    def test_backup_retention_failure_does_not_hide_verified_backup(self):
+        self.buy("Keep", "CPU", 10)
+        backup_directory = Path(self.temporary_directory.name) / "backups"
+        first = create_backup(backup_directory, keep=1)
+        original_unlink = Path.unlink
+
+        def fail_for_oldest(path, *args, **kwargs):
+            if path == first.path:
+                raise PermissionError("simulated locked backup")
+            return original_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", new=fail_for_oldest):
+            result = create_backup(backup_directory, keep=1)
+
+        self.assertTrue(result.path.is_file())
+        validate_database(result)
+        self.assertTrue(result.has_cleanup_warnings)
+        self.assertIn("simulated locked backup", result.cleanup_warning)
+
     def test_restore_rejects_old_or_corrupt_databases_without_changes(self):
         self.buy("Keep me", "CPU", 10)
         invalid = Path(self.temporary_directory.name) / "invalid.db"

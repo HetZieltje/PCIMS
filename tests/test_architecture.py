@@ -32,6 +32,17 @@ class ArchitectureTests(unittest.TestCase):
         ):
             self.assertNotIn(legacy_term, source.casefold())
 
+    def test_linux_desktop_install_assets_are_present_and_user_scoped(self):
+        root = Path(__file__).parents[1]
+        installer = (root / "scripts" / "install-linux.sh").read_text(encoding="utf-8")
+        desktop = (root / "packaging" / "linux" / "pcims.desktop").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("XDG_DATA_HOME", installer)
+        self.assertNotIn("sudo", installer)
+        self.assertIn('Exec="@PCIMS_EXECUTABLE@"', desktop)
+        self.assertIn("Terminal=false", desktop)
+
 
 if __name__ == "__main__":
     unittest.main()
