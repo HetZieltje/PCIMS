@@ -1,8 +1,9 @@
 """Application-facing service boundary over persistence and recovery."""
 
 import os
+import threading
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pcims.db.backup import BackupResult, create_backup, restore_backup
@@ -33,6 +34,9 @@ class ApplicationServices:
     """All technical operations available to the Qt presentation layer."""
 
     database: Database
+    _recovery_lock: threading.RLock = field(
+        default_factory=threading.RLock, repr=False, compare=False
+    )
 
     def initialize(self) -> None:
         initialize_database(self.database)
@@ -100,18 +104,20 @@ class ApplicationServices:
         destination_directory: str | os.PathLike[str] | None = None,
         keep: int = 14,
     ) -> BackupResult:
-        return create_backup(
-            destination_directory, keep, database=self.database
-        )
+        with self._recovery_lock:
+            return create_backup(
+                destination_directory, keep, database=self.database
+            )
 
     def restore_backup(
         self,
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
     ) -> BackupResult:
-        return restore_backup(
-            backup_path, pre_restore_directory, database=self.database
-        )
+        with self._recovery_lock:
+            return restore_backup(
+                backup_path, pre_restore_directory, database=self.database
+            )
 
     @property
     def database_path(self) -> Path:

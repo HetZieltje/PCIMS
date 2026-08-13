@@ -14,9 +14,9 @@ from pcims.money import MAX_MONEY_CENTS, parse_money_cents
 
 
 def _transaction(
-    database: Database | None,
+    database: Database | None, *, write: bool = False
 ) -> AbstractContextManager[sqlite3.Connection]:
-    return (database or get_database()).transaction()
+    return (database or get_database()).transaction(write=write)
 
 
 def _text(value: object, label: str) -> str:
@@ -139,7 +139,7 @@ def add_expenses(
     ]
     if not normalized:
         raise ValidationError("At least one purchase item is required.")
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         return [
             _insert_id(
                 connection.execute(
@@ -186,7 +186,7 @@ def delete_expenses(
 ) -> None:
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         rows = connection.execute(
             _EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})", ids
         ).fetchall()
@@ -217,7 +217,7 @@ def rename_expenses(
     ids = _unique_ids(expense_ids, "Expense ID")
     new_name = _text(new_name, "New item name")
     placeholders = ",".join("?" for _ in ids)
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         count = connection.execute(
             # IDs are validated integers; only the number of bound placeholders varies.
             f"SELECT COUNT(*) FROM expenses WHERE id IN ({placeholders})",  # nosec B608
@@ -241,7 +241,7 @@ def assemble_pc(
     name = _text(name, "PC name")
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         collision = _find_pc_name_collision(connection, name)
         if collision:
             raise ValidationError(f"A PC named '{collision['name']}' already exists.")
@@ -281,7 +281,7 @@ def list_pcs(*, database: Database | None = None) -> tuple[AssembledPC, ...]:
 
 def disassemble_pc(pc_id: object, *, database: Database | None = None) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         result = connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
         if result.rowcount != 1:
             raise NotFoundError(f"PC {pc_id} does not exist.")
@@ -292,7 +292,7 @@ def rename_pc(
 ) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
     new_name = _text(new_name, "New PC name")
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         collision = _find_pc_name_collision(connection, new_name, exclude_id=pc_id)
         if collision:
             raise ValidationError(f"A PC named '{collision['name']}' already exists.")
@@ -322,7 +322,7 @@ def sell_items(
     selling_cents = _money_cents(selling_price, "Selling price")
     sale_day = _iso_date(sale_date)
     placeholders = ",".join("?" for _ in ids)
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         rows = connection.execute(
             _EXPENSE_SELECT + f" WHERE e.id IN ({placeholders}) ORDER BY e.id", ids
         ).fetchall()
@@ -363,7 +363,7 @@ def sell_pc(
     pc_id = _positive_id(pc_id, "PC ID")
     selling_cents = _money_cents(selling_price, "Selling price")
     sale_day = _iso_date(sale_date)
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         pc = connection.execute(
             "SELECT id,name FROM assembled_pcs WHERE id=?", (pc_id,)
         ).fetchone()
@@ -426,7 +426,7 @@ def list_sales(*, database: Database | None = None) -> tuple[Sale, ...]:
 
 def undo_sale(sale_id: object, *, database: Database | None = None) -> None:
     sale_id = _positive_id(sale_id, "Sale ID")
-    with _transaction(database) as connection:
+    with _transaction(database, write=True) as connection:
         sale = connection.execute(
             "SELECT id,name,kind FROM sales WHERE id=?", (sale_id,)
         ).fetchone()

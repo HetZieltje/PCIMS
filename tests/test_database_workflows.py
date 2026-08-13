@@ -1,12 +1,19 @@
 import sqlite3
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from pcims.db.backup import create_backup, restore_backup, validate_database
+from pcims.db.backup import (
+    BackupResult,
+    create_backup,
+    restore_backup,
+    validate_database,
+)
 from pcims.db.connection import Database, configure_database, connection, get_database
 from pcims.db.errors import (
     DatabaseIntegrityError,
@@ -32,6 +39,7 @@ from pcims.db.queries import (
 )
 from pcims.db.schema import SCHEMA_DEFINITIONS, SCHEMA_VERSION, initialize_database
 from pcims.money import MAX_MONEY_CENTS
+from pcims.services import ApplicationServices
 
 TEST_DATE = date(2026, 8, 14)
 
@@ -57,6 +65,81 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(independent.path.is_file())
         with self.assertRaises(sqlite3.OperationalError), configured.transaction() as database:
             database.execute("SELECT * FROM isolated")
+
+    def test_live_connections_use_durable_wal_and_defensive_pragmas(self):
+        with closing(get_database().connect()) as database:
+            self.assertEqual(database.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+            self.assertEqual(database.execute("PRAGMA synchronous").fetchone()[0], 2)
+            self.assertEqual(database.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+            self.assertEqual(database.execute("PRAGMA trusted_schema").fetchone()[0], 0)
+
+    def test_wal_writer_completes_while_reader_keeps_a_stable_snapshot(self):
+        active_database = get_database()
+        self.buy("Existing", "Extra", 1)
+        with active_database.transaction() as reader:
+            before = reader.execute("SELECT COUNT(*) FROM expenses").fetchone()[0]
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    add_expenses,
+                    [
+                        {
+                            "name": "Concurrent",
+                            "item_type": "Extra",
+                            "price": 1,
+                            "purchase_date": TEST_DATE,
+                        }
+                    ],
+                    database=active_database,
+                )
+                future.result(timeout=2)
+            during = reader.execute("SELECT COUNT(*) FROM expenses").fetchone()[0]
+
+        self.assertEqual(before, 1)
+        self.assertEqual(during, before)
+        self.assertEqual(len(list_expenses()), 2)
+
+    def test_transaction_mode_is_explicit_for_reads_and_writes(self):
+        active_database = get_database()
+        for write, statement in ((False, "BEGIN"), (True, "BEGIN IMMEDIATE")):
+            with self.subTest(write=write):
+                connection_mock = MagicMock(spec=sqlite3.Connection)
+                with patch.object(
+                    Database, "connect", return_value=connection_mock
+                ), active_database.transaction(write=write) as yielded:
+                    self.assertIs(yielded, connection_mock)
+                connection_mock.execute.assert_called_once_with(statement)
+                connection_mock.commit.assert_called_once()
+                connection_mock.close.assert_called_once()
+
+    def test_backup_and_restore_are_serialized_by_the_service_boundary(self):
+        services = ApplicationServices(get_database())
+        backup_started = threading.Event()
+        release_backup = threading.Event()
+        restore_started = threading.Event()
+        result = BackupResult(self.database_path)
+
+        def slow_backup(*_args, **_kwargs):
+            backup_started.set()
+            release_backup.wait(2)
+            return result
+
+        def observed_restore(*_args, **_kwargs):
+            restore_started.set()
+            return result
+
+        with (
+            patch("pcims.services.create_backup", side_effect=slow_backup),
+            patch("pcims.services.restore_backup", side_effect=observed_restore),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            backup_future = executor.submit(services.create_backup)
+            self.assertTrue(backup_started.wait(1))
+            restore_future = executor.submit(services.restore_backup, self.database_path)
+            self.assertFalse(restore_started.wait(0.1))
+            release_backup.set()
+            self.assertEqual(backup_future.result(timeout=2), result)
+            self.assertEqual(restore_future.result(timeout=2), result)
+            self.assertTrue(restore_started.is_set())
 
     def buy(self, name, item_type, price, purchase_date=None):
         return add_expenses(

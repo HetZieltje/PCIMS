@@ -1,4 +1,3 @@
-import sqlite3
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -70,12 +69,12 @@ class SettingsPage(QWidget):
 
         self.backup_button = QPushButton("Create backup now")
         self.backup_button.clicked.connect(self.create_backup)
-        restore_button = QPushButton("Restore backup…")
-        restore_button.clicked.connect(self.restore_backup)
+        self.restore_button = QPushButton("Restore backup…")
+        self.restore_button.clicked.connect(self.restore_backup)
         maintenance_form = QFormLayout()
         maintenance_form.addRow("Database", location_widget)
         maintenance_form.addRow("Backup", self.backup_button)
-        maintenance_form.addRow("Restore", restore_button)
+        maintenance_form.addRow("Restore", self.restore_button)
         maintenance_box = QGroupBox("Data and backups")
         maintenance_box.setLayout(maintenance_form)
 
@@ -133,11 +132,22 @@ class SettingsPage(QWidget):
             message += "\n\nUnrecorded purchase lines will be discarded after a successful restore."
         if not ask_confirmation(self, "Restore backup", message):
             return
-        try:
-            safety = self.services.restore_backup(path)
-        except (OSError, ValueError, sqlite3.DatabaseError) as error:
-            show_error(self, "Restore failed", error)
-            return
+        self.window().setEnabled(False)
+        self.restore_button.setText("Restoring backup…")
+        self._restore_task = run_in_background(
+            lambda: self.services.restore_backup(path),
+            self._restore_finished,
+            self._restore_failed,
+        )
+
+    def _restore_failed(self, error: Exception) -> None:
+        self.window().setEnabled(True)
+        self.restore_button.setText("Restore backup…")
+        show_error(self, "Restore failed", error)
+
+    def _restore_finished(self, safety: BackupResult) -> None:
+        self.window().setEnabled(True)
+        self.restore_button.setText("Restore backup…")
         self.database_restored.emit()
         cleanup_note = (
             f"\n\nSome old backups could not be removed:\n{safety.cleanup_warning}"

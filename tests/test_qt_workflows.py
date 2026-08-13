@@ -291,6 +291,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.purchase("Later item", "RAM", 50)
         window = MainWindow()
         window.purchases_page._staged.append({"staged_id": 1})
+        loop = QEventLoop()
 
         with (
             patch(
@@ -300,13 +301,50 @@ class QtWorkflowTests(unittest.TestCase):
             patch(
                 "pcims.app.pages.settings.ask_confirmation", return_value=True
             ) as confirm,
-            patch("pcims.app.pages.settings.QMessageBox.information"),
+            patch(
+                "pcims.app.pages.settings.QMessageBox.information",
+                side_effect=lambda *_: loop.quit(),
+            ),
         ):
             window.settings_page.restore_backup()
+            self.assertFalse(window.isEnabled())
+            self.assertTrue(window.purchases_page.has_staged_items)
+            QTimer.singleShot(3000, loop.quit)
+            loop.exec()
 
         self.assertIn("Unrecorded purchase lines", confirm.call_args.args[2])
+        self.assertTrue(window.isEnabled())
         self.assertFalse(window.purchases_page.has_staged_items)
         self.assertEqual([item.name for item in list_expenses()], ["Backup item"])
+        window.deleteLater()
+
+    def test_failed_async_restore_reenables_window_and_preserves_work(self):
+        self.purchase("Existing item", "Extra", 10)
+        window = MainWindow()
+        window.purchases_page._staged.append({"staged_id": 1})
+        missing = Path(self.temporary_directory.name) / "missing.db"
+        loop = QEventLoop()
+        with (
+            patch(
+                "pcims.app.pages.settings.QFileDialog.getOpenFileName",
+                return_value=(str(missing), "SQLite databases (*.db)"),
+            ),
+            patch("pcims.app.pages.settings.ask_confirmation", return_value=True),
+            patch(
+                "pcims.app.pages.settings.show_error",
+                side_effect=lambda *_: loop.quit(),
+            ) as show_error,
+        ):
+            window.settings_page.restore_backup()
+            self.assertFalse(window.isEnabled())
+            QTimer.singleShot(3000, loop.quit)
+            loop.exec()
+
+        self.assertTrue(window.isEnabled())
+        self.assertTrue(window.purchases_page.has_staged_items)
+        self.assertEqual([item.name for item in list_expenses()], ["Existing item"])
+        self.assertEqual(window.settings_page.restore_button.text(), "Restore backup…")
+        show_error.assert_called_once()
         window.deleteLater()
 
     def test_table_items_sort_by_typed_values(self):

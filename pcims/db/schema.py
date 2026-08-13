@@ -1,6 +1,7 @@
 """Exact schema definition, creation, and semantic integrity checks."""
 
 import sqlite3
+from contextlib import closing
 from datetime import date
 
 from pcims.db.connection import Database, get_database
@@ -201,7 +202,16 @@ def validate_current_data(database: sqlite3.Connection) -> None:
 
 def initialize_database(database: Database | None = None) -> None:
     """Create the current schema, or reject any incompatible existing schema."""
-    with (database or get_database()).transaction() as connection:
+    active_database = database or get_database()
+    with closing(active_database.connect()) as setup_connection:
+        journal_mode = setup_connection.execute("PRAGMA journal_mode = WAL").fetchone()[
+            0
+        ]
+        if journal_mode.casefold() != "wal":
+            raise DatabaseIntegrityError(
+                f"Database could not enable WAL journaling (got {journal_mode})."
+            )
+    with active_database.transaction(write=True) as connection:
         objects_exist = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
         ).fetchone()
@@ -224,9 +234,7 @@ def initialize_database(database: Database | None = None) -> None:
             validate_current_data(connection)
             return
 
-        statements = ";\n".join(SCHEMA_DEFINITIONS.values())
-        connection.executescript(
-            f"BEGIN IMMEDIATE;\n{statements};\n"
-            f"PRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
-        )
+        for statement in SCHEMA_DEFINITIONS.values():
+            connection.execute(statement)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         validate_schema(connection)

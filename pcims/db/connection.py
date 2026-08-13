@@ -38,15 +38,21 @@ class Database:
         database.row_factory = sqlite3.Row
         database.execute("PRAGMA foreign_keys = ON")
         database.execute("PRAGMA busy_timeout = 10000")
+        database.execute("PRAGMA synchronous = FULL")
+        database.execute("PRAGMA trusted_schema = OFF")
         return database
 
     @contextmanager
-    def transaction(self) -> Iterator[sqlite3.Connection]:
-        """Yield one transactional connection and always close it."""
+    def transaction(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
+        """Yield a snapshot read or immediately locked write transaction."""
         connection = self.connect()
         try:
-            with connection:
-                yield connection
+            connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
