@@ -14,9 +14,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.common import ID_ROLE, show_error
-from app.formatting import format_cents
-from db.queries import ITEM_TYPES, assemble_pc, list_inventory, list_pcs
+from pcims.app.common import DATA_OPERATION_ERRORS, ID_ROLE, show_error
+from pcims.app.formatting import format_cents
+from pcims.db.queries import ITEM_TYPES, assemble_pc, list_inventory, list_pcs
 
 
 class AssemblePage(QWidget):
@@ -113,7 +113,7 @@ class AssemblePage(QWidget):
             return
         try:
             assemble_pc(self.name.text(), ids)
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to assemble PC", error)
             return
         self.name.clear()

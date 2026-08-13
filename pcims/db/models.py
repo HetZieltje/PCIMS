@@ -54,5 +54,5 @@ class FinancialSummary:
     inventory_cents: int
 
     @property
-    def net_assets_cents(self):
-        return self.income_cents + self.inventory_cents - self.expense_cents
+    def cash_flow_cents(self):
+        return self.income_cents - self.expense_cents

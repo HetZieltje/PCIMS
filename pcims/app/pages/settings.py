@@ -15,9 +15,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.common import ask_confirmation, show_error
-from db.backup import create_backup, restore_backup
-from db.connection import get_database_path
+from pcims.app.common import ask_confirmation, show_error
+from pcims.db.backup import create_backup, restore_backup
+from pcims.db.connection import get_database_path
 
 
 class SettingsPage(QWidget):

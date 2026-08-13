@@ -3,8 +3,8 @@
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-from db.connection import connection
-from db.models import AssembledPC, Expense, FinancialSummary, Sale
+from pcims.db.connection import connection
+from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
 
 SCHEMA_VERSION = 3
 MAX_MONEY_CENTS = 99_999_999_999

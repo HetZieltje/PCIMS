@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from db.connection import connection, get_database_path
-from db.queries import (
+from pcims.db.connection import connection, get_database_path
+from pcims.db.queries import (
     REQUIRED_TABLES,
     REQUIRED_TRIGGERS,
     SCHEMA_COLUMNS,

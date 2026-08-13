@@ -3,8 +3,14 @@ from pathlib import Path
 
 
 class ArchitectureTests(unittest.TestCase):
+    def test_runtime_uses_one_collision_safe_package_namespace(self):
+        root = Path(__file__).parents[1]
+        self.assertTrue((root / "pcims" / "__init__.py").is_file())
+        self.assertFalse((root / "app").exists())
+        self.assertFalse((root / "db").exists())
+
     def test_runtime_has_no_tkinter_or_old_ui_compatibility_layer(self):
-        app_directory = Path(__file__).parents[1] / "app"
+        app_directory = Path(__file__).parents[1] / "pcims" / "app"
         source_lines = "\n".join(
             path.read_text(encoding="utf-8") for path in app_directory.rglob("*.py")
         ).splitlines()
@@ -20,7 +26,7 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_backend_has_no_legacy_schema_terms_or_compatibility_apis(self):
         root = Path(__file__).parents[1]
-        source = (root / "db" / "queries.py").read_text(encoding="utf-8")
+        source = (root / "pcims" / "db" / "queries.py").read_text(encoding="utf-8")
         for legacy_term in (
             "used_in",
             "in_inventory",

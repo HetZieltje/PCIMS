@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -17,17 +18,17 @@ from PySide6.QtWidgets import (
     QTableWidgetSelectionRange,
 )
 
-from app.application import acquire_instance_lock, create_application
-from app.common import configure_table, table_item
-from app.errors import install_exception_hook
-from app.main_window import MainWindow
-from app.pages.assemble import AssemblePage
-from app.pages.inventory import InventoryPage
-from app.pages.purchases import PurchasesPage
-from app.pages.sales import SalesPage
-from db.backup import BackupResult, create_backup
-from db.connection import configure_database
-from db.queries import (
+from pcims.app.application import acquire_instance_lock, create_application
+from pcims.app.common import configure_table, table_item
+from pcims.app.errors import install_exception_hook
+from pcims.app.main_window import MainWindow
+from pcims.app.pages.assemble import AssemblePage
+from pcims.app.pages.inventory import InventoryPage
+from pcims.app.pages.purchases import PurchasesPage
+from pcims.app.pages.sales import SalesPage
+from pcims.db.backup import BackupResult, create_backup
+from pcims.db.connection import configure_database
+from pcims.db.queries import (
     add_expenses,
     initialize_database,
     list_expenses,
@@ -144,7 +145,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(
             [item["price_cents"] for item in page._staged], [334, 333, 333]
         )
-        with patch("app.pages.purchases.QMessageBox.information"):
+        with patch("pcims.app.pages.purchases.QMessageBox.information"):
             page.commit_purchase()
 
         self.assertEqual(
@@ -152,12 +153,33 @@ class QtWorkflowTests(unittest.TestCase):
         )
         page.deleteLater()
 
+    def test_purchase_page_reports_database_failure_without_losing_staged_work(self):
+        page = PurchasesPage()
+        page.name.setText("Case fan")
+        page.type.setCurrentText("Fan")
+        page.price.setText("10.00")
+        page.add_line()
+
+        with (
+            patch(
+                "pcims.app.pages.purchases.add_expenses",
+                side_effect=sqlite3.OperationalError("simulated disk failure"),
+            ),
+            patch("pcims.app.pages.purchases.show_error") as show_error,
+        ):
+            page.commit_purchase()
+
+        self.assertTrue(page.has_staged_items)
+        show_error.assert_called_once()
+        self.assertIn("simulated disk failure", str(show_error.call_args.args[2]))
+        page.deleteLater()
+
     def test_close_warns_before_discarding_staged_purchase(self):
         window = MainWindow()
         window.purchases_page._staged.append({"staged_id": 1})
         event = QCloseEvent()
         with patch(
-            "app.main_window.QMessageBox.question",
+            "pcims.app.main_window.QMessageBox.question",
             return_value=QMessageBox.StandardButton.No,
         ):
             window.closeEvent(event)
@@ -172,9 +194,9 @@ class QtWorkflowTests(unittest.TestCase):
             ("old.db: simulated lock",),
         )
         with (
-            patch("app.main_window.create_backup", return_value=outcome),
-            patch("app.main_window.QMessageBox.warning") as warning,
-            patch("app.main_window.QMessageBox.question") as question,
+            patch("pcims.app.main_window.create_backup", return_value=outcome),
+            patch("pcims.app.main_window.QMessageBox.warning") as warning,
+            patch("pcims.app.main_window.QMessageBox.question") as question,
         ):
             window.closeEvent(event)
 
@@ -192,11 +214,13 @@ class QtWorkflowTests(unittest.TestCase):
 
         with (
             patch(
-                "app.pages.settings.QFileDialog.getOpenFileName",
+                "pcims.app.pages.settings.QFileDialog.getOpenFileName",
                 return_value=(str(backup), "SQLite databases (*.db)"),
             ),
-            patch("app.pages.settings.ask_confirmation", return_value=True) as confirm,
-            patch("app.pages.settings.QMessageBox.information"),
+            patch(
+                "pcims.app.pages.settings.ask_confirmation", return_value=True
+            ) as confirm,
+            patch("pcims.app.pages.settings.QMessageBox.information"),
         ):
             window.settings_page.restore_backup()
 
@@ -241,7 +265,7 @@ class QtWorkflowTests(unittest.TestCase):
                 raise RuntimeError("simulated GUI failure")
             except RuntimeError:
                 exception_type, exception, traceback_object = sys.exc_info()
-            with patch("app.errors.QMessageBox.critical") as critical:
+            with patch("pcims.app.errors.QMessageBox.critical") as critical:
                 sys.excepthook(exception_type, exception, traceback_object)
             self.assertIn("simulated GUI failure", log_path.read_text(encoding="utf-8"))
             critical.assert_called_once()
@@ -283,7 +307,7 @@ class QtWorkflowTests(unittest.TestCase):
             True,
         )
         with patch(
-            "app.pages.inventory.SaleDialog.get_sale",
+            "pcims.app.pages.inventory.SaleDialog.get_sale",
             return_value=(Decimal("20.00"), date.today()),
         ):
             inventory.sell_selected_parts()
@@ -292,8 +316,10 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual({item.id for item in sale.items}, set(ids))
 
         sales = SalesPage()
+        self.assertEqual(sales.summary_labels["cash"].text(), "€9.00")
+        self.assertNotIn("assets", sales.summary_labels)
         sales.sale_table.selectRow(0)
-        with patch("app.pages.sales.ask_confirmation", return_value=True):
+        with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):
             sales.undo_selected()
 
         self.assertEqual(list_sales(), ())
@@ -314,7 +340,7 @@ class QtWorkflowTests(unittest.TestCase):
         inventory = InventoryPage()
         inventory.pc_table.selectRow(0)
         with patch(
-            "app.pages.inventory.SaleDialog.get_sale",
+            "pcims.app.pages.inventory.SaleDialog.get_sale",
             return_value=(Decimal("200.00"), date.today()),
         ):
             inventory.sell_selected_pc()
@@ -324,7 +350,7 @@ class QtWorkflowTests(unittest.TestCase):
 
         sales = SalesPage()
         sales.sale_table.selectRow(0)
-        with patch("app.pages.sales.ask_confirmation", return_value=True):
+        with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):
             sales.undo_selected()
         self.assertEqual([pc.name for pc in list_pcs()], ["PC 1"])
         self.assertEqual(list_sales(), ())

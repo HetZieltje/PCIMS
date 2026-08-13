@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.formatting import cents_as_decimal, parse_money_cents
+from pcims.app.formatting import cents_as_decimal, parse_money_cents
 
 
 class SaleDialog(QDialog):

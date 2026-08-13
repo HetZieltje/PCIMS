@@ -6,9 +6,9 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from db.backup import create_backup, restore_backup, validate_database
-from db.connection import configure_database, connection
-from db.queries import (
+from pcims.db.backup import create_backup, restore_backup, validate_database
+from pcims.db.connection import configure_database, connection
+from pcims.db.queries import (
     SCHEMA_VERSION,
     DatabaseIntegrityError,
     NotFoundError,
@@ -244,7 +244,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                     database.set_trace_callback(statements.append)
                     yield database
 
-            with patch("db.queries.connection", traced_connection):
+            with patch("pcims.db.queries.connection", traced_connection):
                 self.assertEqual(len(listing()), 2)
             selects = [
                 statement
@@ -345,7 +345,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(summary.income_cents, 5000)
         self.assertEqual(summary.profit_cents, 2500)
         self.assertEqual(summary.inventory_cents, 4000)
-        self.assertEqual(summary.net_assets_cents, 2500)
+        self.assertEqual(summary.cash_flow_cents, -1500)
 
     def test_verified_backup_restore_and_retention(self):
         self.buy("Old state", "CPU", 10)

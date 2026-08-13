@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from db.connection import get_data_dir
+from pcims.db.connection import get_data_dir
 
 
 def install_exception_hook(log_path=None):

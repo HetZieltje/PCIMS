@@ -1,6 +1,6 @@
 import unittest
 
-from app.formatting import (
+from pcims.app.formatting import (
     allocate_cents,
     allocate_weighted_cents,
     format_cents,

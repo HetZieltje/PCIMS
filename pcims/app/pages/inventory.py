@@ -14,16 +14,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.common import (
+from pcims.app.common import (
+    DATA_OPERATION_ERRORS,
     ask_confirmation,
     configure_table,
     selected_ids,
     show_error,
     table_item,
 )
-from app.dialogs import SaleDialog
-from app.formatting import format_cents
-from db.queries import (
+from pcims.app.dialogs import SaleDialog
+from pcims.app.formatting import format_cents
+from pcims.db.queries import (
     ITEM_TYPES,
     delete_expenses,
     disassemble_pc,
@@ -217,7 +218,7 @@ class InventoryPage(QWidget):
             return
         try:
             sell_items([part.id for part in parts], *values)
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to sell items", error)
             return
         self.data_changed.emit()
@@ -237,7 +238,7 @@ class InventoryPage(QWidget):
             return
         try:
             rename_expenses([part.id for part in parts], name)
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to rename items", error)
             return
         self.data_changed.emit()
@@ -257,7 +258,7 @@ class InventoryPage(QWidget):
             return
         try:
             delete_expenses([part.id for part in parts])
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to delete items", error)
             return
         self.data_changed.emit()
@@ -271,7 +272,7 @@ class InventoryPage(QWidget):
             return
         try:
             sell_pc(pc.id, *values)
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to sell PC", error)
             return
         self.data_changed.emit()
@@ -287,7 +288,7 @@ class InventoryPage(QWidget):
             return
         try:
             rename_pc(pc.id, name)
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to rename PC", error)
             return
         self.data_changed.emit()
@@ -302,7 +303,7 @@ class InventoryPage(QWidget):
             return
         try:
             disassemble_pc(pc.id)
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to disassemble PC", error)
             return
         self.data_changed.emit()

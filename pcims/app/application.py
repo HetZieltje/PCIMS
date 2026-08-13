@@ -6,11 +6,15 @@ import sys
 from PySide6.QtCore import QLockFile
 from PySide6.QtWidgets import QApplication, QMessageBox, QStyleFactory
 
-from app.errors import install_exception_hook
-from app.main_window import MainWindow
-from db.backup import create_backup
-from db.connection import get_database_path
-from db.queries import DatabaseIntegrityError, SchemaVersionError, initialize_database
+from pcims.app.errors import install_exception_hook
+from pcims.app.main_window import MainWindow
+from pcims.db.backup import create_backup
+from pcims.db.connection import get_database_path
+from pcims.db.queries import (
+    DatabaseIntegrityError,
+    SchemaVersionError,
+    initialize_database,
+)
 
 
 def create_application(argv=None):

@@ -6,12 +6,12 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QCloseEvent, QColor, QPalette
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTabWidget
 
-from app.pages.assemble import AssemblePage
-from app.pages.inventory import InventoryPage
-from app.pages.purchases import PurchasesPage
-from app.pages.sales import SalesPage
-from app.pages.settings import SettingsPage
-from db.backup import create_backup
+from pcims.app.pages.assemble import AssemblePage
+from pcims.app.pages.inventory import InventoryPage
+from pcims.app.pages.purchases import PurchasesPage
+from pcims.app.pages.sales import SalesPage
+from pcims.app.pages.settings import SettingsPage
+from pcims.db.backup import create_backup
 
 
 class MainWindow(QMainWindow):

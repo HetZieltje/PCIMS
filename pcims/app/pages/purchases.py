@@ -17,14 +17,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.common import configure_table, selected_ids, show_error, table_item
-from app.formatting import (
+from pcims.app.common import (
+    DATA_OPERATION_ERRORS,
+    configure_table,
+    selected_ids,
+    show_error,
+    table_item,
+)
+from pcims.app.formatting import (
     allocate_cents,
     cents_as_decimal,
     format_cents,
     parse_money_cents,
 )
-from db.queries import ITEM_TYPES, add_expenses, list_expenses
+from pcims.db.queries import ITEM_TYPES, add_expenses, list_expenses
 
 
 class PurchasesPage(QWidget):
@@ -161,7 +167,7 @@ class PurchasesPage(QWidget):
         ]
         try:
             add_expenses(items)
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to record purchase", error)
             return
         count = len(items)

@@ -12,15 +12,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.common import (
+from pcims.app.common import (
+    DATA_OPERATION_ERRORS,
     ask_confirmation,
     configure_table,
     selected_ids,
     show_error,
     table_item,
 )
-from app.formatting import format_cents
-from db.queries import get_financial_summary, list_expenses, list_sales, undo_sale
+from pcims.app.formatting import format_cents
+from pcims.db.queries import (
+    get_financial_summary,
+    list_expenses,
+    list_sales,
+    undo_sale,
+)
 
 
 class SalesPage(QWidget):
@@ -38,7 +44,7 @@ class SalesPage(QWidget):
                 ("income", "Sales revenue"),
                 ("profit", "Realized profit"),
                 ("inventory", "Inventory value"),
-                ("assets", "Net assets"),
+                ("cash", "Cash flow"),
             )
         ):
             title_label = QLabel(title)
@@ -102,7 +108,7 @@ class SalesPage(QWidget):
             ("income", summary.income_cents),
             ("profit", summary.profit_cents),
             ("inventory", summary.inventory_cents),
-            ("assets", summary.net_assets_cents),
+            ("cash", summary.cash_flow_cents),
         ):
             self.summary_labels[key].setText(format_cents(cents))
 
@@ -227,7 +233,7 @@ class SalesPage(QWidget):
             return
         try:
             undo_sale(sale.id)
-        except (ValueError, LookupError) as error:
+        except DATA_OPERATION_ERRORS as error:
             show_error(self, "Unable to undo sale", error)
             return
         self.data_changed.emit()

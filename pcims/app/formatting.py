@@ -2,7 +2,7 @@
 
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidOperation
 
-from db.queries import MAX_MONEY_CENTS
+from pcims.db.queries import MAX_MONEY_CENTS
 
 
 def parse_money_cents(value):
