@@ -210,30 +210,41 @@ def _iso_date(value):
 
 def validate_current_data(database):
     """Reject structurally valid databases with invalid business records."""
-    for table, column in (("expenses", "purchase_date"), ("sales", "sale_date")):
-        for row_id, stored_date in database.execute(f"SELECT id,{column} FROM {table}"):
+    date_fields = (
+        ("expenses", "purchase date", "SELECT id,purchase_date FROM expenses"),
+        ("sales", "sale date", "SELECT id,sale_date FROM sales"),
+    )
+    for table, label, query in date_fields:
+        for row_id, stored_date in database.execute(query):
             try:
                 date.fromisoformat(stored_date)
             except (TypeError, ValueError) as exc:
                 raise DatabaseIntegrityError(
-                    f"Database contains an invalid {column.replace('_', ' ')} "
-                    f"in {table} row {row_id}."
+                    f"Database contains an invalid {label} in {table} row {row_id}."
                 ) from exc
 
-    for table, columns in (
-        ("expenses", ("price_cents",)),
-        ("sales", ("cost_cents", "selling_price_cents")),
-    ):
-        for column in columns:
-            invalid = database.execute(
-                f"SELECT id FROM {table} WHERE {column}<0 OR {column}>? LIMIT 1",
-                (MAX_MONEY_CENTS,),
-            ).fetchone()
-            if invalid:
-                raise DatabaseIntegrityError(
-                    f"Database contains an invalid monetary value in {table} "
-                    f"row {invalid[0]}."
-                )
+    money_fields = (
+        (
+            "expenses",
+            "SELECT id FROM expenses WHERE price_cents<0 OR price_cents>? LIMIT 1",
+        ),
+        (
+            "sales",
+            "SELECT id FROM sales WHERE cost_cents<0 OR cost_cents>? LIMIT 1",
+        ),
+        (
+            "sales",
+            """SELECT id FROM sales
+               WHERE selling_price_cents<0 OR selling_price_cents>? LIMIT 1""",
+        ),
+    )
+    for table, query in money_fields:
+        invalid = database.execute(query, (MAX_MONEY_CENTS,)).fetchone()
+        if invalid:
+            raise DatabaseIntegrityError(
+                f"Database contains an invalid monetary value in {table} "
+                f"row {invalid[0]}."
+            )
 
     conflict = database.execute(
         """SELECT pp.expense_id FROM pc_parts pp
@@ -413,12 +424,16 @@ def rename_expenses(expense_ids, new_name):
     placeholders = ",".join("?" for _ in ids)
     with connection() as database:
         count = database.execute(
-            f"SELECT COUNT(*) FROM expenses WHERE id IN ({placeholders})", ids
+            # IDs are validated integers; only the number of bound placeholders varies.
+            f"SELECT COUNT(*) FROM expenses WHERE id IN ({placeholders})",  # nosec B608
+            ids,
         ).fetchone()[0]
         if count != len(ids):
             raise NotFoundError("One or more selected expenses no longer exist.")
         database.execute(
-            f"UPDATE expenses SET name=? WHERE id IN ({placeholders})", [new_name, *ids]
+            # IDs and name remain bound parameters; no user text enters the SQL string.
+            f"UPDATE expenses SET name=? WHERE id IN ({placeholders})",  # nosec B608
+            [new_name, *ids],
         )
 
 

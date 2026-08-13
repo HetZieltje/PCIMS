@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from pcims.app.application import acquire_instance_lock, create_application, main
-from pcims.app.common import configure_table, table_item
+from pcims.app.common import configure_table, selected_ids, table_item
 from pcims.app.errors import install_exception_hook
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
@@ -284,6 +284,16 @@ class QtWorkflowTests(unittest.TestCase):
         )
         table.deleteLater()
 
+    def test_selected_ids_ignore_incomplete_rows_safely(self):
+        table = QTableWidget()
+        configure_table(table, ("ID", "Name"))
+        table.setRowCount(2)
+        table.setItem(0, 0, table_item("1", record_id=1))
+        table.selectAll()
+
+        self.assertEqual(selected_ids(table), [1])
+        table.deleteLater()
+
     def test_database_lock_allows_only_one_application_instance(self):
         database_path = Path(self.temporary_directory.name) / "locked.db"
         first = acquire_instance_lock(database_path)
@@ -399,6 +409,53 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertTrue(all(expense.is_available for expense in list_expenses()))
         inventory.deleteLater()
         sales.deleteLater()
+
+    def test_inventory_rename_delete_and_disassemble_actions(self):
+        cpu_id = self.purchase("CPU", "CPU", 100)
+        spare_id = self.purchase("Spare cable", "Extra", 5)
+
+        inventory = InventoryPage()
+        inventory.parts_table.selectRow(0)
+        with patch(
+            "pcims.app.pages.inventory.QInputDialog.getText",
+            return_value=("Renamed CPU", True),
+        ):
+            inventory.rename_selected_parts()
+        self.assertEqual(list_expenses()[0].name, "Renamed CPU")
+
+        inventory.refresh()
+        spare_row = next(
+            row
+            for row in range(inventory.parts_table.rowCount())
+            if inventory.parts_table.item(row, 0).text() == str(spare_id)
+        )
+        inventory.parts_table.selectRow(spare_row)
+        with patch("pcims.app.pages.inventory.ask_confirmation", return_value=True):
+            inventory.delete_selected_parts()
+        self.assertEqual([item.id for item in list_expenses()], [cpu_id])
+
+        assemble = AssemblePage()
+        assemble.name.setText("Test PC")
+        assemble.tree.topLevelItem(0).child(0).setCheckState(0, Qt.CheckState.Checked)
+        assemble.assemble()
+
+        inventory.refresh()
+        inventory.pc_table.selectRow(0)
+        with patch(
+            "pcims.app.pages.inventory.QInputDialog.getText",
+            return_value=("Renamed PC", True),
+        ):
+            inventory.rename_selected_pc()
+        self.assertEqual(list_pcs()[0].name, "Renamed PC")
+
+        inventory.refresh()
+        inventory.pc_table.selectRow(0)
+        with patch("pcims.app.pages.inventory.ask_confirmation", return_value=True):
+            inventory.disassemble_selected_pc()
+        self.assertEqual(list_pcs(), ())
+        self.assertTrue(list_expenses()[0].is_available)
+        assemble.deleteLater()
+        inventory.deleteLater()
 
     def test_pc_sale_and_undo_through_qt_pages(self):
         ids = [self.purchase("CPU", "CPU", 100), self.purchase("RAM", "RAM", 50)]

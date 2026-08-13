@@ -30,6 +30,9 @@ jobs:
           sed 's|@PCIMS_EXECUTABLE@|/tmp/pcims|' packaging/linux/pcims.desktop > /tmp/pcims.desktop
           desktop-file-validate /tmp/pcims.desktop
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e . build
-      - run: python -m unittest discover -s tests -v
+      - run: python -m pip install -e ".[dev]"
+      - run: python -X dev -W error -m unittest discover -s tests -v
+      - run: ruff check .
+      - run: mypy pcims --ignore-missing-imports --no-error-summary
+      - run: bandit -q -r pcims
       - run: python -m build

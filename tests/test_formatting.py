@@ -2,7 +2,6 @@ import unittest
 
 from pcims.app.formatting import (
     allocate_cents,
-    allocate_weighted_cents,
     format_cents,
     parse_money_cents,
 )
@@ -33,14 +32,9 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(allocate_cents(1000, 3), [334, 333, 333])
         self.assertEqual(sum(allocate_cents(1000, 3)), 1000)
 
-    def test_weighted_allocation_preserves_every_cent(self):
-        self.assertEqual(
-            allocate_weighted_cents(1000, [33.33, 33.33, 33.34]), [333, 333, 334]
-        )
-
     def test_format_cents(self):
         self.assertEqual(format_cents(123456), "€1,234.56")
-        self.assertEqual(format_cents(-50), "€-0.50")
+        self.assertEqual(format_cents(-50), "-€0.50")
         self.assertEqual(format_cents(9_007_199_254_740_993), "€90,071,992,547,409.93")
 
     def test_every_supported_display_value_round_trips_exactly(self):

@@ -21,7 +21,6 @@ from pcims.db.connection import get_database_path
 
 
 class SettingsPage(QWidget):
-    data_changed = Signal()
     database_restored = Signal()
     theme_changed = Signal(str)
 

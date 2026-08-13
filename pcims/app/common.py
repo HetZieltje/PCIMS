@@ -55,7 +55,15 @@ def table_item(text, record_id=None, sort_value=None, alignment=None):
 
 def selected_ids(table: QTableWidget):
     rows = sorted({index.row() for index in table.selectionModel().selectedRows()})
-    return [table.item(row, 0).data(ID_ROLE) for row in rows]
+    record_ids = []
+    for row in rows:
+        item = table.item(row, 0)
+        if item is None:
+            continue
+        record_id = item.data(ID_ROLE)
+        if record_id is not None:
+            record_ids.append(record_id)
+    return record_ids
 
 
 def show_error(parent, title, error):

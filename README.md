@@ -51,14 +51,19 @@ relationships. Runtime migration and compatibility with pre-rewrite schemas
 are intentionally not included. An incompatible database is rejected without
 being modified; use a current-format backup or a new database path.
 
-## Test
+## Development checks
 
 ```powershell
-.venv\Scripts\python -m unittest discover -s tests -v
+.venv\Scripts\python -m pip install -e ".[dev]"
+.venv\Scripts\python -X dev -W error -m unittest discover -s tests -v
+.venv\Scripts\ruff check .
+.venv\Scripts\mypy pcims --ignore-missing-imports --no-error-summary
+.venv\Scripts\bandit -q -r pcims
 ```
 
 Tests configure temporary SQLite files and the Qt offscreen platform. They do
-not open or delete the application database.
+not open or delete the application database. CI runs the same checks on Windows
+and Linux with Python 3.11 and 3.13, then builds the source and wheel packages.
 
 ## Build a desktop executable
 

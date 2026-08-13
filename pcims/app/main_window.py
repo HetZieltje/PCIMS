@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
             ("Inventory", "Purchases", "Assemble", "Sales and History", "Settings"),
         ):
             self.tabs.addTab(page, title)
+        for page in self.pages[:-1]:
             page.data_changed.connect(self._on_data_changed)
         self.settings_page.theme_changed.connect(self.apply_theme)
         self.settings_page.database_restored.connect(self._after_database_restore)
