@@ -237,6 +237,18 @@ class DatabaseWorkflowTests(unittest.TestCase):
             restore_backup(invalid)
         self.assertEqual([item.name for item in list_expenses()], ["Keep me"])
 
+    def test_backup_rejects_foreign_key_violations(self):
+        item_id = self.buy("CPU", "CPU", 10)
+        with closing(sqlite3.connect(self.database_path)) as database:
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (999,?,0)",
+                (item_id,),
+            )
+            database.commit()
+
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "foreign-key"):
+            create_backup(Path(self.temporary_directory.name) / "invalid-backups")
+
 
 if __name__ == "__main__":
     unittest.main()

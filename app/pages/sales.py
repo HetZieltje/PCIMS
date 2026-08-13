@@ -107,8 +107,20 @@ class SalesPage(QWidget):
                 item.id, item.name, item.item_type, format_cents(item.price_cents),
                 item.purchase_date.isoformat(), status,
             )
+            sort_values = (
+                item.id, item.name.casefold(), item.item_type, item.price_cents,
+                item.purchase_date.toordinal(), status.casefold(),
+            )
             for column, value in enumerate(values):
-                self.expense_table.setItem(row, column, table_item(value, item.id if column == 0 else None))
+                self.expense_table.setItem(
+                    row,
+                    column,
+                    table_item(
+                        value,
+                        item.id if column == 0 else None,
+                        sort_value=sort_values[column],
+                    ),
+                )
         self.expense_table.setSortingEnabled(True)
 
         sales = list_sales()
@@ -121,8 +133,20 @@ class SalesPage(QWidget):
                 format_cents(sale.cost_cents), format_cents(sale.selling_price_cents),
                 format_cents(sale.profit_cents), len(sale.items),
             )
+            sort_values = (
+                sale.id, sale.sale_date.toordinal(), sale.kind, sale.name.casefold(),
+                sale.cost_cents, sale.selling_price_cents, sale.profit_cents, len(sale.items),
+            )
             for column, value in enumerate(values):
-                self.sale_table.setItem(row, column, table_item(value, sale.id if column == 0 else None))
+                self.sale_table.setItem(
+                    row,
+                    column,
+                    table_item(
+                        value,
+                        sale.id if column == 0 else None,
+                        sort_value=sort_values[column],
+                    ),
+                )
         self.sale_table.setSortingEnabled(True)
         self._render_details()
 
@@ -136,8 +160,20 @@ class SalesPage(QWidget):
                 item.id, item.name, item.item_type, format_cents(item.price_cents),
                 item.purchase_date.isoformat(),
             )
+            sort_values = (
+                item.id, item.name.casefold(), item.item_type,
+                item.price_cents, item.purchase_date.toordinal(),
+            )
             for column, value in enumerate(values):
-                self.detail_table.setItem(row, column, table_item(value, item.id if column == 0 else None))
+                self.detail_table.setItem(
+                    row,
+                    column,
+                    table_item(
+                        value,
+                        item.id if column == 0 else None,
+                        sort_value=sort_values[column],
+                    ),
+                )
         self.detail_table.setSortingEnabled(True)
 
     def undo_selected(self):

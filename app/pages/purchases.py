@@ -89,6 +89,10 @@ class PurchasesPage(QWidget):
         names = sorted({expense.name for expense in list_expenses()}, key=str.casefold)
         self._completion_model.setStringList(names)
 
+    @property
+    def has_staged_items(self):
+        return bool(self._staged)
+
     def add_line(self):
         name = self.name.text().strip()
         if not name:
@@ -151,11 +155,17 @@ class PurchasesPage(QWidget):
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self._staged))
         for row, item in enumerate(self._staged):
-            self.table.setItem(row, 0, table_item(item["staged_id"], item["staged_id"]))
+            self.table.setItem(
+                row, 0, table_item(item["staged_id"], item["staged_id"], item["staged_id"])
+            )
             self.table.setItem(row, 1, table_item(item["name"]))
             self.table.setItem(row, 2, table_item(item["item_type"]))
-            self.table.setItem(row, 3, table_item(format_cents(item["price_cents"])))
-            self.table.setItem(row, 4, table_item(item["purchase_date"].isoformat()))
+            self.table.setItem(
+                row, 3, table_item(format_cents(item["price_cents"]), sort_value=item["price_cents"])
+            )
+            self.table.setItem(
+                row, 4, table_item(item["purchase_date"].isoformat(), sort_value=item["purchase_date"].toordinal())
+            )
         self.table.setSortingEnabled(True)
         self.total_label.setText(
             f"Staged total: {format_cents(sum(item['price_cents'] for item in self._staged))}"

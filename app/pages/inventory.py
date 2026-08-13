@@ -135,8 +135,20 @@ class InventoryPage(QWidget):
                 item.id, item.name, item.item_type, format_cents(item.price_cents),
                 item.purchase_date.isoformat(), item.pc_name or "Available",
             )
+            sort_values = (
+                item.id, item.name.casefold(), item.item_type, item.price_cents,
+                item.purchase_date.toordinal(), (item.pc_name or "Available").casefold(),
+            )
             for column, value in enumerate(values):
-                self.parts_table.setItem(row, column, table_item(value, item.id if column == 0 else None))
+                self.parts_table.setItem(
+                    row,
+                    column,
+                    table_item(
+                        value,
+                        item.id if column == 0 else None,
+                        sort_value=sort_values[column],
+                    ),
+                )
         self.parts_table.setSortingEnabled(True)
 
         pcs = list_pcs()
@@ -152,8 +164,17 @@ class InventoryPage(QWidget):
                 for item_type, count in counts.items()
             )
             values = (pc.id, pc.name, format_cents(pc.cost_cents), summary)
+            sort_values = (pc.id, pc.name.casefold(), pc.cost_cents, summary.casefold())
             for column, value in enumerate(values):
-                self.pc_table.setItem(row, column, table_item(value, pc.id if column == 0 else None))
+                self.pc_table.setItem(
+                    row,
+                    column,
+                    table_item(
+                        value,
+                        pc.id if column == 0 else None,
+                        sort_value=sort_values[column],
+                    ),
+                )
         self.pc_table.setSortingEnabled(True)
 
     def _selected_parts(self):

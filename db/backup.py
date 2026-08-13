@@ -18,6 +18,13 @@ def validate_database(path):
         integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise sqlite3.DatabaseError(f"Database integrity check failed: {integrity}")
+        foreign_key_violations = database.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_violations:
+            table, row_id, referenced_table, _ = foreign_key_violations[0]
+            raise sqlite3.DatabaseError(
+                f"Database foreign-key check failed at {table} row {row_id} "
+                f"(missing {referenced_table} record)."
+            )
         version = database.execute("PRAGMA user_version").fetchone()[0]
         if version != SCHEMA_VERSION:
             raise sqlite3.DatabaseError(

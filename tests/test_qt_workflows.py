@@ -9,9 +9,16 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication, QTableWidgetSelectionRange
+from PySide6.QtGui import QCloseEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QMessageBox,
+    QTableWidget,
+    QTableWidgetSelectionRange,
+)
 
 from app.application import create_application
+from app.common import configure_table, table_item
 from app.main_window import MainWindow
 from app.pages.assemble import AssemblePage
 from app.pages.inventory import InventoryPage
@@ -94,6 +101,30 @@ class QtWorkflowTests(unittest.TestCase):
 
         self.assertEqual([item.price_cents for item in list_expenses()], [334, 333, 333])
         page.deleteLater()
+
+    def test_close_warns_before_discarding_staged_purchase(self):
+        window = MainWindow()
+        window.purchases_page._staged.append({"staged_id": 1})
+        event = QCloseEvent()
+        with patch(
+            "app.main_window.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.No,
+        ):
+            window.closeEvent(event)
+        self.assertFalse(event.isAccepted())
+        window.deleteLater()
+
+    def test_table_items_sort_by_typed_values(self):
+        table = QTableWidget()
+        configure_table(table, ("Price",), stretch_column=-1)
+        table.setSortingEnabled(False)
+        table.setRowCount(3)
+        for row, (text, cents) in enumerate((("€100.00", 10000), ("€9.00", 900), ("€20.00", 2000))):
+            table.setItem(row, 0, table_item(text, sort_value=cents))
+        table.setSortingEnabled(True)
+        table.sortItems(0, Qt.SortOrder.AscendingOrder)
+        self.assertEqual([table.item(row, 0).text() for row in range(3)], ["€9.00", "€20.00", "€100.00"])
+        table.deleteLater()
 
     def test_assemble_page_checks_concrete_ids_and_assembles(self):
         expected_ids = [self.purchase("RAM", "RAM", 40), self.purchase("RAM", "RAM", 45)]

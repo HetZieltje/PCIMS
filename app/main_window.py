@@ -107,6 +107,18 @@ class MainWindow(QMainWindow):
         self.settings.setValue("theme", theme)
 
     def closeEvent(self, event: QCloseEvent):
+        if self.purchases_page.has_staged_items:
+            answer = QMessageBox.question(
+                self,
+                "Unrecorded purchase",
+                "The Purchases tab contains items that have not been recorded. "
+                "Close and discard them?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         try:
             create_backup()
         except (OSError, ValueError, sqlite3.DatabaseError) as error:

@@ -11,6 +11,18 @@ from PySide6.QtWidgets import (
 
 
 ID_ROLE = Qt.ItemDataRole.UserRole
+SORT_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+class SortableTableItem(QTableWidgetItem):
+    """Table item that sorts by a typed value instead of rendered text."""
+
+    def __lt__(self, other):
+        left = self.data(SORT_ROLE)
+        right = other.data(SORT_ROLE)
+        if left is not None and right is not None:
+            return left < right
+        return super().__lt__(other)
 
 
 def configure_table(table: QTableWidget, headers, stretch_column=1):
@@ -28,10 +40,12 @@ def configure_table(table: QTableWidget, headers, stretch_column=1):
         header.setSectionResizeMode(stretch_column, QHeaderView.ResizeMode.Stretch)
 
 
-def table_item(text, record_id=None, alignment=None):
-    item = QTableWidgetItem(str(text))
+def table_item(text, record_id=None, sort_value=None, alignment=None):
+    item = SortableTableItem(str(text))
     if record_id is not None:
         item.setData(ID_ROLE, int(record_id))
+    if sort_value is not None:
+        item.setData(SORT_ROLE, sort_value)
     if alignment is not None:
         item.setTextAlignment(alignment)
     return item
