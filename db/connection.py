@@ -20,9 +20,11 @@ def get_data_dir():
     return (Path.home() / ".local" / "share" / "pcims").resolve()
 
 
-_database_path = Path(
-    os.environ.get("PCIMS_DB_PATH", get_data_dir() / "pcims.db")
-).expanduser().resolve()
+_database_path = (
+    Path(os.environ.get("PCIMS_DB_PATH", get_data_dir() / "pcims.db"))
+    .expanduser()
+    .resolve()
+)
 
 
 def get_database_path():

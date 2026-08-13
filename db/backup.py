@@ -14,7 +14,9 @@ from db.queries import REQUIRED_TABLES, SCHEMA_COLUMNS, SCHEMA_VERSION
 
 def validate_database(path):
     resolved = Path(path).expanduser().resolve()
-    with closing(sqlite3.connect(f"file:{resolved.as_posix()}?mode=ro", uri=True)) as database:
+    with closing(
+        sqlite3.connect(f"file:{resolved.as_posix()}?mode=ro", uri=True)
+    ) as database:
         integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise sqlite3.DatabaseError(f"Database integrity check failed: {integrity}")
@@ -31,7 +33,8 @@ def validate_database(path):
                 f"Backup schema {version} is incompatible with required schema {SCHEMA_VERSION}."
             )
         tables = {
-            row[0] for row in database.execute(
+            row[0]
+            for row in database.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
@@ -41,25 +44,30 @@ def validate_database(path):
                 f"Database is missing required tables: {', '.join(sorted(missing))}"
             )
         for table, expected in SCHEMA_COLUMNS.items():
-            actual = tuple(row[1] for row in database.execute(f'PRAGMA table_info("{table}")'))
+            actual = tuple(
+                row[1] for row in database.execute(f'PRAGMA table_info("{table}")')
+            )
             if actual != expected:
-                raise sqlite3.DatabaseError(f"Database table '{table}' has an incompatible layout.")
+                raise sqlite3.DatabaseError(
+                    f"Database table '{table}' has an incompatible layout."
+                )
 
 
 def create_backup(destination_directory=None, keep=14):
     if keep < 1:
         raise ValueError("At least one backup must be retained.")
-    destination = Path(
-        destination_directory or get_database_path().parent / "backups"
-    ).expanduser().resolve()
+    destination = (
+        Path(destination_directory or get_database_path().parent / "backups")
+        .expanduser()
+        .resolve()
+    )
     destination.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     final_path = destination / f"pcims_{stamp}.db"
     temporary_path = final_path.with_suffix(".tmp")
     try:
-        with connection() as source:
-            with closing(sqlite3.connect(temporary_path)) as target:
-                source.backup(target)
+        with connection() as source, closing(sqlite3.connect(temporary_path)) as target:
+            source.backup(target)
         validate_database(temporary_path)
         os.replace(temporary_path, final_path)
     finally:
@@ -67,7 +75,9 @@ def create_backup(destination_directory=None, keep=14):
             temporary_path.unlink()
 
     backups = sorted(
-        destination.glob("pcims_*.db"), key=lambda path: path.stat().st_mtime, reverse=True
+        destination.glob("pcims_*.db"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
     )
     for old_backup in backups[keep:]:
         old_backup.unlink()
@@ -83,7 +93,9 @@ def restore_backup(backup_path, pre_restore_directory=None):
         raise ValueError("The active database cannot be restored over itself.")
     validate_database(source_path)
 
-    staged_path = live_path.with_name(f".{live_path.name}.{uuid.uuid4().hex}.restore.tmp")
+    staged_path = live_path.with_name(
+        f".{live_path.name}.{uuid.uuid4().hex}.restore.tmp"
+    )
     try:
         shutil.copy2(source_path, staged_path)
         validate_database(staged_path)

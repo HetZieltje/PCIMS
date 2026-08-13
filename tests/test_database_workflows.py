@@ -41,37 +41,91 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def buy(self, name, item_type, price, purchase_date=None):
-        return add_expenses([{
-            "name": name,
-            "item_type": item_type,
-            "price": price,
-            "purchase_date": purchase_date,
-        }])[0]
+        return add_expenses(
+            [
+                {
+                    "name": name,
+                    "item_type": item_type,
+                    "price": price,
+                    "purchase_date": purchase_date,
+                }
+            ]
+        )[0]
 
     def test_schema_contains_only_authoritative_current_tables_and_columns(self):
         with connection() as database:
-            self.assertEqual(database.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+            self.assertEqual(
+                database.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+            )
             tables = {
-                row[0] for row in database.execute(
+                row[0]
+                for row in database.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
                 )
             }
-            expense_columns = [row[1] for row in database.execute("PRAGMA table_info(expenses)")]
-            pc_columns = [row[1] for row in database.execute("PRAGMA table_info(assembled_pcs)")]
-            sale_columns = [row[1] for row in database.execute("PRAGMA table_info(sales)")]
+            expense_columns = [
+                row[1] for row in database.execute("PRAGMA table_info(expenses)")
+            ]
+            pc_columns = [
+                row[1] for row in database.execute("PRAGMA table_info(assembled_pcs)")
+            ]
+            sale_columns = [
+                row[1] for row in database.execute("PRAGMA table_info(sales)")
+            ]
 
-        self.assertEqual(tables, {"expenses", "assembled_pcs", "pc_parts", "sales", "sale_items"})
-        self.assertEqual(expense_columns, ["id", "name", "item_type", "price_cents", "purchase_date"])
+        self.assertEqual(
+            tables, {"expenses", "assembled_pcs", "pc_parts", "sales", "sale_items"}
+        )
+        self.assertEqual(
+            expense_columns, ["id", "name", "item_type", "price_cents", "purchase_date"]
+        )
         self.assertEqual(pc_columns, ["id", "name"])
         self.assertEqual(
             sale_columns,
             ["id", "name", "kind", "cost_cents", "selling_price_cents", "sale_date"],
         )
 
+    def test_membership_indexes_cover_display_order(self):
+        with connection() as database:
+            for table, index_name in (
+                ("pc_parts", "pc_parts_in_display_order"),
+                ("sale_items", "sale_items_in_display_order"),
+            ):
+                plan = " ".join(
+                    row[3]
+                    for row in database.execute(
+                        f"EXPLAIN QUERY PLAN SELECT * FROM {table} "
+                        "WHERE "
+                        + ("pc_id" if table == "pc_parts" else "sale_id")
+                        + "=1 ORDER BY position"
+                    )
+                )
+                self.assertIn(index_name, plan)
+                self.assertNotIn("TEMP B-TREE", plan)
+
+    def test_initialize_restores_current_schema_indexes_idempotently(self):
+        with connection() as database:
+            database.execute("DROP INDEX pc_parts_in_display_order")
+            database.execute("DROP INDEX sale_items_in_display_order")
+
+        initialize_database()
+
+        with connection() as database:
+            indexes = {
+                row[0]
+                for row in database.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                )
+            }
+        self.assertIn("pc_parts_in_display_order", indexes)
+        self.assertIn("sale_items_in_display_order", indexes)
+
     def test_incompatible_schema_is_rejected_instead_of_mutated(self):
         legacy_path = Path(self.temporary_directory.name) / "legacy.db"
         with closing(sqlite3.connect(legacy_path)) as database:
-            database.execute("CREATE TABLE expenses (id INTEGER PRIMARY KEY, price REAL)")
+            database.execute(
+                "CREATE TABLE expenses (id INTEGER PRIMARY KEY, price REAL)"
+            )
             database.execute("PRAGMA user_version=2")
         configure_database(legacy_path)
 
@@ -80,11 +134,16 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         with closing(sqlite3.connect(legacy_path)) as database:
             self.assertEqual(database.execute("PRAGMA user_version").fetchone()[0], 2)
-            self.assertEqual([row[1] for row in database.execute("PRAGMA table_info(expenses)")], ["id", "price"])
+            self.assertEqual(
+                [row[1] for row in database.execute("PRAGMA table_info(expenses)")],
+                ["id", "price"],
+            )
 
     def test_current_version_with_wrong_layout_is_rejected(self):
         with connection() as database:
-            database.execute("ALTER TABLE expenses RENAME COLUMN price_cents TO price_value")
+            database.execute(
+                "ALTER TABLE expenses RENAME COLUMN price_cents TO price_value"
+            )
 
         with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
             initialize_database()
@@ -101,10 +160,12 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def test_purchase_bundle_is_atomic(self):
         with self.assertRaises(ValidationError):
-            add_expenses([
-                {"name": "CPU", "item_type": "CPU", "price": 10},
-                {"name": "Bad", "item_type": "Not a component", "price": 5},
-            ])
+            add_expenses(
+                [
+                    {"name": "CPU", "item_type": "CPU", "price": 10},
+                    {"name": "Bad", "item_type": "Not a component", "price": 5},
+                ]
+            )
         self.assertEqual(list_expenses(), ())
 
     def test_assembly_uses_expense_ids_as_its_only_membership_source(self):

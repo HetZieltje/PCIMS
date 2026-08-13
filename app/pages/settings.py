@@ -29,11 +29,14 @@ class SettingsPage(QWidget):
         database_path = get_database_path()
         path_label = QLabel(str(database_path))
         path_label.setTextInteractionFlags(
-            path_label.textInteractionFlags() | Qt.TextInteractionFlag.TextSelectableByMouse
+            path_label.textInteractionFlags()
+            | Qt.TextInteractionFlag.TextSelectableByMouse
         )
         open_folder = QPushButton("Open data folder")
         open_folder.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(database_path.parent)))
+            lambda: QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(database_path.parent))
+            )
         )
         location_row = QHBoxLayout()
         location_row.addWidget(path_label, 1)

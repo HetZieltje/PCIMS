@@ -1,6 +1,6 @@
 """Presentation-level money parsing and formatting."""
 
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidOperation
 
 
 def parse_money_cents(value):
@@ -13,7 +13,7 @@ def parse_money_cents(value):
         raise ValueError("Amount must be finite and non-negative.")
     if amount.as_tuple().exponent < -2:
         raise ValueError("Amount can have at most two decimal places.")
-    return int((amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
 def cents_as_decimal(cents):

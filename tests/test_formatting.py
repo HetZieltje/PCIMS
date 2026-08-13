@@ -23,7 +23,9 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(sum(allocate_cents(1000, 3)), 1000)
 
     def test_weighted_allocation_preserves_every_cent(self):
-        self.assertEqual(allocate_weighted_cents(1000, [33.33, 33.33, 33.34]), [333, 333, 334])
+        self.assertEqual(
+            allocate_weighted_cents(1000, [33.33, 33.33, 33.34]), [333, 333, 334]
+        )
 
     def test_format_cents(self):
         self.assertEqual(format_cents(123456), "€1,234.56")

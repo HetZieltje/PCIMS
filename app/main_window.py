@@ -3,7 +3,7 @@
 import sqlite3
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QColor, QCloseEvent, QPalette
+from PySide6.QtGui import QCloseEvent, QColor, QPalette
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTabWidget
 
 from app.pages.assemble import AssemblePage
@@ -81,7 +81,9 @@ class MainWindow(QMainWindow):
             palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 212))
             palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
             palette.setColor(
-                QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(125, 125, 125)
+                QPalette.ColorGroup.Disabled,
+                QPalette.ColorRole.Text,
+                QColor(125, 125, 125),
             )
             application.setPalette(palette)
         elif theme == "dark":
@@ -98,7 +100,11 @@ class MainWindow(QMainWindow):
             palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
             palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 212))
             palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-            palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(130, 130, 130))
+            palette.setColor(
+                QPalette.ColorGroup.Disabled,
+                QPalette.ColorRole.Text,
+                QColor(130, 130, 130),
+            )
             application.setPalette(palette)
         if theme != "system":
             application.setStyleSheet(

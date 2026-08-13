@@ -1,19 +1,31 @@
 """Current-schema data access and atomic business workflows for PCIMS."""
 
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from db.connection import connection
 from db.models import AssembledPC, Expense, FinancialSummary, Sale
 
-
 SCHEMA_VERSION = 3
 ITEM_TYPES = (
-    "CPU", "Cooler", "GPU", "Motherboard", "RAM", "SSD", "HDD",
-    "Case", "PSU", "Fan", "Extra",
+    "CPU",
+    "Cooler",
+    "GPU",
+    "Motherboard",
+    "RAM",
+    "SSD",
+    "HDD",
+    "Case",
+    "PSU",
+    "Fan",
+    "Extra",
 )
 REQUIRED_TABLES = {
-    "expenses", "assembled_pcs", "pc_parts", "sales", "sale_items",
+    "expenses",
+    "assembled_pcs",
+    "pc_parts",
+    "sales",
+    "sale_items",
 }
 SCHEMA_COLUMNS = {
     "expenses": ("id", "name", "item_type", "price_cents", "purchase_date"),
@@ -58,7 +70,7 @@ def _money_cents(value, label="Price"):
         raise ValidationError(f"{label} must be numeric.") from exc
     if not amount.is_finite() or amount < 0:
         raise ValidationError(f"{label} must be a finite, non-negative number.")
-    return int((amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
 def _positive_id(value, label="ID"):
@@ -93,18 +105,33 @@ def _iso_date(value):
         raise ValidationError("Date must use the YYYY-MM-DD format.") from exc
 
 
+def _ensure_current_indexes(database):
+    """Apply idempotent performance indexes within the current schema version."""
+    database.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS pc_parts_in_display_order
+            ON pc_parts (pc_id, position);
+        CREATE INDEX IF NOT EXISTS sale_items_in_display_order
+            ON sale_items (sale_id, position);
+        """
+    )
+
+
 def initialize_database():
     """Create the current schema, or reject any incompatible existing schema."""
     with connection() as database:
         tables = {
-            row[0] for row in database.execute(
+            row[0]
+            for row in database.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
         version = database.execute("PRAGMA user_version").fetchone()[0]
         if tables:
             columns_match = REQUIRED_TABLES.issubset(tables) and all(
-                tuple(row[1] for row in database.execute(f'PRAGMA table_info("{table}")'))
+                tuple(
+                    row[1] for row in database.execute(f'PRAGMA table_info("{table}")')
+                )
                 == expected
                 for table, expected in SCHEMA_COLUMNS.items()
             )
@@ -113,6 +140,7 @@ def initialize_database():
                     f"Database schema {version} is incompatible with required schema "
                     f"{SCHEMA_VERSION}. Restore a current-format backup or choose a new database."
                 )
+            _ensure_current_indexes(database)
             return
 
         allowed_types = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
@@ -173,6 +201,7 @@ def initialize_database():
             PRAGMA user_version = {SCHEMA_VERSION};
             """
         )
+        _ensure_current_indexes(database)
 
 
 def _expense_from_row(row):
@@ -182,9 +211,9 @@ def _expense_from_row(row):
         item_type=row["item_type"],
         price_cents=row["price_cents"],
         purchase_date=date.fromisoformat(row["purchase_date"]),
-        pc_id=row["pc_id"] if "pc_id" in row.keys() else None,
-        pc_name=row["pc_name"] if "pc_name" in row.keys() else None,
-        sale_id=row["sale_id"] if "sale_id" in row.keys() else None,
+        pc_id=row["pc_id"],
+        pc_name=row["pc_name"],
+        sale_id=row["sale_id"],
     )
 
 
@@ -235,7 +264,12 @@ def list_inventory(item_type=None, available_only=False):
         parameters.append(_item_type(item_type))
     if available_only:
         clauses.append("p.id IS NULL")
-    sql = _EXPENSE_SELECT + " WHERE " + " AND ".join(clauses) + " ORDER BY e.item_type,e.name,e.id"
+    sql = (
+        _EXPENSE_SELECT
+        + " WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY e.item_type,e.name,e.id"
+    )
     with connection() as database:
         rows = database.execute(sql, parameters).fetchall()
     return tuple(_expense_from_row(row) for row in rows)
@@ -254,10 +288,16 @@ def delete_expenses(expense_ids):
             raise NotFoundError(f"Expense {missing} does not exist.")
         for row in rows:
             if row["pc_id"] is not None:
-                raise ValidationError(f"Expense {row['id']} belongs to PC '{row['pc_name']}'.")
+                raise ValidationError(
+                    f"Expense {row['id']} belongs to PC '{row['pc_name']}'."
+                )
             if row["sale_id"] is not None:
-                raise ValidationError(f"Expense {row['id']} has sale history. Undo the sale first.")
-        database.executemany("DELETE FROM expenses WHERE id=?", ((item_id,) for item_id in ids))
+                raise ValidationError(
+                    f"Expense {row['id']} has sale history. Undo the sale first."
+                )
+        database.executemany(
+            "DELETE FROM expenses WHERE id=?", ((item_id,) for item_id in ids)
+        )
 
 
 def rename_expenses(expense_ids, new_name):
@@ -280,7 +320,9 @@ def assemble_pc(name, expense_ids):
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
     with connection() as database:
-        if database.execute("SELECT 1 FROM assembled_pcs WHERE name=?", (name,)).fetchone():
+        if database.execute(
+            "SELECT 1 FROM assembled_pcs WHERE name=?", (name,)
+        ).fetchone():
             raise ValidationError(f"A PC named '{name}' already exists.")
         rows = database.execute(
             _EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})", ids
@@ -290,7 +332,9 @@ def assemble_pc(name, expense_ids):
         for row in rows:
             if row["pc_id"] is not None or row["sale_id"] is not None:
                 raise ValidationError(f"'{row['name']}' is not available for assembly.")
-        pc_id = database.execute("INSERT INTO assembled_pcs (name) VALUES (?)", (name,)).lastrowid
+        pc_id = database.execute(
+            "INSERT INTO assembled_pcs (name) VALUES (?)", (name,)
+        ).lastrowid
         database.executemany(
             "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
             ((pc_id, expense_id, position) for position, expense_id in enumerate(ids)),
@@ -300,13 +344,19 @@ def assemble_pc(name, expense_ids):
 
 def list_pcs():
     with connection() as database:
-        pcs = database.execute("SELECT id,name FROM assembled_pcs ORDER BY name,id").fetchall()
+        pcs = database.execute(
+            "SELECT id,name FROM assembled_pcs ORDER BY name,id"
+        ).fetchall()
         result = []
         for pc in pcs:
             rows = database.execute(
                 _EXPENSE_SELECT + " WHERE p.id=? ORDER BY pp.position", (pc["id"],)
             ).fetchall()
-            result.append(AssembledPC(pc["id"], pc["name"], tuple(_expense_from_row(row) for row in rows)))
+            result.append(
+                AssembledPC(
+                    pc["id"], pc["name"], tuple(_expense_from_row(row) for row in rows)
+                )
+            )
     return tuple(result)
 
 
@@ -326,7 +376,9 @@ def rename_pc(pc_id, new_name):
             "SELECT 1 FROM assembled_pcs WHERE name=? AND id<>?", (new_name, pc_id)
         ).fetchone():
             raise ValidationError(f"A PC named '{new_name}' already exists.")
-        result = database.execute("UPDATE assembled_pcs SET name=? WHERE id=?", (new_name, pc_id))
+        result = database.execute(
+            "UPDATE assembled_pcs SET name=? WHERE id=?", (new_name, pc_id)
+        )
         if result.rowcount != 1:
             raise NotFoundError(f"PC {pc_id} does not exist.")
 
@@ -363,7 +415,10 @@ def sell_items(expense_ids, selling_price, sale_date=None):
         ).lastrowid
         database.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
-            ((sale_id, expense_id, position) for position, expense_id in enumerate(ids)),
+            (
+                (sale_id, expense_id, position)
+                for position, expense_id in enumerate(ids)
+            ),
         )
         return sale_id
 
@@ -373,7 +428,9 @@ def sell_pc(pc_id, selling_price, sale_date=None):
     selling_cents = _money_cents(selling_price, "Selling price")
     sale_day = _iso_date(sale_date)
     with connection() as database:
-        pc = database.execute("SELECT id,name FROM assembled_pcs WHERE id=?", (pc_id,)).fetchone()
+        pc = database.execute(
+            "SELECT id,name FROM assembled_pcs WHERE id=?", (pc_id,)
+        ).fetchone()
         if pc is None:
             raise NotFoundError(f"PC {pc_id} does not exist.")
         rows = database.execute(
@@ -391,7 +448,10 @@ def sell_pc(pc_id, selling_price, sale_date=None):
         ).lastrowid
         database.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
-            ((sale_id, expense_id, position) for position, expense_id in enumerate(expense_ids)),
+            (
+                (sale_id, expense_id, position)
+                for position, expense_id in enumerate(expense_ids)
+            ),
         )
         return sale_id
 
@@ -404,32 +464,44 @@ def list_sales():
         result = []
         for sale in sales:
             rows = database.execute(
-                _EXPENSE_SELECT + " WHERE si.sale_id=? ORDER BY si.position", (sale["id"],)
+                _EXPENSE_SELECT + " WHERE si.sale_id=? ORDER BY si.position",
+                (sale["id"],),
             ).fetchall()
-            result.append(Sale(
-                id=sale["id"], name=sale["name"], kind=sale["kind"],
-                cost_cents=sale["cost_cents"], selling_price_cents=sale["selling_price_cents"],
-                sale_date=date.fromisoformat(sale["sale_date"]),
-                items=tuple(_expense_from_row(row) for row in rows),
-            ))
+            result.append(
+                Sale(
+                    id=sale["id"],
+                    name=sale["name"],
+                    kind=sale["kind"],
+                    cost_cents=sale["cost_cents"],
+                    selling_price_cents=sale["selling_price_cents"],
+                    sale_date=date.fromisoformat(sale["sale_date"]),
+                    items=tuple(_expense_from_row(row) for row in rows),
+                )
+            )
     return tuple(result)
 
 
 def undo_sale(sale_id):
     sale_id = _positive_id(sale_id, "Sale ID")
     with connection() as database:
-        sale = database.execute("SELECT id,name,kind FROM sales WHERE id=?", (sale_id,)).fetchone()
+        sale = database.execute(
+            "SELECT id,name,kind FROM sales WHERE id=?", (sale_id,)
+        ).fetchone()
         if sale is None:
             raise NotFoundError(f"Sale {sale_id} does not exist.")
         item_ids = [
-            row[0] for row in database.execute(
-                "SELECT expense_id FROM sale_items WHERE sale_id=? ORDER BY position", (sale_id,)
+            row[0]
+            for row in database.execute(
+                "SELECT expense_id FROM sale_items WHERE sale_id=? ORDER BY position",
+                (sale_id,),
             )
         ]
         if not item_ids:
             raise ValidationError(f"Sale {sale_id} contains no recoverable items.")
         if sale["kind"] == "pc":
-            if database.execute("SELECT 1 FROM assembled_pcs WHERE name=?", (sale["name"],)).fetchone():
+            if database.execute(
+                "SELECT 1 FROM assembled_pcs WHERE name=?", (sale["name"],)
+            ).fetchone():
                 raise ValidationError(
                     f"Cannot undo while an assembled PC named '{sale['name']}' exists."
                 )
@@ -439,7 +511,10 @@ def undo_sale(sale_id):
             ).lastrowid
             database.executemany(
                 "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
-                ((pc_id, expense_id, position) for position, expense_id in enumerate(item_ids)),
+                (
+                    (pc_id, expense_id, position)
+                    for position, expense_id in enumerate(item_ids)
+                ),
             )
         else:
             database.execute("DELETE FROM sales WHERE id=?", (sale_id,))

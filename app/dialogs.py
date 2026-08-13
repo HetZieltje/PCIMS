@@ -56,4 +56,6 @@ class SaleDialog(QDialog):
         dialog = cls(item_name, parent)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
-        return cents_as_decimal(dialog._amount_cents), dialog.sale_date.date().toPython()
+        return cents_as_decimal(
+            dialog._amount_cents
+        ), dialog.sale_date.date().toPython()

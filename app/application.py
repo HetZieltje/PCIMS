@@ -3,10 +3,13 @@
 import sqlite3
 import sys
 
+from PySide6.QtCore import QLockFile
 from PySide6.QtWidgets import QApplication, QMessageBox, QStyleFactory
 
+from app.errors import install_exception_hook
 from app.main_window import MainWindow
 from db.backup import create_backup
+from db.connection import get_database_path
 from db.queries import SchemaVersionError, initialize_database
 
 
@@ -21,29 +24,50 @@ def create_application(argv=None):
     return application
 
 
+def acquire_instance_lock(database_path=None):
+    """Lock one configured database so two stale GUI sessions cannot race."""
+    database_path = (database_path or get_database_path()).resolve()
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(database_path.with_suffix(database_path.suffix + ".lock")))
+    lock.setStaleLockTime(30_000)
+    return lock if lock.tryLock(0) else None
+
+
 def main(argv=None):
     application = create_application(argv)
-    try:
-        initialize_database()
-    except SchemaVersionError as error:
-        QMessageBox.critical(None, "Incompatible database", str(error))
-        return 2
-
-    backup_warning = None
-    try:
-        create_backup()
-    except (OSError, ValueError, sqlite3.DatabaseError) as error:
-        backup_warning = str(error)
-
-    window = MainWindow()
-    window.show()
-    if backup_warning:
-        QMessageBox.warning(
-            window,
-            "Backup warning",
-            f"PCIMS started, but the startup backup failed:\n\n{backup_warning}",
+    install_exception_hook()
+    instance_lock = acquire_instance_lock()
+    if instance_lock is None:
+        QMessageBox.critical(
+            None,
+            "PCIMS is already running",
+            "Another PCIMS window is already using this database.",
         )
-    return application.exec()
+        return 3
+    try:
+        try:
+            initialize_database()
+        except SchemaVersionError as error:
+            QMessageBox.critical(None, "Incompatible database", str(error))
+            return 2
+
+        backup_warning = None
+        try:
+            create_backup()
+        except (OSError, ValueError, sqlite3.DatabaseError) as error:
+            backup_warning = str(error)
+
+        window = MainWindow()
+        window.show()
+        if backup_warning:
+            QMessageBox.warning(
+                window,
+                "Backup warning",
+                f"PCIMS started, but the startup backup failed:\n\n{backup_warning}",
+            )
+        return application.exec()
+    finally:
+        instance_lock.unlock()
 
 
 if __name__ == "__main__":

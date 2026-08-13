@@ -12,7 +12,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.common import ask_confirmation, configure_table, selected_ids, show_error, table_item
+from app.common import (
+    ask_confirmation,
+    configure_table,
+    selected_ids,
+    show_error,
+    table_item,
+)
 from app.formatting import format_cents
 from db.queries import get_financial_summary, list_expenses, list_sales, undo_sale
 
@@ -26,13 +32,15 @@ class SalesPage(QWidget):
         self.summary_labels = {}
         summary_box = QGroupBox("Financial summary")
         summary_layout = QGridLayout(summary_box)
-        for column, (key, title) in enumerate((
-            ("expense", "Total purchases"),
-            ("income", "Sales revenue"),
-            ("profit", "Realized profit"),
-            ("inventory", "Inventory value"),
-            ("assets", "Net assets"),
-        )):
+        for column, (key, title) in enumerate(
+            (
+                ("expense", "Total purchases"),
+                ("income", "Sales revenue"),
+                ("profit", "Realized profit"),
+                ("inventory", "Inventory value"),
+                ("assets", "Net assets"),
+            )
+        ):
             title_label = QLabel(title)
             value_label = QLabel("€0.00")
             value_label.setStyleSheet("font-size: 18px; font-weight: 600")
@@ -102,14 +110,26 @@ class SalesPage(QWidget):
         self.expense_table.setSortingEnabled(False)
         self.expense_table.setRowCount(len(expenses))
         for row, item in enumerate(expenses):
-            status = f"Sold #{item.sale_id}" if item.sale_id else (item.pc_name or "Available")
+            status = (
+                f"Sold #{item.sale_id}"
+                if item.sale_id
+                else (item.pc_name or "Available")
+            )
             values = (
-                item.id, item.name, item.item_type, format_cents(item.price_cents),
-                item.purchase_date.isoformat(), status,
+                item.id,
+                item.name,
+                item.item_type,
+                format_cents(item.price_cents),
+                item.purchase_date.isoformat(),
+                status,
             )
             sort_values = (
-                item.id, item.name.casefold(), item.item_type, item.price_cents,
-                item.purchase_date.toordinal(), status.casefold(),
+                item.id,
+                item.name.casefold(),
+                item.item_type,
+                item.price_cents,
+                item.purchase_date.toordinal(),
+                status.casefold(),
             )
             for column, value in enumerate(values):
                 self.expense_table.setItem(
@@ -129,13 +149,24 @@ class SalesPage(QWidget):
         self.sale_table.setRowCount(len(sales))
         for row, sale in enumerate(sales):
             values = (
-                sale.id, sale.sale_date.isoformat(), sale.kind.upper(), sale.name,
-                format_cents(sale.cost_cents), format_cents(sale.selling_price_cents),
-                format_cents(sale.profit_cents), len(sale.items),
+                sale.id,
+                sale.sale_date.isoformat(),
+                sale.kind.upper(),
+                sale.name,
+                format_cents(sale.cost_cents),
+                format_cents(sale.selling_price_cents),
+                format_cents(sale.profit_cents),
+                len(sale.items),
             )
             sort_values = (
-                sale.id, sale.sale_date.toordinal(), sale.kind, sale.name.casefold(),
-                sale.cost_cents, sale.selling_price_cents, sale.profit_cents, len(sale.items),
+                sale.id,
+                sale.sale_date.toordinal(),
+                sale.kind,
+                sale.name.casefold(),
+                sale.cost_cents,
+                sale.selling_price_cents,
+                sale.profit_cents,
+                len(sale.items),
             )
             for column, value in enumerate(values):
                 self.sale_table.setItem(
@@ -152,17 +183,25 @@ class SalesPage(QWidget):
 
     def _render_details(self):
         ids = selected_ids(self.sale_table)
-        items = self._sales[ids[0]].items if len(ids) == 1 and ids[0] in self._sales else ()
+        items = (
+            self._sales[ids[0]].items if len(ids) == 1 and ids[0] in self._sales else ()
+        )
         self.detail_table.setSortingEnabled(False)
         self.detail_table.setRowCount(len(items))
         for row, item in enumerate(items):
             values = (
-                item.id, item.name, item.item_type, format_cents(item.price_cents),
+                item.id,
+                item.name,
+                item.item_type,
+                format_cents(item.price_cents),
                 item.purchase_date.isoformat(),
             )
             sort_values = (
-                item.id, item.name.casefold(), item.item_type,
-                item.price_cents, item.purchase_date.toordinal(),
+                item.id,
+                item.name.casefold(),
+                item.item_type,
+                item.price_cents,
+                item.purchase_date.toordinal(),
             )
             for column, value in enumerate(values):
                 self.detail_table.setItem(
@@ -179,7 +218,9 @@ class SalesPage(QWidget):
     def undo_selected(self):
         ids = selected_ids(self.sale_table)
         if len(ids) != 1:
-            QMessageBox.information(self, "Select one sale", "Select exactly one sale to undo.")
+            QMessageBox.information(
+                self, "Select one sale", "Select exactly one sale to undo."
+            )
             return
         sale = self._sales[ids[0]]
         if not ask_confirmation(self, "Undo sale", f"Undo the sale of '{sale.name}'?"):

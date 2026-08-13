@@ -6,11 +6,11 @@ class ArchitectureTests(unittest.TestCase):
     def test_runtime_has_no_tkinter_or_old_ui_compatibility_layer(self):
         app_directory = Path(__file__).parents[1] / "app"
         source_lines = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in app_directory.rglob("*.py")
+            path.read_text(encoding="utf-8") for path in app_directory.rglob("*.py")
         ).splitlines()
         imports = "\n".join(
-            line.strip() for line in source_lines
+            line.strip()
+            for line in source_lines
             if line.lstrip().startswith(("import ", "from "))
         ).casefold()
         for old_dependency in ("tkinter", "customtkinter", "tkcalendar"):

@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
-
 ID_ROLE = Qt.ItemDataRole.UserRole
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 
@@ -61,10 +60,13 @@ def show_error(parent, title, error):
 
 
 def ask_confirmation(parent, title, text):
-    return QMessageBox.question(
-        parent,
-        title,
-        text,
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        QMessageBox.StandardButton.No,
-    ) == QMessageBox.StandardButton.Yes
+    return (
+        QMessageBox.question(
+            parent,
+            title,
+            text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        == QMessageBox.StandardButton.Yes
+    )

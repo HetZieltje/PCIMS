@@ -18,7 +18,12 @@ from PySide6.QtWidgets import (
 )
 
 from app.common import configure_table, selected_ids, show_error, table_item
-from app.formatting import allocate_cents, cents_as_decimal, format_cents, parse_money_cents
+from app.formatting import (
+    allocate_cents,
+    cents_as_decimal,
+    format_cents,
+    parse_money_cents,
+)
 from db.queries import ITEM_TYPES, add_expenses, list_expenses
 
 
@@ -37,7 +42,9 @@ class PurchasesPage(QWidget):
         self.quantity.setRange(1, 999)
         self.price = QLineEdit()
         self.price.setPlaceholderText("0.00")
-        self.total_for_quantity = QCheckBox("Entered amount is the total for this quantity")
+        self.total_for_quantity = QCheckBox(
+            "Entered amount is the total for this quantity"
+        )
         self.purchase_date = QDateEdit(QDate.currentDate())
         self.purchase_date.setCalendarPopup(True)
         self.purchase_date.setDisplayFormat("yyyy-MM-dd")
@@ -111,13 +118,15 @@ class PurchasesPage(QWidget):
         )
         purchase_date = self.purchase_date.date().toPython()
         for price_cents in prices:
-            self._staged.append({
-                "staged_id": self._next_staged_id,
-                "name": name,
-                "item_type": self.type.currentText(),
-                "price_cents": price_cents,
-                "purchase_date": purchase_date,
-            })
+            self._staged.append(
+                {
+                    "staged_id": self._next_staged_id,
+                    "name": name,
+                    "item_type": self.type.currentText(),
+                    "price_cents": price_cents,
+                    "purchase_date": purchase_date,
+                }
+            )
             self._next_staged_id += 1
         self.name.clear()
         self.price.clear()
@@ -132,14 +141,19 @@ class PurchasesPage(QWidget):
 
     def commit_purchase(self):
         if not self._staged:
-            QMessageBox.information(self, "Nothing to record", "Add at least one item first.")
+            QMessageBox.information(
+                self, "Nothing to record", "Add at least one item first."
+            )
             return
-        items = [{
-            "name": item["name"],
-            "item_type": item["item_type"],
-            "price": cents_as_decimal(item["price_cents"]),
-            "purchase_date": item["purchase_date"],
-        } for item in self._staged]
+        items = [
+            {
+                "name": item["name"],
+                "item_type": item["item_type"],
+                "price": cents_as_decimal(item["price_cents"]),
+                "purchase_date": item["purchase_date"],
+            }
+            for item in self._staged
+        ]
         try:
             add_expenses(items)
         except (ValueError, LookupError) as error:
@@ -156,15 +170,26 @@ class PurchasesPage(QWidget):
         self.table.setRowCount(len(self._staged))
         for row, item in enumerate(self._staged):
             self.table.setItem(
-                row, 0, table_item(item["staged_id"], item["staged_id"], item["staged_id"])
+                row,
+                0,
+                table_item(item["staged_id"], item["staged_id"], item["staged_id"]),
             )
             self.table.setItem(row, 1, table_item(item["name"]))
             self.table.setItem(row, 2, table_item(item["item_type"]))
             self.table.setItem(
-                row, 3, table_item(format_cents(item["price_cents"]), sort_value=item["price_cents"])
+                row,
+                3,
+                table_item(
+                    format_cents(item["price_cents"]), sort_value=item["price_cents"]
+                ),
             )
             self.table.setItem(
-                row, 4, table_item(item["purchase_date"].isoformat(), sort_value=item["purchase_date"].toordinal())
+                row,
+                4,
+                table_item(
+                    item["purchase_date"].isoformat(),
+                    sort_value=item["purchase_date"].toordinal(),
+                ),
             )
         self.table.setSortingEnabled(True)
         self.total_label.setText(

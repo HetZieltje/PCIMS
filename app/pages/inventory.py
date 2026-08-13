@@ -132,12 +132,20 @@ class InventoryPage(QWidget):
         self.parts_table.setRowCount(len(parts))
         for row, item in enumerate(parts):
             values = (
-                item.id, item.name, item.item_type, format_cents(item.price_cents),
-                item.purchase_date.isoformat(), item.pc_name or "Available",
+                item.id,
+                item.name,
+                item.item_type,
+                format_cents(item.price_cents),
+                item.purchase_date.isoformat(),
+                item.pc_name or "Available",
             )
             sort_values = (
-                item.id, item.name.casefold(), item.item_type, item.price_cents,
-                item.purchase_date.toordinal(), (item.pc_name or "Available").casefold(),
+                item.id,
+                item.name.casefold(),
+                item.item_type,
+                item.price_cents,
+                item.purchase_date.toordinal(),
+                (item.pc_name or "Available").casefold(),
             )
             for column, value in enumerate(values):
                 self.parts_table.setItem(
@@ -183,17 +191,25 @@ class InventoryPage(QWidget):
     def _selected_pc(self):
         ids = selected_ids(self.pc_table)
         if len(ids) != 1:
-            QMessageBox.information(self, "Select one PC", "Select exactly one assembled PC.")
+            QMessageBox.information(
+                self, "Select one PC", "Select exactly one assembled PC."
+            )
             return None
         return self._pcs[ids[0]]
 
     def sell_selected_parts(self):
         parts = self._selected_parts()
         if not parts:
-            QMessageBox.information(self, "Nothing selected", "Select one or more items to sell.")
+            QMessageBox.information(
+                self, "Nothing selected", "Select one or more items to sell."
+            )
             return
         if any(not part.is_available for part in parts):
-            QMessageBox.warning(self, "Assigned component", "Disassemble the PC before selling its components.")
+            QMessageBox.warning(
+                self,
+                "Assigned component",
+                "Disassemble the PC before selling its components.",
+            )
             return
         label = parts[0].name if len(parts) == 1 else f"{len(parts)} selected items"
         values = SaleDialog.get_sale(label, self)
@@ -209,10 +225,14 @@ class InventoryPage(QWidget):
     def rename_selected_parts(self):
         parts = self._selected_parts()
         if not parts:
-            QMessageBox.information(self, "Nothing selected", "Select one or more items to rename.")
+            QMessageBox.information(
+                self, "Nothing selected", "Select one or more items to rename."
+            )
             return
         initial = parts[0].name if len({part.name for part in parts}) == 1 else ""
-        name, accepted = QInputDialog.getText(self, "Rename items", "New name", text=initial)
+        name, accepted = QInputDialog.getText(
+            self, "Rename items", "New name", text=initial
+        )
         if not accepted:
             return
         try:
@@ -225,10 +245,14 @@ class InventoryPage(QWidget):
     def delete_selected_parts(self):
         parts = self._selected_parts()
         if not parts:
-            QMessageBox.information(self, "Nothing selected", "Select one or more items to delete.")
+            QMessageBox.information(
+                self, "Nothing selected", "Select one or more items to delete."
+            )
             return
         if not ask_confirmation(
-            self, "Delete expenses", f"Permanently delete {len(parts)} selected expense record(s)?"
+            self,
+            "Delete expenses",
+            f"Permanently delete {len(parts)} selected expense record(s)?",
         ):
             return
         try:
@@ -256,7 +280,9 @@ class InventoryPage(QWidget):
         pc = self._selected_pc()
         if pc is None:
             return
-        name, accepted = QInputDialog.getText(self, "Rename PC", "New name", text=pc.name)
+        name, accepted = QInputDialog.getText(
+            self, "Rename PC", "New name", text=pc.name
+        )
         if not accepted:
             return
         try:
@@ -269,7 +295,9 @@ class InventoryPage(QWidget):
     def disassemble_selected_pc(self):
         pc = self._selected_pc()
         if pc is None or not ask_confirmation(
-            self, "Disassemble PC", f"Disassemble '{pc.name}' and return its components to stock?"
+            self,
+            "Disassemble PC",
+            f"Disassemble '{pc.name}' and return its components to stock?",
         ):
             return
         try:

@@ -59,23 +59,31 @@ class AssemblePage(QWidget):
         for item_type in ITEM_TYPES:
             if not grouped[item_type]:
                 continue
-            group = QTreeWidgetItem((f"{item_type} ({len(grouped[item_type])})", "", "", ""))
+            group = QTreeWidgetItem(
+                (f"{item_type} ({len(grouped[item_type])})", "", "", "")
+            )
             group.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.tree.addTopLevelItem(group)
             for expense in grouped[item_type]:
-                child = QTreeWidgetItem((
-                    expense.name,
-                    format_cents(expense.price_cents),
-                    expense.purchase_date.isoformat(),
-                    str(expense.id),
-                ))
+                child = QTreeWidgetItem(
+                    (
+                        expense.name,
+                        format_cents(expense.price_cents),
+                        expense.purchase_date.isoformat(),
+                        str(expense.id),
+                    )
+                )
                 child.setData(0, ID_ROLE, expense.id)
                 child.setFlags(
-                    child.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
+                    child.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsSelectable
                 )
                 child.setCheckState(
                     0,
-                    Qt.CheckState.Checked if expense.id in selected_ids else Qt.CheckState.Unchecked,
+                    Qt.CheckState.Checked
+                    if expense.id in selected_ids
+                    else Qt.CheckState.Unchecked,
                 )
                 group.addChild(child)
             group.setExpanded(True)
