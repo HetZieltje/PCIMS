@@ -1,9 +1,10 @@
 import sqlite3
 import tempfile
 import unittest
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from db.backup import create_backup, restore_backup, validate_database
 from db.connection import configure_database, connection
@@ -173,8 +174,21 @@ class DatabaseWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(DatabaseIntegrityError, "foreign-key"):
             initialize_database()
 
+    def test_semantically_invalid_current_data_is_rejected(self):
+        item_id = self.buy("CPU", "CPU", 10)
+        with connection() as database:
+            database.execute(
+                "UPDATE expenses SET purchase_date='2025-99-99' WHERE id=?",
+                (item_id,),
+            )
+
+        with self.assertRaisesRegex(DatabaseIntegrityError, "invalid purchase date"):
+            initialize_database()
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "invalid purchase date"):
+            create_backup(Path(self.temporary_directory.name) / "invalid-data-backups")
+
     def test_purchase_uses_integer_cents_and_iso_dates(self):
-        item_id = self.buy("CPU", "cpu", "1,005", date(2026, 8, 13))
+        item_id = self.buy("CPU", "cpu", "1,01", date(2026, 8, 13))
         expense = list_expenses()[0]
 
         self.assertEqual(expense.id, item_id)
@@ -182,6 +196,13 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(expense.price_cents, 101)
         self.assertEqual(expense.purchase_date, date(2026, 8, 13))
         self.assertTrue(expense.is_available)
+
+        for invalid_price in ("1.999", "1000000000"):
+            with (
+                self.subTest(invalid_price=invalid_price),
+                self.assertRaises(ValidationError),
+            ):
+                self.buy("Invalid", "Extra", invalid_price)
 
     def test_purchase_bundle_is_atomic(self):
         with self.assertRaises(ValidationError):
@@ -205,6 +226,32 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         disassemble_pc(pc_id)
         self.assertTrue(all(item.is_available for item in list_inventory()))
+
+    def test_pc_and_sale_listing_use_constant_query_counts(self):
+        pc_parts = [self.buy(f"PC part {index}", "Extra", 10) for index in range(4)]
+        assemble_pc("PC 1", pc_parts[:2])
+        assemble_pc("PC 2", pc_parts[2:])
+        sale_items = [self.buy(f"Sale item {index}", "Extra", 5) for index in range(2)]
+        sell_items([sale_items[0]], 10)
+        sell_items([sale_items[1]], 10)
+
+        for listing in (list_pcs, list_sales):
+            statements = []
+
+            @contextmanager
+            def traced_connection():
+                with connection() as database:
+                    database.set_trace_callback(statements.append)
+                    yield database
+
+            with patch("db.queries.connection", traced_connection):
+                self.assertEqual(len(listing()), 2)
+            selects = [
+                statement
+                for statement in statements
+                if statement.lstrip().upper().startswith("SELECT")
+            ]
+            self.assertEqual(len(selects), 2)
 
     def test_assembly_rolls_back_if_any_item_is_unavailable(self):
         item_id = self.buy("CPU", "CPU", 100)

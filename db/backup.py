@@ -14,6 +14,8 @@ from db.queries import (
     REQUIRED_TRIGGERS,
     SCHEMA_COLUMNS,
     SCHEMA_VERSION,
+    DatabaseIntegrityError,
+    validate_current_data,
 )
 
 
@@ -72,6 +74,10 @@ def validate_database(path):
             raise sqlite3.DatabaseError(
                 "Database integrity triggers do not match the current schema."
             )
+        try:
+            validate_current_data(database)
+        except DatabaseIntegrityError as error:
+            raise sqlite3.DatabaseError(str(error)) from error
 
 
 def create_backup(destination_directory=None, keep=14):

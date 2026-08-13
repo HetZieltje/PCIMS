@@ -14,7 +14,7 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(parse_money_cents("1.01"), 101)
 
     def test_invalid_money_is_rejected(self):
-        for value in ("", "NaN", "Infinity", "-1", "1.234"):
+        for value in ("", "NaN", "Infinity", "-1", "1.234", "1000000000"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_money_cents(value)
 
@@ -30,6 +30,7 @@ class FormattingTests(unittest.TestCase):
     def test_format_cents(self):
         self.assertEqual(format_cents(123456), "€1,234.56")
         self.assertEqual(format_cents(-50), "€-0.50")
+        self.assertEqual(format_cents(9_007_199_254_740_993), "€90,071,992,547,409.93")
 
 
 if __name__ == "__main__":

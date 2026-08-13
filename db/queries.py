@@ -7,6 +7,7 @@ from db.connection import connection
 from db.models import AssembledPC, Expense, FinancialSummary, Sale
 
 SCHEMA_VERSION = 3
+MAX_MONEY_CENTS = 99_999_999_999
 ITEM_TYPES = (
     "CPU",
     "Cooler",
@@ -78,7 +79,12 @@ def _money_cents(value, label="Price"):
         raise ValidationError(f"{label} must be numeric.") from exc
     if not amount.is_finite() or amount < 0:
         raise ValidationError(f"{label} must be a finite, non-negative number.")
-    return int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    if amount.as_tuple().exponent < -2:
+        raise ValidationError(f"{label} can have at most two decimal places.")
+    cents = int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    if cents > MAX_MONEY_CENTS:
+        raise ValidationError(f"{label} is too large.")
+    return cents
 
 
 def _positive_id(value, label="ID"):
@@ -123,6 +129,66 @@ def _ensure_current_indexes(database):
             ON sale_items (sale_id, position);
         """
     )
+
+
+def validate_current_data(database):
+    """Reject structurally valid databases with invalid business records."""
+    for table, column in (("expenses", "purchase_date"), ("sales", "sale_date")):
+        for row_id, stored_date in database.execute(f"SELECT id,{column} FROM {table}"):
+            try:
+                date.fromisoformat(stored_date)
+            except (TypeError, ValueError) as exc:
+                raise DatabaseIntegrityError(
+                    f"Database contains an invalid {column.replace('_', ' ')} "
+                    f"in {table} row {row_id}."
+                ) from exc
+
+    for table, columns in (
+        ("expenses", ("price_cents",)),
+        ("sales", ("cost_cents", "selling_price_cents")),
+    ):
+        for column in columns:
+            invalid = database.execute(
+                f"SELECT id FROM {table} WHERE {column}<0 OR {column}>? LIMIT 1",
+                (MAX_MONEY_CENTS,),
+            ).fetchone()
+            if invalid:
+                raise DatabaseIntegrityError(
+                    f"Database contains an invalid monetary value in {table} "
+                    f"row {invalid[0]}."
+                )
+
+    conflict = database.execute(
+        """SELECT pp.expense_id FROM pc_parts pp
+           JOIN sale_items si ON si.expense_id=pp.expense_id LIMIT 1"""
+    ).fetchone()
+    if conflict:
+        raise DatabaseIntegrityError(
+            f"Expense {conflict[0]} is both assigned to a PC and recorded as sold."
+        )
+
+    empty_pc = database.execute(
+        """SELECT p.id FROM assembled_pcs p
+           LEFT JOIN pc_parts pp ON pp.pc_id=p.id
+           GROUP BY p.id HAVING COUNT(pp.expense_id)=0 LIMIT 1"""
+    ).fetchone()
+    if empty_pc:
+        raise DatabaseIntegrityError(f"Assembled PC {empty_pc[0]} has no components.")
+
+    invalid_sale = database.execute(
+        """SELECT s.id FROM sales s
+           LEFT JOIN sale_items si ON si.sale_id=s.id
+           LEFT JOIN expenses e ON e.id=si.expense_id
+           GROUP BY s.id
+           HAVING COUNT(si.expense_id)=0
+               OR s.cost_cents<>COALESCE(SUM(e.price_cents),0)
+               OR s.sale_date<MAX(e.purchase_date)
+           LIMIT 1"""
+    ).fetchone()
+    if invalid_sale:
+        raise DatabaseIntegrityError(
+            f"Sale {invalid_sale[0]} has inconsistent items, cost, or dates."
+        )
 
 
 def initialize_database():
@@ -172,6 +238,7 @@ def initialize_database():
                     f"Database foreign-key check failed at {table} row {row_id} "
                     f"(missing {referenced_table} record)."
                 )
+            validate_current_data(database)
             _ensure_current_indexes(database)
             return
 
@@ -379,17 +446,15 @@ def list_pcs():
         pcs = database.execute(
             "SELECT id,name FROM assembled_pcs ORDER BY name,id"
         ).fetchall()
-        result = []
-        for pc in pcs:
-            rows = database.execute(
-                _EXPENSE_SELECT + " WHERE p.id=? ORDER BY pp.position", (pc["id"],)
-            ).fetchall()
-            result.append(
-                AssembledPC(
-                    pc["id"], pc["name"], tuple(_expense_from_row(row) for row in rows)
-                )
-            )
-    return tuple(result)
+        rows = database.execute(
+            _EXPENSE_SELECT + " WHERE p.id IS NOT NULL ORDER BY p.id,pp.position"
+        ).fetchall()
+    parts_by_pc = {pc["id"]: [] for pc in pcs}
+    for row in rows:
+        parts_by_pc[row["pc_id"]].append(_expense_from_row(row))
+    return tuple(
+        AssembledPC(pc["id"], pc["name"], tuple(parts_by_pc[pc["id"]])) for pc in pcs
+    )
 
 
 def disassemble_pc(pc_id):
@@ -493,24 +558,25 @@ def list_sales():
         sales = database.execute(
             "SELECT id,name,kind,cost_cents,selling_price_cents,sale_date FROM sales ORDER BY id"
         ).fetchall()
-        result = []
-        for sale in sales:
-            rows = database.execute(
-                _EXPENSE_SELECT + " WHERE si.sale_id=? ORDER BY si.position",
-                (sale["id"],),
-            ).fetchall()
-            result.append(
-                Sale(
-                    id=sale["id"],
-                    name=sale["name"],
-                    kind=sale["kind"],
-                    cost_cents=sale["cost_cents"],
-                    selling_price_cents=sale["selling_price_cents"],
-                    sale_date=date.fromisoformat(sale["sale_date"]),
-                    items=tuple(_expense_from_row(row) for row in rows),
-                )
-            )
-    return tuple(result)
+        rows = database.execute(
+            _EXPENSE_SELECT
+            + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
+        ).fetchall()
+    items_by_sale = {sale["id"]: [] for sale in sales}
+    for row in rows:
+        items_by_sale[row["sale_id"]].append(_expense_from_row(row))
+    return tuple(
+        Sale(
+            id=sale["id"],
+            name=sale["name"],
+            kind=sale["kind"],
+            cost_cents=sale["cost_cents"],
+            selling_price_cents=sale["selling_price_cents"],
+            sale_date=date.fromisoformat(sale["sale_date"]),
+            items=tuple(items_by_sale[sale["id"]]),
+        )
+        for sale in sales
+    )
 
 
 def undo_sale(sale_id):

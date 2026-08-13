@@ -2,6 +2,8 @@
 
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidOperation
 
+from db.queries import MAX_MONEY_CENTS
+
 
 def parse_money_cents(value):
     normalized = str(value).strip().replace("€", "").replace(" ", "").replace(",", ".")
@@ -13,7 +15,10 @@ def parse_money_cents(value):
         raise ValueError("Amount must be finite and non-negative.")
     if amount.as_tuple().exponent < -2:
         raise ValueError("Amount can have at most two decimal places.")
-    return int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    cents = int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    if cents > MAX_MONEY_CENTS:
+        raise ValueError("Amount is too large.")
+    return cents
 
 
 def cents_as_decimal(cents):
@@ -21,7 +26,7 @@ def cents_as_decimal(cents):
 
 
 def format_cents(cents):
-    return f"€{int(cents) / 100:,.2f}"
+    return f"€{Decimal(int(cents)) / 100:,.2f}"
 
 
 def allocate_cents(total_cents, count):
