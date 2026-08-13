@@ -14,8 +14,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pcims.app.common import DATA_OPERATION_ERRORS, ID_ROLE, show_error
+from pcims.app.common import DATA_OPERATION_ERRORS, show_error
 from pcims.app.formatting import format_cents
+from pcims.app.table_model import ID_ROLE
 from pcims.db.models import Expense
 from pcims.domain import ITEM_TYPES, ItemType
 from pcims.services import ApplicationServices, default_services

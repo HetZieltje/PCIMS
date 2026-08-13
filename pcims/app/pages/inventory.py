@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
-    QTableWidget,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -17,16 +17,29 @@ from PySide6.QtWidgets import (
 from pcims.app.common import (
     DATA_OPERATION_ERRORS,
     ask_confirmation,
-    configure_table,
-    selected_ids,
     show_error,
-    table_item,
 )
 from pcims.app.dialogs import SaleDialog
 from pcims.app.formatting import format_cents
+from pcims.app.table_model import (
+    Column,
+    RecordTableModel,
+    configure_table_view,
+    selected_ids,
+)
 from pcims.db.models import AssembledPC, Expense
 from pcims.domain import ITEM_TYPES
 from pcims.services import ApplicationServices, default_services
+
+
+def _component_summary(pc: AssembledPC) -> str:
+    counts: dict[str, int] = {}
+    for part in pc.parts:
+        counts[part.item_type] = counts.get(part.item_type, 0) + 1
+    return ", ".join(
+        f"{count}× {item_type}" if count > 1 else item_type
+        for item_type, count in counts.items()
+    )
 
 
 class InventoryPage(QWidget):
@@ -64,11 +77,31 @@ class InventoryPage(QWidget):
         filters.addWidget(QLabel("Status"))
         filters.addWidget(self.status_filter)
 
-        self.parts_table = QTableWidget()
-        configure_table(
-            self.parts_table,
-            ("ID", "Name", "Type", "Cost", "Purchased", "Status"),
+        self.parts_model = RecordTableModel[Expense](
+            (
+                Column("ID", lambda item: str(item.id), lambda item: item.id),
+                Column("Name", lambda item: item.name, lambda item: item.name.casefold()),
+                Column("Type", lambda item: item.item_type, lambda item: item.item_type),
+                Column(
+                    "Cost",
+                    lambda item: format_cents(item.price_cents),
+                    lambda item: item.price_cents,
+                ),
+                Column(
+                    "Purchased",
+                    lambda item: item.purchase_date.isoformat(),
+                    lambda item: item.purchase_date.toordinal(),
+                ),
+                Column(
+                    "Status",
+                    lambda item: item.pc_name or "Available",
+                    lambda item: (item.pc_name or "Available").casefold(),
+                ),
+            ),
+            lambda item: item.id,
         )
+        self.parts_table = QTableView()
+        configure_table_view(self.parts_table, self.parts_model)
         part_buttons = QHBoxLayout()
         for text, callback in (
             ("Sell selected", self.sell_selected_parts),
@@ -85,8 +118,25 @@ class InventoryPage(QWidget):
         parts_box = QGroupBox("Components and extras")
         parts_box.setLayout(parts_layout)
 
-        self.pc_table = QTableWidget()
-        configure_table(self.pc_table, ("ID", "Name", "Cost", "Components"))
+        self.pc_model = RecordTableModel[AssembledPC](
+            (
+                Column("ID", lambda pc: str(pc.id), lambda pc: pc.id),
+                Column("Name", lambda pc: pc.name, lambda pc: pc.name.casefold()),
+                Column(
+                    "Cost",
+                    lambda pc: format_cents(pc.cost_cents),
+                    lambda pc: pc.cost_cents,
+                ),
+                Column(
+                    "Components",
+                    _component_summary,
+                    lambda pc: _component_summary(pc).casefold(),
+                ),
+            ),
+            lambda pc: pc.id,
+        )
+        self.pc_table = QTableView()
+        configure_table_view(self.pc_table, self.pc_model)
         pc_buttons = QHBoxLayout()
         for text, callback in (
             ("Sell PC", self.sell_selected_pc),
@@ -134,63 +184,11 @@ class InventoryPage(QWidget):
         elif status == "assigned":
             parts = tuple(item for item in parts if item.pc_id is not None)
         self._parts = {item.id: item for item in parts}
-
-        self.parts_table.setSortingEnabled(False)
-        self.parts_table.setRowCount(len(parts))
-        for row, item in enumerate(parts):
-            values = (
-                item.id,
-                item.name,
-                item.item_type,
-                format_cents(item.price_cents),
-                item.purchase_date.isoformat(),
-                item.pc_name or "Available",
-            )
-            sort_values = (
-                item.id,
-                item.name.casefold(),
-                item.item_type,
-                item.price_cents,
-                item.purchase_date.toordinal(),
-                (item.pc_name or "Available").casefold(),
-            )
-            for column, value in enumerate(values):
-                self.parts_table.setItem(
-                    row,
-                    column,
-                    table_item(
-                        value,
-                        item.id if column == 0 else None,
-                        sort_value=sort_values[column],
-                    ),
-                )
-        self.parts_table.setSortingEnabled(True)
+        self.parts_model.set_records(parts)
 
     def _render_pcs(self, pcs: tuple[AssembledPC, ...]) -> None:
         self._pcs = {pc.id: pc for pc in pcs}
-        self.pc_table.setSortingEnabled(False)
-        self.pc_table.setRowCount(len(pcs))
-        for row, pc in enumerate(pcs):
-            counts: dict[str, int] = {}
-            for part in pc.parts:
-                counts[part.item_type] = counts.get(part.item_type, 0) + 1
-            summary = ", ".join(
-                f"{count}× {item_type}" if count > 1 else item_type
-                for item_type, count in counts.items()
-            )
-            values = (pc.id, pc.name, format_cents(pc.cost_cents), summary)
-            sort_values = (pc.id, pc.name.casefold(), pc.cost_cents, summary.casefold())
-            for column, value in enumerate(values):
-                self.pc_table.setItem(
-                    row,
-                    column,
-                    table_item(
-                        value,
-                        pc.id if column == 0 else None,
-                        sort_value=sort_values[column],
-                    ),
-                )
-        self.pc_table.setSortingEnabled(True)
+        self.pc_model.set_records(pcs)
 
     def _selected_parts(self) -> list[Expense]:
         return [self._parts[item_id] for item_id in selected_ids(self.parts_table)]

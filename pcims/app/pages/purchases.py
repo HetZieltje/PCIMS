@@ -15,23 +15,26 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
-    QTableWidget,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
 
 from pcims.app.common import (
     DATA_OPERATION_ERRORS,
-    configure_table,
-    selected_ids,
     show_error,
-    table_item,
 )
 from pcims.app.formatting import (
     allocate_cents,
     cents_as_decimal,
     format_cents,
     parse_money_cents,
+)
+from pcims.app.table_model import (
+    Column,
+    RecordTableModel,
+    configure_table_view,
+    selected_ids,
 )
 from pcims.domain import ITEM_TYPES, ItemType, PurchaseInput
 from pcims.services import ApplicationServices, default_services
@@ -91,8 +94,30 @@ class PurchasesPage(QWidget):
         form_box = QGroupBox("New purchase line")
         form_box.setLayout(form)
 
-        self.table = QTableWidget()
-        configure_table(self.table, ("Line", "Name", "Type", "Cost", "Purchase date"))
+        self.table_model = RecordTableModel[StagedPurchase](
+            (
+                Column(
+                    "Line",
+                    lambda item: str(item["staged_id"]),
+                    lambda item: item["staged_id"],
+                ),
+                Column("Name", lambda item: item["name"], lambda item: item["name"].casefold()),
+                Column("Type", lambda item: item["item_type"], lambda item: item["item_type"]),
+                Column(
+                    "Cost",
+                    lambda item: format_cents(item["price_cents"]),
+                    lambda item: item["price_cents"],
+                ),
+                Column(
+                    "Purchase date",
+                    lambda item: item["purchase_date"].isoformat(),
+                    lambda item: item["purchase_date"].toordinal(),
+                ),
+            ),
+            lambda item: item["staged_id"],
+        )
+        self.table = QTableView()
+        configure_table_view(self.table, self.table_model)
         self.table.setColumnHidden(0, True)
         remove_button = QPushButton("Remove selected")
         remove_button.clicked.connect(self.remove_selected)
@@ -197,32 +222,7 @@ class PurchasesPage(QWidget):
         QMessageBox.information(self, "Purchase recorded", f"Recorded {count} item(s).")
 
     def _render_staged(self) -> None:
-        self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(self._staged))
-        for row, item in enumerate(self._staged):
-            self.table.setItem(
-                row,
-                0,
-                table_item(item["staged_id"], item["staged_id"], item["staged_id"]),
-            )
-            self.table.setItem(row, 1, table_item(item["name"]))
-            self.table.setItem(row, 2, table_item(item["item_type"]))
-            self.table.setItem(
-                row,
-                3,
-                table_item(
-                    format_cents(item["price_cents"]), sort_value=item["price_cents"]
-                ),
-            )
-            self.table.setItem(
-                row,
-                4,
-                table_item(
-                    item["purchase_date"].isoformat(),
-                    sort_value=item["purchase_date"].toordinal(),
-                ),
-            )
-        self.table.setSortingEnabled(True)
+        self.table_model.set_records(self._staged)
         self.total_label.setText(
             f"Staged total: {format_cents(sum(item['price_cents'] for item in self._staged))}"
         )

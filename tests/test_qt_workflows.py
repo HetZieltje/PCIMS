@@ -13,20 +13,21 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import (
-    QMessageBox,
-    QTableWidget,
-    QTableWidgetSelectionRange,
-)
+from PySide6.QtWidgets import QMessageBox, QTableView
 
 from pcims.app.application import acquire_instance_lock, create_application, main
-from pcims.app.common import configure_table, selected_ids, table_item
 from pcims.app.errors import install_exception_hook
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
 from pcims.app.pages.sales import SalesPage
+from pcims.app.table_model import (
+    Column,
+    RecordTableModel,
+    configure_table_view,
+    selected_ids,
+)
 from pcims.app.tasks import run_in_background
 from pcims.db.backup import BackupResult, create_backup
 from pcims.db.connection import configure_database
@@ -133,7 +134,7 @@ class QtWorkflowTests(unittest.TestCase):
             page.status_filter.setCurrentText("Available only")
         inventory_query.assert_not_called()
         pc_query.assert_not_called()
-        self.assertEqual(page.parts_table.rowCount(), 1)
+        self.assertEqual(page.parts_model.rowCount(), 1)
         page.deleteLater()
 
     def test_main_window_restores_geometry_tab_and_splitters(self):
@@ -347,32 +348,54 @@ class QtWorkflowTests(unittest.TestCase):
         show_error.assert_called_once()
         window.deleteLater()
 
-    def test_table_items_sort_by_typed_values(self):
-        table = QTableWidget()
-        configure_table(table, ("Price",), stretch_column=-1)
-        table.setSortingEnabled(False)
-        table.setRowCount(3)
-        for row, (text, cents) in enumerate(
-            (("€100.00", 10000), ("€9.00", 900), ("€20.00", 2000))
-        ):
-            table.setItem(row, 0, table_item(text, sort_value=cents))
-        table.setSortingEnabled(True)
-        table.sortItems(0, Qt.SortOrder.AscendingOrder)
+    def test_table_model_sorts_by_typed_values(self):
+        model = RecordTableModel[tuple[int, str]](
+            (Column("Price", lambda item: item[1], lambda item: item[0]),),
+            lambda item: item[0],
+        )
+        model.set_records(
+            ((10000, "€100.00"), (900, "€9.00"), (2000, "€20.00"))
+        )
+        model.sort(0, Qt.SortOrder.AscendingOrder)
         self.assertEqual(
-            [table.item(row, 0).text() for row in range(3)],
+            [model.index(row, 0).data() for row in range(3)],
             ["€9.00", "€20.00", "€100.00"],
         )
-        table.deleteLater()
 
-    def test_selected_ids_ignore_incomplete_rows_safely(self):
-        table = QTableWidget()
-        configure_table(table, ("ID", "Name"))
-        table.setRowCount(2)
-        table.setItem(0, 0, table_item("1", record_id=1))
-        table.selectAll()
+    def test_selected_ids_come_from_records_after_visual_sorting(self):
+        model = RecordTableModel[tuple[int, str]](
+            (
+                Column("ID", lambda item: str(item[0]), lambda item: item[0]),
+                Column("Name", lambda item: item[1], lambda item: item[1].casefold()),
+            ),
+            lambda item: item[0],
+        )
+        model.set_records(((1, "Zulu"), (2, "Alpha")))
+        table = QTableView()
+        configure_table_view(table, model)
+        table.selectRow(0)
+        table.sortByColumn(1, Qt.SortOrder.AscendingOrder)
 
         self.assertEqual(selected_ids(table), [1])
+        table.selectAll()
+
+        self.assertEqual(selected_ids(table), [2, 1])
         table.deleteLater()
+
+    def test_table_model_resets_and_sorts_large_record_sets(self):
+        model = RecordTableModel[tuple[int, str]](
+            (
+                Column("ID", lambda item: str(item[0]), lambda item: item[0]),
+                Column("Name", lambda item: item[1], lambda item: item[1]),
+            ),
+            lambda item: item[0],
+        )
+        model.sort(0, Qt.SortOrder.AscendingOrder)
+        model.set_records(tuple((number, f"Item {number}") for number in range(9999, -1, -1)))
+
+        self.assertEqual(model.rowCount(), 10_000)
+        self.assertEqual(model.index(0, 0).data(), "0")
+        self.assertEqual(model.index(9999, 0).data(), "9999")
 
     def test_database_lock_allows_only_one_application_instance(self):
         database_path = Path(self.temporary_directory.name) / "locked.db"
@@ -457,8 +480,8 @@ class QtWorkflowTests(unittest.TestCase):
         initialize_database()
 
         page = InventoryPage(services)
-        self.assertEqual(page.parts_table.rowCount(), 1)
-        self.assertEqual(page.parts_table.item(0, 1).text(), "Injected item")
+        self.assertEqual(page.parts_model.rowCount(), 1)
+        self.assertEqual(page.parts_model.index(0, 1).data(), "Injected item")
         self.assertEqual(list_expenses(), ())
         page.deleteLater()
 
@@ -537,15 +560,7 @@ class QtWorkflowTests(unittest.TestCase):
     def test_inventory_sale_and_sales_page_undo_workflow(self):
         ids = [self.purchase("Cable", "Extra", 5), self.purchase("Cable", "Extra", 6)]
         inventory = InventoryPage()
-        inventory.parts_table.setRangeSelected(
-            QTableWidgetSelectionRange(
-                0,
-                0,
-                inventory.parts_table.rowCount() - 1,
-                inventory.parts_table.columnCount() - 1,
-            ),
-            True,
-        )
+        inventory.parts_table.selectAll()
         with patch(
             "pcims.app.pages.inventory.SaleDialog.get_sale",
             return_value=(Decimal("20.00"), TEST_DATE),
@@ -583,8 +598,8 @@ class QtWorkflowTests(unittest.TestCase):
         inventory.refresh()
         spare_row = next(
             row
-            for row in range(inventory.parts_table.rowCount())
-            if inventory.parts_table.item(row, 0).text() == str(spare_id)
+            for row in range(inventory.parts_model.rowCount())
+            if inventory.parts_model.index(row, 0).data() == str(spare_id)
         )
         inventory.parts_table.selectRow(spare_row)
         with patch("pcims.app.pages.inventory.ask_confirmation", return_value=True):
