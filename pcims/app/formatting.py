@@ -1,24 +1,8 @@
-"""Presentation-level money parsing and formatting."""
+"""Presentation-level money formatting and allocation."""
 
-from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_FLOOR, Decimal
 
-from pcims.db.queries import MAX_MONEY_CENTS
-
-
-def parse_money_cents(value):
-    normalized = str(value).strip().replace("€", "").replace(" ", "").replace(",", ".")
-    try:
-        amount = Decimal(normalized)
-    except InvalidOperation as exc:
-        raise ValueError("Enter a valid monetary amount.") from exc
-    if not amount.is_finite() or amount < 0:
-        raise ValueError("Amount must be finite and non-negative.")
-    if amount.as_tuple().exponent < -2:
-        raise ValueError("Amount can have at most two decimal places.")
-    cents = int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
-    if cents > MAX_MONEY_CENTS:
-        raise ValueError("Amount is too large.")
-    return cents
+from pcims.money import parse_money_cents as parse_money_cents
 
 
 def cents_as_decimal(cents):

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from pcims.db.backup import create_backup, restore_backup, validate_database
 from pcims.db.connection import configure_database, connection
 from pcims.db.queries import (
+    SCHEMA_DEFINITIONS,
     SCHEMA_VERSION,
     DatabaseIntegrityError,
     NotFoundError,
@@ -135,6 +136,31 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 ["id", "price"],
             )
 
+    def test_failed_first_run_schema_creation_rolls_back_completely(self):
+        partial_path = Path(self.temporary_directory.name) / "partial.db"
+        configure_database(partial_path)
+        broken = dict(SCHEMA_DEFINITIONS)
+        broken[("trigger", "sale_item_must_not_be_in_pc")] = (
+            "CREATE TRIGGER broken nonsense"
+        )
+
+        with (
+            patch("pcims.db.queries.SCHEMA_DEFINITIONS", broken),
+            self.assertRaises(sqlite3.OperationalError),
+        ):
+            initialize_database()
+
+        with closing(sqlite3.connect(partial_path)) as database:
+            objects = database.execute(
+                "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            version = database.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(objects, [])
+        self.assertEqual(version, 0)
+
+        initialize_database()
+        validate_database(partial_path)
+
     def test_current_version_with_wrong_layout_is_rejected(self):
         with connection() as database:
             database.execute(
@@ -191,7 +217,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(expense.purchase_date, date(2026, 8, 13))
         self.assertTrue(expense.is_available)
 
-        for invalid_price in ("1.999", "1000000000"):
+        for invalid_price in ("1.9999", "1000000000"):
             with (
                 self.subTest(invalid_price=invalid_price),
                 self.assertRaises(ValidationError),
@@ -364,6 +390,20 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual([item.name for item in list_expenses()], ["Old state"])
         validate_database(safety)
         self.assertLessEqual(len(list(backup_directory.glob("pcims_*.db"))), 14)
+
+    def test_backup_and_restore_support_uri_special_characters_in_paths(self):
+        special_directory = Path(self.temporary_directory.name) / "data # 100% ready"
+        special_database = special_directory / "inventory #1%.db"
+        configure_database(special_database)
+        initialize_database()
+        self.buy("Old state", "CPU", 10)
+        backup = create_backup(special_directory / "backups #1%")
+        self.buy("New state", "RAM", 20)
+
+        restore_backup(backup)
+
+        self.assertEqual([item.name for item in list_expenses()], ["Old state"])
+        validate_database(backup)
 
     def test_backup_retention_failure_does_not_hide_verified_backup(self):
         self.buy("Keep", "CPU", 10)

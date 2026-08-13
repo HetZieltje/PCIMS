@@ -1,13 +1,12 @@
 """Current-schema data access and atomic business workflows for PCIMS."""
 
 from datetime import date, datetime
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from pcims.db.connection import connection
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
+from pcims.money import MAX_MONEY_CENTS, parse_money_cents
 
 SCHEMA_VERSION = 4
-MAX_MONEY_CENTS = 99_999_999_999
 ITEM_TYPES = (
     "CPU",
     "Cooler",
@@ -153,17 +152,9 @@ def _item_type(value):
 
 def _money_cents(value, label="Price"):
     try:
-        amount = Decimal(str(value).replace("€", "").replace(",", ".").strip())
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise ValidationError(f"{label} must be numeric.") from exc
-    if not amount.is_finite() or amount < 0:
-        raise ValidationError(f"{label} must be a finite, non-negative number.")
-    if amount.as_tuple().exponent < -2:
-        raise ValidationError(f"{label} can have at most two decimal places.")
-    cents = int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
-    if cents > MAX_MONEY_CENTS:
-        raise ValidationError(f"{label} is too large.")
-    return cents
+        return parse_money_cents(value, label)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
 
 
 def _positive_id(value, label="ID"):
@@ -285,7 +276,8 @@ def initialize_database():
 
         statements = ";\n".join(SCHEMA_DEFINITIONS.values())
         database.executescript(
-            f"{statements};\nPRAGMA user_version = {SCHEMA_VERSION};"
+            f"BEGIN IMMEDIATE;\n{statements};\n"
+            f"PRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
         )
         validate_schema(database)
 

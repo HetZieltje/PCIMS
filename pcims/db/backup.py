@@ -42,9 +42,7 @@ class BackupResult(os.PathLike):
 
 def validate_database(path):
     resolved = Path(path).expanduser().resolve()
-    with closing(
-        sqlite3.connect(f"file:{resolved.as_posix()}?mode=ro", uri=True)
-    ) as database:
+    with closing(sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)) as database:
         integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise sqlite3.DatabaseError(f"Database integrity check failed: {integrity}")
