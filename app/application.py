@@ -10,7 +10,7 @@ from app.errors import install_exception_hook
 from app.main_window import MainWindow
 from db.backup import create_backup
 from db.connection import get_database_path
-from db.queries import SchemaVersionError, initialize_database
+from db.queries import DatabaseIntegrityError, SchemaVersionError, initialize_database
 
 
 def create_application(argv=None):
@@ -47,8 +47,12 @@ def main(argv=None):
     try:
         try:
             initialize_database()
-        except SchemaVersionError as error:
-            QMessageBox.critical(None, "Incompatible database", str(error))
+        except (
+            DatabaseIntegrityError,
+            SchemaVersionError,
+            sqlite3.DatabaseError,
+        ) as error:
+            QMessageBox.critical(None, "Database unavailable", str(error))
             return 2
 
         backup_warning = None

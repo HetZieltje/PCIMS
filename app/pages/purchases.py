@@ -100,6 +100,11 @@ class PurchasesPage(QWidget):
     def has_staged_items(self):
         return bool(self._staged)
 
+    def discard_staged(self):
+        """Discard purchase lines that have not been written to the database."""
+        self._staged.clear()
+        self._render_staged()
+
     def add_line(self):
         name = self.name.text().strip()
         if not name:

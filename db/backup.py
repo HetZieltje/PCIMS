@@ -9,7 +9,12 @@ from datetime import datetime
 from pathlib import Path
 
 from db.connection import connection, get_database_path
-from db.queries import REQUIRED_TABLES, SCHEMA_COLUMNS, SCHEMA_VERSION
+from db.queries import (
+    REQUIRED_TABLES,
+    REQUIRED_TRIGGERS,
+    SCHEMA_COLUMNS,
+    SCHEMA_VERSION,
+)
 
 
 def validate_database(path):
@@ -38,10 +43,16 @@ def validate_database(path):
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-        missing = REQUIRED_TABLES - tables
-        if missing:
+        if tables != REQUIRED_TABLES:
+            missing = REQUIRED_TABLES - tables
+            extra = tables - REQUIRED_TABLES
+            differences = []
+            if missing:
+                differences.append(f"missing {', '.join(sorted(missing))}")
+            if extra:
+                differences.append(f"unexpected {', '.join(sorted(extra))}")
             raise sqlite3.DatabaseError(
-                f"Database is missing required tables: {', '.join(sorted(missing))}"
+                f"Database has incompatible tables: {'; '.join(differences)}"
             )
         for table, expected in SCHEMA_COLUMNS.items():
             actual = tuple(
@@ -51,6 +62,16 @@ def validate_database(path):
                 raise sqlite3.DatabaseError(
                     f"Database table '{table}' has an incompatible layout."
                 )
+        triggers = {
+            row[0]
+            for row in database.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            )
+        }
+        if triggers != REQUIRED_TRIGGERS:
+            raise sqlite3.DatabaseError(
+                "Database integrity triggers do not match the current schema."
+            )
 
 
 def create_backup(destination_directory=None, keep=14):

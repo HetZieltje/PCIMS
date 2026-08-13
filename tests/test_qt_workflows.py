@@ -25,6 +25,7 @@ from app.pages.assemble import AssemblePage
 from app.pages.inventory import InventoryPage
 from app.pages.purchases import PurchasesPage
 from app.pages.sales import SalesPage
+from db.backup import create_backup
 from db.connection import configure_database
 from db.queries import (
     add_expenses,
@@ -121,6 +122,28 @@ class QtWorkflowTests(unittest.TestCase):
         ):
             window.closeEvent(event)
         self.assertFalse(event.isAccepted())
+        window.deleteLater()
+
+    def test_restore_discards_staged_purchase_only_after_success(self):
+        self.purchase("Backup item", "CPU", 100)
+        backup = create_backup(Path(self.temporary_directory.name) / "backups")
+        self.purchase("Later item", "RAM", 50)
+        window = MainWindow()
+        window.purchases_page._staged.append({"staged_id": 1})
+
+        with (
+            patch(
+                "app.pages.settings.QFileDialog.getOpenFileName",
+                return_value=(str(backup), "SQLite databases (*.db)"),
+            ),
+            patch("app.pages.settings.ask_confirmation", return_value=True) as confirm,
+            patch("app.pages.settings.QMessageBox.information"),
+        ):
+            window.settings_page.restore_backup()
+
+        self.assertIn("Unrecorded purchase lines", confirm.call_args.args[2])
+        self.assertFalse(window.purchases_page.has_staged_items)
+        self.assertEqual([item.name for item in list_expenses()], ["Backup item"])
         window.deleteLater()
 
     def test_table_items_sort_by_typed_values(self):

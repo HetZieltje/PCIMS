@@ -29,7 +29,10 @@ class MainWindow(QMainWindow):
         self.purchases_page = PurchasesPage()
         self.assemble_page = AssemblePage()
         self.sales_page = SalesPage()
-        self.settings_page = SettingsPage(self.settings.value("theme", "system"))
+        self.settings_page = SettingsPage(
+            self.settings.value("theme", "system"),
+            has_pending_changes=lambda: self.purchases_page.has_staged_items,
+        )
         self.pages = (
             self.inventory_page,
             self.purchases_page,
@@ -44,6 +47,7 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(page, title)
             page.data_changed.connect(self.refresh_all)
         self.settings_page.theme_changed.connect(self.apply_theme)
+        self.settings_page.database_restored.connect(self._after_database_restore)
         self.tabs.currentChanged.connect(self.refresh_current)
         self.apply_theme(self.settings.value("theme", "system"))
         self.statusBar().showMessage("Ready")
@@ -61,6 +65,11 @@ class MainWindow(QMainWindow):
             if callable(refresh):
                 refresh()
         self.statusBar().showMessage("Data refreshed", 2500)
+
+    def _after_database_restore(self):
+        self.purchases_page.discard_staged()
+        self.refresh_all()
+        self.statusBar().showMessage("Backup restored", 5000)
 
     def apply_theme(self, theme):
         theme = theme if theme in {"system", "light", "dark"} else "system"

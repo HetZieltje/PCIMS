@@ -9,6 +9,7 @@ from db.backup import create_backup, restore_backup, validate_database
 from db.connection import configure_database, connection
 from db.queries import (
     SCHEMA_VERSION,
+    DatabaseIntegrityError,
     NotFoundError,
     SchemaVersionError,
     ValidationError,
@@ -146,6 +147,30 @@ class DatabaseWorkflowTests(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
+            initialize_database()
+
+    def test_current_schema_rejects_extra_tables_and_missing_triggers(self):
+        with connection() as database:
+            database.execute("CREATE TABLE legacy_income (id INTEGER PRIMARY KEY)")
+        with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
+            initialize_database()
+
+        with connection() as database:
+            database.execute("DROP TABLE legacy_income")
+            database.execute("DROP TRIGGER sale_item_must_not_be_in_pc")
+        with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
+            initialize_database()
+
+    def test_live_database_foreign_key_corruption_blocks_startup(self):
+        item_id = self.buy("CPU", "CPU", 10)
+        with closing(sqlite3.connect(self.database_path)) as database:
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (999,?,0)",
+                (item_id,),
+            )
+            database.commit()
+
+        with self.assertRaisesRegex(DatabaseIntegrityError, "foreign-key"):
             initialize_database()
 
     def test_purchase_uses_integer_cents_and_iso_dates(self):

@@ -27,6 +27,10 @@ REQUIRED_TABLES = {
     "sales",
     "sale_items",
 }
+REQUIRED_TRIGGERS = {
+    "pc_part_must_not_be_sold",
+    "sale_item_must_not_be_in_pc",
+}
 SCHEMA_COLUMNS = {
     "expenses": ("id", "name", "item_type", "price_cents", "purchase_date"),
     "assembled_pcs": ("id", "name"),
@@ -45,6 +49,10 @@ class NotFoundError(LookupError):
 
 
 class SchemaVersionError(RuntimeError):
+    pass
+
+
+class DatabaseIntegrityError(RuntimeError):
     pass
 
 
@@ -128,17 +136,41 @@ def initialize_database():
         }
         version = database.execute("PRAGMA user_version").fetchone()[0]
         if tables:
-            columns_match = REQUIRED_TABLES.issubset(tables) and all(
+            columns_match = tables == REQUIRED_TABLES and all(
                 tuple(
                     row[1] for row in database.execute(f'PRAGMA table_info("{table}")')
                 )
                 == expected
                 for table, expected in SCHEMA_COLUMNS.items()
             )
-            if version != SCHEMA_VERSION or not columns_match:
+            triggers = {
+                row[0]
+                for row in database.execute(
+                    "SELECT name FROM sqlite_master WHERE type='trigger'"
+                )
+            }
+            if (
+                version != SCHEMA_VERSION
+                or not columns_match
+                or triggers != REQUIRED_TRIGGERS
+            ):
                 raise SchemaVersionError(
                     f"Database schema {version} is incompatible with required schema "
                     f"{SCHEMA_VERSION}. Restore a current-format backup or choose a new database."
+                )
+            integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise DatabaseIntegrityError(
+                    f"Database integrity check failed: {integrity}"
+                )
+            foreign_key_violations = database.execute(
+                "PRAGMA foreign_key_check"
+            ).fetchall()
+            if foreign_key_violations:
+                table, row_id, referenced_table, _ = foreign_key_violations[0]
+                raise DatabaseIntegrityError(
+                    f"Database foreign-key check failed at {table} row {row_id} "
+                    f"(missing {referenced_table} record)."
                 )
             _ensure_current_indexes(database)
             return

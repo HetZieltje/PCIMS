@@ -22,10 +22,12 @@ from db.connection import get_database_path
 
 class SettingsPage(QWidget):
     data_changed = Signal()
+    database_restored = Signal()
     theme_changed = Signal(str)
 
-    def __init__(self, theme="system", parent=None):
+    def __init__(self, theme="system", has_pending_changes=None, parent=None):
         super().__init__(parent)
+        self._has_pending_changes = has_pending_changes or (lambda: False)
         database_path = get_database_path()
         path_label = QLabel(str(database_path))
         path_label.setTextInteractionFlags(
@@ -95,18 +97,19 @@ class SettingsPage(QWidget):
             str(get_database_path().parent / "backups"),
             "SQLite databases (*.db);;All files (*)",
         )
-        if not path or not ask_confirmation(
-            self,
-            "Restore backup",
-            "Replace the active database? A safety backup will be created first.",
-        ):
+        if not path:
+            return
+        message = "Replace the active database? A safety backup will be created first."
+        if self._has_pending_changes():
+            message += "\n\nUnrecorded purchase lines will be discarded after a successful restore."
+        if not ask_confirmation(self, "Restore backup", message):
             return
         try:
             safety = restore_backup(path)
         except (OSError, ValueError, sqlite3.DatabaseError) as error:
             show_error(self, "Restore failed", error)
             return
-        self.data_changed.emit()
+        self.database_restored.emit()
         QMessageBox.information(
             self,
             "Restore complete",
