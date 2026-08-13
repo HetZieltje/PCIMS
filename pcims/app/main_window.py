@@ -1,5 +1,6 @@
 """Main Qt window and application-wide presentation state."""
 
+from collections.abc import Callable
 from typing import cast
 
 from PySide6.QtCore import QByteArray, QSettings, Qt
@@ -12,13 +13,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pcims.app.common import DATA_OPERATION_ERRORS, show_error
+from pcims.app.common import show_error
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
 from pcims.app.pages.sales import SalesPage
 from pcims.app.pages.settings import SettingsPage
-from pcims.app.tasks import run_in_background
+from pcims.app.tasks import BackgroundTask, run_in_background
 from pcims.db.backup import BackupResult
 from pcims.services import ApplicationServices, default_services
 
@@ -53,7 +54,9 @@ class MainWindow(QMainWindow):
             self.sales_page,
             self.settings_page,
         )
-        self._dirty_pages: set[QWidget] = set()
+        self._dirty_pages: set[QWidget] = set(self.pages[:-1])
+        self._refresh_generation: dict[QWidget, int] = {}
+        self._refresh_tasks: dict[tuple[QWidget, int], BackgroundTask[object]] = {}
         for page, title in zip(
             self.pages,
             ("Inventory", "Purchases", "Assemble", "Sales and History", "Settings"),
@@ -67,6 +70,7 @@ class MainWindow(QMainWindow):
         self.apply_theme(str(self.settings.value("theme", "system")))
         self._restore_window_state()
         self.statusBar().showMessage("Ready")
+        self.refresh_current()
 
     def create_startup_backup(self) -> None:
         self.statusBar().showMessage("Creating startup backup…")
@@ -99,31 +103,58 @@ class MainWindow(QMainWindow):
         page = self.tabs.widget(index)
         if page not in self._dirty_pages:
             return
-        if not self._refresh_page(page):
+        self._start_refresh(page)
+
+    def _start_refresh(self, page: QWidget) -> None:
+        load_snapshot = getattr(page, "load_snapshot", None)
+        apply_snapshot = getattr(page, "apply_snapshot", None)
+        if not callable(load_snapshot) or not callable(apply_snapshot):
+            self._dirty_pages.discard(page)
             return
+        loader = cast(Callable[[], object], load_snapshot)
+        applier = cast(Callable[[object], None], apply_snapshot)
+        generation = self._refresh_generation.get(page, 0) + 1
+        self._refresh_generation[page] = generation
+        key = (page, generation)
+        self._refresh_tasks[key] = run_in_background(
+            loader,
+            lambda snapshot: self._refresh_succeeded(
+                page, generation, applier, snapshot
+            ),
+            lambda error: self._refresh_failed(page, generation, error),
+        )
+
+    def _refresh_succeeded(
+        self,
+        page: QWidget,
+        generation: int,
+        apply_snapshot: Callable[[object], None],
+        snapshot: object,
+    ) -> None:
+        self._refresh_tasks.pop((page, generation), None)
+        if self._refresh_generation.get(page) != generation:
+            return
+        apply_snapshot(snapshot)
         self._dirty_pages.discard(page)
-
-    def _refresh_page(self, page: QWidget) -> bool:
-        refresh = getattr(page, "refresh", None)
-        if not callable(refresh):
-            return True
-        try:
-            refresh()
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to refresh data", error)
-            return False
-        return True
-
-    def refresh_all(self) -> None:
-        for page in self.pages:
-            if self._refresh_page(page):
-                self._dirty_pages.discard(page)
-            else:
-                self._dirty_pages.add(page)
         self.statusBar().showMessage("Data refreshed", 2500)
 
+    def _refresh_failed(
+        self, page: QWidget, generation: int, error: Exception
+    ) -> None:
+        self._refresh_tasks.pop((page, generation), None)
+        if self._refresh_generation.get(page) != generation:
+            return
+        self._dirty_pages.add(page)
+        show_error(self, "Unable to refresh data", error)
+
+    def refresh_all(self) -> None:
+        self._dirty_pages.update(self.pages[:-1])
+        for page in self.pages[:-1]:
+            self._start_refresh(page)
+        self.statusBar().showMessage("Refreshing dataâ€¦")
+
     def _on_data_changed(self) -> None:
-        self._dirty_pages.update(self.pages)
+        self._dirty_pages.update(self.pages[:-1])
         self.refresh_current()
         self.statusBar().showMessage("Data updated", 2500)
 

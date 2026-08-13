@@ -3,11 +3,12 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -72,6 +73,16 @@ class QtWorkflowTests(unittest.TestCase):
         self.application.processEvents()
         self.temporary_directory.cleanup()
 
+    def wait_until(self, predicate, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
+            self.application.processEvents()
+            time.sleep(0.005)
+        self.assertTrue(predicate(), "Timed out waiting for an asynchronous Qt task")
+
+    def wait_for_window(self, window):
+        self.wait_until(lambda: not window._refresh_tasks)
+
     @staticmethod
     def purchase(name, item_type, price):
         return add_expenses(
@@ -88,35 +99,68 @@ class QtWorkflowTests(unittest.TestCase):
     def test_main_window_constructs_and_refreshes_every_page(self):
         window = MainWindow()
         window.show()
-        self.application.processEvents()
+        self.wait_for_window(window)
 
         self.assertEqual(window.tabs.count(), 5)
         self.assertGreaterEqual(window.width(), 900)
         for index in range(window.tabs.count()):
             window.tabs.setCurrentIndex(index)
             window.refresh_current(index)
+            self.wait_for_window(window)
         window.apply_theme("dark")
         window.apply_theme("light")
         window.refresh_all()
-        self.application.processEvents()
+        self.wait_for_window(window)
         window.deleteLater()
+
+    def test_page_construction_performs_no_database_io(self):
+        services = MagicMock(spec=ApplicationServices)
+        pages = (
+            InventoryPage(services),
+            PurchasesPage(services),
+            AssemblePage(services),
+            SalesPage(services),
+        )
+
+        self.assertEqual(services.mock_calls, [])
+        for page in pages:
+            page.deleteLater()
 
     def test_data_changes_refresh_only_visible_page_until_tab_is_opened(self):
         window = MainWindow()
+        self.wait_for_window(window)
         window.tabs.setCurrentWidget(window.inventory_page)
         with (
-            patch.object(window.inventory_page, "refresh") as inventory_refresh,
-            patch.object(window.purchases_page, "refresh") as purchases_refresh,
-            patch.object(window.assemble_page, "refresh") as assemble_refresh,
-            patch.object(window.sales_page, "refresh") as sales_refresh,
+            patch.object(
+                window.inventory_page,
+                "load_snapshot",
+                wraps=window.inventory_page.load_snapshot,
+            ) as inventory_refresh,
+            patch.object(
+                window.purchases_page,
+                "load_snapshot",
+                wraps=window.purchases_page.load_snapshot,
+            ) as purchases_refresh,
+            patch.object(
+                window.assemble_page,
+                "load_snapshot",
+                wraps=window.assemble_page.load_snapshot,
+            ) as assemble_refresh,
+            patch.object(
+                window.sales_page,
+                "load_snapshot",
+                wraps=window.sales_page.load_snapshot,
+            ) as sales_refresh,
         ):
             window.inventory_page.data_changed.emit()
+            self.wait_for_window(window)
             inventory_refresh.assert_called_once()
             purchases_refresh.assert_not_called()
             assemble_refresh.assert_not_called()
             sales_refresh.assert_not_called()
 
             window.tabs.setCurrentWidget(window.purchases_page)
+            self.wait_for_window(window)
             purchases_refresh.assert_called_once()
             assemble_refresh.assert_not_called()
             sales_refresh.assert_not_called()
@@ -125,6 +169,7 @@ class QtWorkflowTests(unittest.TestCase):
     def test_inventory_filters_use_loaded_data_without_database_queries(self):
         self.purchase("Case fan", "Fan", 10)
         page = InventoryPage()
+        page.refresh()
         with (
             patch("pcims.services.ApplicationServices.list_inventory") as inventory_query,
             patch("pcims.services.ApplicationServices.list_pcs") as pc_query,
@@ -139,6 +184,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_main_window_restores_geometry_tab_and_splitters(self):
         first = MainWindow()
+        self.wait_for_window(first)
         first.resize(1080, 720)
         first.tabs.setCurrentIndex(3)
         first.inventory_page.splitter.setSizes((800, 200))
@@ -160,6 +206,7 @@ class QtWorkflowTests(unittest.TestCase):
 
         with patch.object(MainWindow, "restoreGeometry", return_value=True) as restore:
             second = MainWindow()
+            self.wait_for_window(second)
         restore.assert_called_once_with(expected_geometry)
         second.show()
         self.application.processEvents()
@@ -176,6 +223,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_purchase_page_allocates_quantity_total_and_commits(self):
         page = PurchasesPage()
+        page.refresh()
         page.name.setText("Case fan")
         page.type.setCurrentText("Fan")
         page.quantity.setValue(3)
@@ -197,6 +245,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_purchase_page_reports_database_failure_without_losing_staged_work(self):
         page = PurchasesPage()
+        page.refresh()
         page.name.setText("Case fan")
         page.type.setCurrentText("Fan")
         page.price.setText("10.00")
@@ -218,6 +267,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_close_warns_before_discarding_staged_purchase(self):
         window = MainWindow()
+        self.wait_for_window(window)
         window.purchases_page._staged.append({"staged_id": 1})
         event = QCloseEvent()
         with patch(
@@ -230,6 +280,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_close_accepts_verified_backup_with_retention_warning(self):
         window = MainWindow()
+        self.wait_for_window(window)
         window.show()
         event = QCloseEvent()
         loop = QEventLoop()
@@ -262,6 +313,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_failed_close_backup_returns_control_when_close_is_declined(self):
         window = MainWindow()
+        self.wait_for_window(window)
         window.show()
         event = QCloseEvent()
         loop = QEventLoop()
@@ -291,6 +343,7 @@ class QtWorkflowTests(unittest.TestCase):
         backup = create_backup(Path(self.temporary_directory.name) / "backups")
         self.purchase("Later item", "RAM", 50)
         window = MainWindow()
+        self.wait_for_window(window)
         window.purchases_page._staged.append({"staged_id": 1})
         loop = QEventLoop()
 
@@ -322,6 +375,7 @@ class QtWorkflowTests(unittest.TestCase):
     def test_failed_async_restore_reenables_window_and_preserves_work(self):
         self.purchase("Existing item", "Extra", 10)
         window = MainWindow()
+        self.wait_for_window(window)
         window.purchases_page._staged.append({"staged_id": 1})
         missing = Path(self.temporary_directory.name) / "missing.db"
         loop = QEventLoop()
@@ -438,6 +492,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_manual_backup_runs_asynchronously_and_restores_button_state(self):
         window = MainWindow()
+        self.wait_for_window(window)
         page = window.settings_page
         loop = QEventLoop()
         original_finished = page._backup_finished
@@ -480,6 +535,7 @@ class QtWorkflowTests(unittest.TestCase):
         initialize_database()
 
         page = InventoryPage(services)
+        page.refresh()
         self.assertEqual(page.parts_model.rowCount(), 1)
         self.assertEqual(page.parts_model.index(0, 1).data(), "Injected item")
         self.assertEqual(list_expenses(), ())
@@ -505,19 +561,54 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_runtime_refresh_failure_is_reported_and_left_retryable(self):
         window = MainWindow()
+        self.wait_for_window(window)
         window._dirty_pages.add(window.inventory_page)
         with (
             patch.object(
                 window.inventory_page,
-                "refresh",
+                "load_snapshot",
                 side_effect=sqlite3.OperationalError("disk I/O error"),
             ),
             patch("pcims.app.main_window.show_error") as show_error,
         ):
             window.refresh_current()
+            self.wait_for_window(window)
 
         show_error.assert_called_once()
         self.assertIn(window.inventory_page, window._dirty_pages)
+        window.deleteLater()
+
+    def test_stale_async_refresh_cannot_overwrite_a_newer_result(self):
+        window = MainWindow()
+        self.wait_for_window(window)
+        first_started = threading.Event()
+        release_first = threading.Event()
+        call_count = 0
+
+        def load_snapshot():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                first_started.set()
+                release_first.wait(2)
+                return "old snapshot"
+            return "new snapshot"
+
+        window._dirty_pages.add(window.inventory_page)
+        with (
+            patch.object(
+                window.inventory_page, "load_snapshot", side_effect=load_snapshot
+            ),
+            patch.object(window.inventory_page, "apply_snapshot") as apply_snapshot,
+        ):
+            window.refresh_current()
+            self.wait_until(first_started.is_set)
+            window.refresh_current()
+            self.wait_until(lambda: apply_snapshot.call_count == 1)
+            release_first.set()
+            self.wait_for_window(window)
+
+        self.assertEqual(apply_snapshot.call_args_list, [call("new snapshot")])
         window.deleteLater()
 
     def test_unexpected_exception_is_logged_and_reported(self):
@@ -541,6 +632,7 @@ class QtWorkflowTests(unittest.TestCase):
             self.purchase("RAM", "RAM", 45),
         ]
         page = AssemblePage()
+        page.refresh()
         page.name.setText("Linux workstation")
         checked = []
         for group_index in range(page.tree.topLevelItemCount()):
@@ -560,6 +652,7 @@ class QtWorkflowTests(unittest.TestCase):
     def test_inventory_sale_and_sales_page_undo_workflow(self):
         ids = [self.purchase("Cable", "Extra", 5), self.purchase("Cable", "Extra", 6)]
         inventory = InventoryPage()
+        inventory.refresh()
         inventory.parts_table.selectAll()
         with patch(
             "pcims.app.pages.inventory.SaleDialog.get_sale",
@@ -571,6 +664,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual({item.id for item in sale.items}, set(ids))
 
         sales = SalesPage()
+        sales.refresh()
         self.assertEqual(sales.summary_labels["cash"].text(), "€9.00")
         self.assertNotIn("assets", sales.summary_labels)
         sales.sale_table.selectRow(0)
@@ -587,6 +681,7 @@ class QtWorkflowTests(unittest.TestCase):
         spare_id = self.purchase("Spare cable", "Extra", 5)
 
         inventory = InventoryPage()
+        inventory.refresh()
         inventory.parts_table.selectRow(0)
         with patch(
             "pcims.app.pages.inventory.QInputDialog.getText",
@@ -607,6 +702,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual([item.id for item in list_expenses()], [cpu_id])
 
         assemble = AssemblePage()
+        assemble.refresh()
         assemble.name.setText("Test PC")
         assemble.tree.topLevelItem(0).child(0).setCheckState(0, Qt.CheckState.Checked)
         assemble.assemble()
@@ -632,6 +728,7 @@ class QtWorkflowTests(unittest.TestCase):
     def test_pc_sale_and_undo_through_qt_pages(self):
         ids = [self.purchase("CPU", "CPU", 100), self.purchase("RAM", "RAM", 50)]
         assemble = AssemblePage()
+        assemble.refresh()
         assemble.name.setText("PC 1")
         for group_index in range(assemble.tree.topLevelItemCount()):
             group = assemble.tree.topLevelItem(group_index)
@@ -640,6 +737,7 @@ class QtWorkflowTests(unittest.TestCase):
         assemble.assemble()
 
         inventory = InventoryPage()
+        inventory.refresh()
         inventory.pc_table.selectRow(0)
         with patch(
             "pcims.app.pages.inventory.SaleDialog.get_sale",
@@ -651,6 +749,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual({item.id for item in list_sales()[0].items}, set(ids))
 
         sales = SalesPage()
+        sales.refresh()
         sales.sale_table.selectRow(0)
         with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):
             sales.undo_selected()

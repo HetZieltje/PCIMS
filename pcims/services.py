@@ -10,6 +10,7 @@ from pcims.db.backup import BackupResult, create_backup, restore_backup
 from pcims.db.connection import Database, get_database
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
 from pcims.db.queries import (
+    ReadQueries,
     add_expenses,
     assemble_pc,
     delete_expenses,
@@ -30,6 +31,30 @@ from pcims.domain import PurchaseInput
 
 
 @dataclass(frozen=True, slots=True)
+class InventorySnapshot:
+    inventory: tuple[Expense, ...]
+    pcs: tuple[AssembledPC, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PurchasesSnapshot:
+    expense_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AssembleSnapshot:
+    available_inventory: tuple[Expense, ...]
+    pc_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SalesSnapshot:
+    summary: FinancialSummary
+    expenses: tuple[Expense, ...]
+    sales: tuple[Sale, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ApplicationServices:
     """All technical operations available to the Qt presentation layer."""
 
@@ -40,6 +65,32 @@ class ApplicationServices:
 
     def initialize(self) -> None:
         initialize_database(self.database)
+
+    def inventory_snapshot(self) -> InventorySnapshot:
+        with self.database.transaction() as connection:
+            queries = ReadQueries(connection)
+            return InventorySnapshot(queries.list_inventory(), queries.list_pcs())
+
+    def purchases_snapshot(self) -> PurchasesSnapshot:
+        with self.database.transaction() as connection:
+            names = {expense.name for expense in ReadQueries(connection).list_expenses()}
+        return PurchasesSnapshot(tuple(sorted(names, key=str.casefold)))
+
+    def assemble_snapshot(self) -> AssembleSnapshot:
+        with self.database.transaction() as connection:
+            queries = ReadQueries(connection)
+            inventory = queries.list_inventory(available_only=True)
+            pc_names = tuple(pc.name for pc in queries.list_pcs())
+        return AssembleSnapshot(inventory, pc_names)
+
+    def sales_snapshot(self) -> SalesSnapshot:
+        with self.database.transaction() as connection:
+            queries = ReadQueries(connection)
+            return SalesSnapshot(
+                queries.financial_summary(),
+                queries.list_expenses(),
+                queries.list_sales(),
+            )
 
     def add_expenses(self, items: Iterable[PurchaseInput]) -> list[int]:
         return add_expenses(items, database=self.database)

@@ -22,6 +22,7 @@ from pcims.db.errors import (
     ValidationError,
 )
 from pcims.db.queries import (
+    ReadQueries,
     add_expenses,
     assemble_pc,
     delete_expenses,
@@ -97,6 +98,29 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(before, 1)
         self.assertEqual(during, before)
         self.assertEqual(len(list_expenses()), 2)
+
+    def test_service_snapshot_remains_coherent_during_a_concurrent_write(self):
+        expense_id = self.buy("Snapshot CPU", "CPU", 100)
+        services = ApplicationServices(get_database())
+        original_list_inventory = ReadQueries.list_inventory
+
+        def read_then_assemble(queries, *args, **kwargs):
+            inventory = original_list_inventory(queries, *args, **kwargs)
+            services.assemble_pc("Concurrent PC", [expense_id])
+            return inventory
+
+        with patch.object(
+            ReadQueries,
+            "list_inventory",
+            autospec=True,
+            side_effect=read_then_assemble,
+        ):
+            snapshot = services.inventory_snapshot()
+
+        self.assertEqual([item.id for item in snapshot.inventory], [expense_id])
+        self.assertTrue(snapshot.inventory[0].is_available)
+        self.assertEqual(snapshot.pcs, ())
+        self.assertEqual([pc.name for pc in services.list_pcs()], ["Concurrent PC"])
 
     def test_transaction_mode_is_explicit_for_reads_and_writes(self):
         active_database = get_database()

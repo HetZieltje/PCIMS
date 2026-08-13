@@ -37,7 +37,7 @@ from pcims.app.table_model import (
     selected_ids,
 )
 from pcims.domain import ITEM_TYPES, ItemType, PurchaseInput
-from pcims.services import ApplicationServices, default_services
+from pcims.services import ApplicationServices, PurchasesSnapshot, default_services
 
 
 class StagedPurchase(TypedDict):
@@ -138,14 +138,15 @@ class PurchasesPage(QWidget):
         layout.addWidget(form_box, 0)
         layout.addLayout(right, 1)
         self._render_staged()
-        self.refresh()
 
     def refresh(self) -> None:
-        names = sorted(
-            {expense.name for expense in self.services.list_expenses()},
-            key=str.casefold,
-        )
-        self._completion_model.setStringList(names)
+        self.apply_snapshot(self.load_snapshot())
+
+    def load_snapshot(self) -> PurchasesSnapshot:
+        return self.services.purchases_snapshot()
+
+    def apply_snapshot(self, snapshot: PurchasesSnapshot) -> None:
+        self._completion_model.setStringList(list(snapshot.expense_names))
 
     @property
     def has_staged_items(self) -> bool:

@@ -19,7 +19,7 @@ from pcims.app.formatting import format_cents
 from pcims.app.table_model import ID_ROLE
 from pcims.db.models import Expense
 from pcims.domain import ITEM_TYPES, ItemType
-from pcims.services import ApplicationServices, default_services
+from pcims.services import ApplicationServices, AssembleSnapshot, default_services
 
 
 class AssemblePage(QWidget):
@@ -51,9 +51,14 @@ class AssemblePage(QWidget):
         layout = QVBoxLayout(self)
         layout.addLayout(header)
         layout.addWidget(self.tree)
-        self.refresh()
 
     def refresh(self) -> None:
+        self.apply_snapshot(self.load_snapshot())
+
+    def load_snapshot(self) -> AssembleSnapshot:
+        return self.services.assemble_snapshot()
+
+    def apply_snapshot(self, snapshot: AssembleSnapshot) -> None:
         selected_ids = {
             int(item.data(0, ID_ROLE))
             for index in range(self.tree.topLevelItemCount())
@@ -61,7 +66,7 @@ class AssemblePage(QWidget):
             if item.checkState(0) == Qt.CheckState.Checked
         }
         grouped: defaultdict[ItemType, list[Expense]] = defaultdict(list)
-        for expense in self.services.list_inventory(available_only=True):
+        for expense in snapshot.available_inventory:
             grouped[expense.item_type].append(expense)
         self.tree.clear()
         for item_type in ITEM_TYPES:
@@ -96,7 +101,7 @@ class AssemblePage(QWidget):
                 group.addChild(child)
             group.setExpanded(True)
         if not self.name.text().strip():
-            self.name.setText(self._next_name())
+            self.name.setText(self._next_name(snapshot.pc_names))
 
     @staticmethod
     def _children(parent: QTreeWidgetItem | None) -> list[QTreeWidgetItem]:
@@ -104,8 +109,9 @@ class AssemblePage(QWidget):
             return []
         return [parent.child(index) for index in range(parent.childCount())]
 
-    def _next_name(self) -> str:
-        names = {pc.name for pc in self.services.list_pcs()}
+    @staticmethod
+    def _next_name(pc_names: tuple[str, ...]) -> str:
+        names = set(pc_names)
         index = 1
         while f"PC {index}" in names:
             index += 1

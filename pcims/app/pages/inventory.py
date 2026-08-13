@@ -29,7 +29,7 @@ from pcims.app.table_model import (
 )
 from pcims.db.models import AssembledPC, Expense
 from pcims.domain import ITEM_TYPES
-from pcims.services import ApplicationServices, default_services
+from pcims.services import ApplicationServices, InventorySnapshot, default_services
 
 
 def _component_summary(pc: AssembledPC) -> str:
@@ -160,12 +160,17 @@ class InventoryPage(QWidget):
         layout = QVBoxLayout(self)
         layout.addLayout(filters)
         layout.addWidget(self.splitter)
-        self.refresh()
 
     def refresh(self) -> None:
-        self._all_parts = self.services.list_inventory()
+        self.apply_snapshot(self.load_snapshot())
+
+    def load_snapshot(self) -> InventorySnapshot:
+        return self.services.inventory_snapshot()
+
+    def apply_snapshot(self, snapshot: InventorySnapshot) -> None:
+        self._all_parts = snapshot.inventory
         self._render_parts()
-        self._render_pcs(self.services.list_pcs())
+        self._render_pcs(snapshot.pcs)
 
     def _apply_filters(self, *_: object) -> None:
         self._render_parts()

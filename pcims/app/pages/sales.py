@@ -25,7 +25,7 @@ from pcims.app.table_model import (
     selected_ids,
 )
 from pcims.db.models import Expense, Sale
-from pcims.services import ApplicationServices, default_services
+from pcims.services import ApplicationServices, SalesSnapshot, default_services
 
 
 def _expense_status(item: Expense) -> str:
@@ -176,10 +176,15 @@ class SalesPage(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(summary_box)
         layout.addWidget(self.splitter, 1)
-        self.refresh()
 
     def refresh(self) -> None:
-        summary = self.services.financial_summary()
+        self.apply_snapshot(self.load_snapshot())
+
+    def load_snapshot(self) -> SalesSnapshot:
+        return self.services.sales_snapshot()
+
+    def apply_snapshot(self, snapshot: SalesSnapshot) -> None:
+        summary = snapshot.summary
         for key, cents in (
             ("expense", summary.expense_cents),
             ("income", summary.income_cents),
@@ -189,9 +194,9 @@ class SalesPage(QWidget):
         ):
             self.summary_labels[key].setText(format_cents(cents))
 
-        self.expense_model.set_records(self.services.list_expenses())
+        self.expense_model.set_records(snapshot.expenses)
 
-        sales = self.services.list_sales()
+        sales = snapshot.sales
         self._sales = {sale.id: sale for sale in sales}
         self.sale_model.set_records(sales)
         self._render_details()

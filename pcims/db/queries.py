@@ -3,6 +3,7 @@
 import sqlite3
 from collections.abc import Iterable
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import cast
 
@@ -124,6 +125,98 @@ def _insert_id(cursor: sqlite3.Cursor) -> int:
     return row_id
 
 
+@dataclass(frozen=True, slots=True)
+class ReadQueries:
+    """Composable read operations over one caller-owned SQLite snapshot."""
+
+    connection: sqlite3.Connection
+
+    def list_expenses(self) -> tuple[Expense, ...]:
+        rows = self.connection.execute(_EXPENSE_SELECT + " ORDER BY e.id").fetchall()
+        return tuple(_expense_from_row(row) for row in rows)
+
+    def list_inventory(
+        self, item_type: object | None = None, available_only: bool = False
+    ) -> tuple[Expense, ...]:
+        clauses = ["si.sale_id IS NULL"]
+        parameters: list[object] = []
+        if item_type is not None:
+            clauses.append("e.item_type=?")
+            parameters.append(_item_type(item_type))
+        if available_only:
+            clauses.append("p.id IS NULL")
+        sql = (
+            _EXPENSE_SELECT
+            + " WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY e.item_type,e.name,e.id"
+        )
+        rows = self.connection.execute(sql, parameters).fetchall()
+        return tuple(_expense_from_row(row) for row in rows)
+
+    def list_pcs(self) -> tuple[AssembledPC, ...]:
+        pcs = self.connection.execute(
+            "SELECT id,name FROM assembled_pcs ORDER BY name,id"
+        ).fetchall()
+        rows = self.connection.execute(
+            _EXPENSE_SELECT + " WHERE p.id IS NOT NULL ORDER BY p.id,pp.position"
+        ).fetchall()
+        parts_by_pc: dict[int, list[Expense]] = {int(pc["id"]): [] for pc in pcs}
+        for row in rows:
+            parts_by_pc[int(row["pc_id"])].append(_expense_from_row(row))
+        return tuple(
+            AssembledPC(pc["id"], pc["name"], tuple(parts_by_pc[pc["id"]]))
+            for pc in pcs
+        )
+
+    def list_sales(self) -> tuple[Sale, ...]:
+        sales = self.connection.execute(
+            "SELECT id,name,kind,cost_cents,selling_price_cents,sale_date "
+            "FROM sales ORDER BY id"
+        ).fetchall()
+        rows = self.connection.execute(
+            _EXPENSE_SELECT
+            + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
+        ).fetchall()
+        items_by_sale: dict[int, list[Expense]] = {
+            int(sale["id"]): [] for sale in sales
+        }
+        for row in rows:
+            items_by_sale[int(row["sale_id"])].append(_expense_from_row(row))
+        return tuple(
+            Sale(
+                id=sale["id"],
+                name=sale["name"],
+                kind=cast(SaleKind, sale["kind"]),
+                cost_cents=sale["cost_cents"],
+                selling_price_cents=sale["selling_price_cents"],
+                sale_date=date.fromisoformat(sale["sale_date"]),
+                items=tuple(items_by_sale[sale["id"]]),
+            )
+            for sale in sales
+        )
+
+    def financial_summary(self) -> FinancialSummary:
+        expense_cents = self.connection.execute(
+            "SELECT COALESCE(SUM(price_cents),0) FROM expenses"
+        ).fetchone()[0]
+        income_cents, cost_cents = self.connection.execute(
+            "SELECT COALESCE(SUM(selling_price_cents),0),"
+            "COALESCE(SUM(cost_cents),0) FROM sales"
+        ).fetchone()
+        inventory_cents = self.connection.execute(
+            """SELECT COALESCE(SUM(e.price_cents),0) FROM expenses e
+               LEFT JOIN sale_items si ON si.expense_id=e.id
+               WHERE si.sale_id IS NULL"""
+        ).fetchone()[0]
+        return FinancialSummary(
+            expense_cents=expense_cents,
+            income_cents=income_cents,
+            profit_cents=income_cents - cost_cents,
+            inventory_cents=inventory_cents,
+        )
+
+
 def add_expenses(
     items: Iterable[PurchaseInput], *, database: Database | None = None
 ) -> list[int]:
@@ -153,8 +246,7 @@ def add_expenses(
 
 def list_expenses(*, database: Database | None = None) -> tuple[Expense, ...]:
     with _transaction(database) as connection:
-        rows = connection.execute(_EXPENSE_SELECT + " ORDER BY e.id").fetchall()
-    return tuple(_expense_from_row(row) for row in rows)
+        return ReadQueries(connection).list_expenses()
 
 
 def list_inventory(
@@ -163,22 +255,8 @@ def list_inventory(
     *,
     database: Database | None = None,
 ) -> tuple[Expense, ...]:
-    clauses = ["si.sale_id IS NULL"]
-    parameters: list[object] = []
-    if item_type is not None:
-        clauses.append("e.item_type=?")
-        parameters.append(_item_type(item_type))
-    if available_only:
-        clauses.append("p.id IS NULL")
-    sql = (
-        _EXPENSE_SELECT
-        + " WHERE "
-        + " AND ".join(clauses)
-        + " ORDER BY e.item_type,e.name,e.id"
-    )
     with _transaction(database) as connection:
-        rows = connection.execute(sql, parameters).fetchall()
-    return tuple(_expense_from_row(row) for row in rows)
+        return ReadQueries(connection).list_inventory(item_type, available_only)
 
 
 def delete_expenses(
@@ -265,18 +343,7 @@ def assemble_pc(
 
 def list_pcs(*, database: Database | None = None) -> tuple[AssembledPC, ...]:
     with _transaction(database) as connection:
-        pcs = connection.execute(
-            "SELECT id,name FROM assembled_pcs ORDER BY name,id"
-        ).fetchall()
-        rows = connection.execute(
-            _EXPENSE_SELECT + " WHERE p.id IS NOT NULL ORDER BY p.id,pp.position"
-        ).fetchall()
-    parts_by_pc: dict[int, list[Expense]] = {int(pc["id"]): [] for pc in pcs}
-    for row in rows:
-        parts_by_pc[int(row["pc_id"])].append(_expense_from_row(row))
-    return tuple(
-        AssembledPC(pc["id"], pc["name"], tuple(parts_by_pc[pc["id"]])) for pc in pcs
-    )
+        return ReadQueries(connection).list_pcs()
 
 
 def disassemble_pc(pc_id: object, *, database: Database | None = None) -> None:
@@ -398,30 +465,7 @@ def sell_pc(
 
 def list_sales(*, database: Database | None = None) -> tuple[Sale, ...]:
     with _transaction(database) as connection:
-        sales = connection.execute(
-            "SELECT id,name,kind,cost_cents,selling_price_cents,sale_date FROM sales ORDER BY id"
-        ).fetchall()
-        rows = connection.execute(
-            _EXPENSE_SELECT
-            + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
-        ).fetchall()
-    items_by_sale: dict[int, list[Expense]] = {
-        int(sale["id"]): [] for sale in sales
-    }
-    for row in rows:
-        items_by_sale[int(row["sale_id"])].append(_expense_from_row(row))
-    return tuple(
-        Sale(
-            id=sale["id"],
-            name=sale["name"],
-            kind=cast(SaleKind, sale["kind"]),
-            cost_cents=sale["cost_cents"],
-            selling_price_cents=sale["selling_price_cents"],
-            sale_date=date.fromisoformat(sale["sale_date"]),
-            items=tuple(items_by_sale[sale["id"]]),
-        )
-        for sale in sales
-    )
+        return ReadQueries(connection).list_sales()
 
 
 def undo_sale(sale_id: object, *, database: Database | None = None) -> None:
@@ -466,20 +510,4 @@ def undo_sale(sale_id: object, *, database: Database | None = None) -> None:
 
 def get_financial_summary(*, database: Database | None = None) -> FinancialSummary:
     with _transaction(database) as connection:
-        expense_cents = connection.execute(
-            "SELECT COALESCE(SUM(price_cents),0) FROM expenses"
-        ).fetchone()[0]
-        income_cents, cost_cents = connection.execute(
-            "SELECT COALESCE(SUM(selling_price_cents),0),COALESCE(SUM(cost_cents),0) FROM sales"
-        ).fetchone()
-        inventory_cents = connection.execute(
-            """SELECT COALESCE(SUM(e.price_cents),0) FROM expenses e
-               LEFT JOIN sale_items si ON si.expense_id=e.id
-               WHERE si.sale_id IS NULL"""
-        ).fetchone()[0]
-    return FinancialSummary(
-        expense_cents=expense_cents,
-        income_cents=income_cents,
-        profit_cents=income_cents - cost_cents,
-        inventory_cents=inventory_cents,
-    )
+        return ReadQueries(connection).financial_summary()
