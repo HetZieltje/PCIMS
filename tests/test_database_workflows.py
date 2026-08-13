@@ -5,24 +5,27 @@ from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 
+from db.backup import create_backup, restore_backup, validate_database
 from db.connection import configure_database, connection
-from db.backup import create_backup, restore_backup
 from db.queries import (
+    SCHEMA_VERSION,
     NotFoundError,
+    SchemaVersionError,
     ValidationError,
-    add_expense,
-    assemble_inventory_pc,
-    delete_expense,
-    get_assembled_pcs,
-    get_expenses,
-    get_inventory_items,
-    get_sales,
-    get_sold_pc_parts,
-    get_total_pc_price,
+    add_expenses,
+    assemble_pc,
+    delete_expenses,
+    disassemble_pc,
+    get_financial_summary,
     initialize_database,
-    rename_parts,
-    sell_assembled_pc,
-    sell_inventory_items,
+    list_expenses,
+    list_inventory,
+    list_pcs,
+    list_sales,
+    rename_expenses,
+    rename_pc,
+    sell_items,
+    sell_pc,
     undo_sale,
 )
 
@@ -37,242 +40,195 @@ class DatabaseWorkflowTests(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
-    def test_date_objects_and_default_dates_are_stored_as_iso_dates(self):
-        explicit = date(2026, 8, 12)
-        first_id = add_expense("CPU", "CPU", 10, explicit)
-        second_id = add_expense("RAM", "RAM", 20)
+    def buy(self, name, item_type, price, purchase_date=None):
+        return add_expenses([{
+            "name": name,
+            "item_type": item_type,
+            "price": price,
+            "purchase_date": purchase_date,
+        }])[0]
 
-        expenses = {item["id"]: item for item in get_expenses()}
-        self.assertEqual(expenses[first_id]["purchase_date"], explicit.isoformat())
-        self.assertEqual(expenses[second_id]["purchase_date"], date.today().isoformat())
-        self.assertNotEqual(expenses[second_id]["purchase_date"], "CURRENT_DATE")
-
-    def test_integer_cents_are_authoritative_and_round_half_up(self):
-        item_id = add_expense("CPU", "CPU", "1.005")
+    def test_schema_contains_only_authoritative_current_tables_and_columns(self):
         with connection() as database:
-            stored = database.execute(
-                "SELECT price,price_cents FROM expenses WHERE id=?", (item_id,)
-            ).fetchone()
-            database.execute("UPDATE expenses SET price=999.99 WHERE id=?", (item_id,))
+            self.assertEqual(database.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+            tables = {
+                row[0] for row in database.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+            expense_columns = [row[1] for row in database.execute("PRAGMA table_info(expenses)")]
+            pc_columns = [row[1] for row in database.execute("PRAGMA table_info(assembled_pcs)")]
+            sale_columns = [row[1] for row in database.execute("PRAGMA table_info(sales)")]
 
-        self.assertEqual(stored, (1.01, 101))
-        self.assertEqual(get_expenses()[0]["price"], 1.01)
+        self.assertEqual(tables, {"expenses", "assembled_pcs", "pc_parts", "sales", "sale_items"})
+        self.assertEqual(expense_columns, ["id", "name", "item_type", "price_cents", "purchase_date"])
+        self.assertEqual(pc_columns, ["id", "name"])
+        self.assertEqual(
+            sale_columns,
+            ["id", "name", "kind", "cost_cents", "selling_price_cents", "sale_date"],
+        )
 
-    def test_standalone_sale_and_undo_restore_the_original_expense(self):
-        add_expense("Unrelated", "Extra", 1)
-        item_id = add_expense("CPU", "CPU", 100, date.today())
+    def test_incompatible_schema_is_rejected_instead_of_mutated(self):
+        legacy_path = Path(self.temporary_directory.name) / "legacy.db"
+        with closing(sqlite3.connect(legacy_path)) as database:
+            database.execute("CREATE TABLE expenses (id INTEGER PRIMARY KEY, price REAL)")
+            database.execute("PRAGMA user_version=2")
+        configure_database(legacy_path)
 
-        sale_id = sell_inventory_items([item_id], 125, date.today())[0]
-        self.assertNotEqual(sale_id, item_id)
-        self.assertNotIn(item_id, [row[0] for row in get_inventory_items()])
+        with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
+            initialize_database()
 
-        undo_sale(sale_id)
-        self.assertIn(item_id, [row[0] for row in get_inventory_items()])
-        self.assertEqual(get_sales(), [])
+        with closing(sqlite3.connect(legacy_path)) as database:
+            self.assertEqual(database.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual([row[1] for row in database.execute("PRAGMA table_info(expenses)")], ["id", "price"])
 
-    def test_sold_expense_cannot_be_deleted_until_sale_is_undone(self):
-        item_id = add_expense("CPU", "CPU", 100)
-        sale_id = sell_inventory_items([item_id], 125, date.today())[0]
+    def test_purchase_uses_integer_cents_and_iso_dates(self):
+        item_id = self.buy("CPU", "cpu", "1,005", date(2026, 8, 13))
+        expense = list_expenses()[0]
 
+        self.assertEqual(expense.id, item_id)
+        self.assertEqual(expense.item_type, "CPU")
+        self.assertEqual(expense.price_cents, 101)
+        self.assertEqual(expense.purchase_date, date(2026, 8, 13))
+        self.assertTrue(expense.is_available)
+
+    def test_purchase_bundle_is_atomic(self):
         with self.assertRaises(ValidationError):
-            delete_expense(item_id)
+            add_expenses([
+                {"name": "CPU", "item_type": "CPU", "price": 10},
+                {"name": "Bad", "item_type": "Not a component", "price": 5},
+            ])
+        self.assertEqual(list_expenses(), ())
+
+    def test_assembly_uses_expense_ids_as_its_only_membership_source(self):
+        ids = [self.buy("RAM", "RAM", 40), self.buy("RAM", "RAM", 45)]
+        pc_id = assemble_pc("PC 1", ids)
+
+        pc = list_pcs()[0]
+        self.assertEqual(pc.id, pc_id)
+        self.assertEqual(tuple(part.id for part in pc.parts), tuple(ids))
+        self.assertEqual(pc.cost_cents, 8500)
+        self.assertEqual([item.pc_name for item in list_inventory()], ["PC 1", "PC 1"])
+
+        disassemble_pc(pc_id)
+        self.assertTrue(all(item.is_available for item in list_inventory()))
+
+    def test_assembly_rolls_back_if_any_item_is_unavailable(self):
+        item_id = self.buy("CPU", "CPU", 100)
+        with self.assertRaises(NotFoundError):
+            assemble_pc("PC 1", [item_id, 9999])
+        self.assertEqual(list_pcs(), ())
+        self.assertTrue(list_inventory()[0].is_available)
+
+    def test_standalone_group_sale_is_one_record_and_undo_restores_all(self):
+        ids = [self.buy("Fan", "Fan", 10) for _ in range(3)]
+        sale_id = sell_items(ids, "100.00", date.today())
+
+        sale = list_sales()[0]
+        self.assertEqual(sale.id, sale_id)
+        self.assertEqual(sale.kind, "item")
+        self.assertEqual(sale.cost_cents, 3000)
+        self.assertEqual(sale.selling_price_cents, 10000)
+        self.assertEqual(sale.profit_cents, 7000)
+        self.assertEqual(tuple(item.id for item in sale.items), tuple(ids))
+        self.assertEqual(list_inventory(), ())
 
         undo_sale(sale_id)
-        self.assertTrue(delete_expense(item_id))
+        self.assertEqual(list_sales(), ())
+        self.assertEqual({item.id for item in list_inventory()}, set(ids))
 
-    def test_standalone_sale_rolls_back_when_any_item_is_invalid(self):
-        item_id = add_expense("CPU", "CPU", 100, date.today())
+    def test_pc_sale_and_undo_preserve_duplicate_component_types(self):
+        ids = [
+            self.buy("CPU", "CPU", 100),
+            self.buy("RAM", "RAM", 40),
+            self.buy("RAM", "RAM", 45),
+        ]
+        pc_id = assemble_pc("PC 1", ids)
+        sale_id = sell_pc(pc_id, 250, date.today())
 
-        with self.assertRaises(NotFoundError):
-            sell_inventory_items([item_id, 9999], 200, date.today())
+        self.assertEqual(list_pcs(), ())
+        self.assertEqual(tuple(item.id for item in list_sales()[0].items), tuple(ids))
 
-        self.assertIn(item_id, [row[0] for row in get_inventory_items()])
-        self.assertEqual(get_sales(), [])
+        undo_sale(sale_id)
+        restored = list_pcs()[0]
+        self.assertEqual(restored.name, "PC 1")
+        self.assertEqual(tuple(item.id for item in restored.parts), tuple(ids))
 
-    def test_group_sale_allocates_every_cent(self):
-        ids = [add_expense(f"RAM {index}", "RAM", 10) for index in range(3)]
+    def test_pc_undo_name_collision_has_no_partial_effect(self):
+        old_id = self.buy("Old CPU", "CPU", 100)
+        sale_id = sell_pc(assemble_pc("PC 1", [old_id]), 125)
+        new_id = self.buy("New CPU", "CPU", 80)
+        assemble_pc("PC 1", [new_id])
 
-        sell_inventory_items(ids, 100, date.today())
+        with self.assertRaisesRegex(ValidationError, "PC 1"):
+            undo_sale(sale_id)
 
-        prices = [sale["selling_price"] for sale in get_sales()]
-        self.assertEqual(prices, [33.34, 33.33, 33.33])
-        self.assertEqual(round(sum(prices), 2), 100.00)
+        self.assertEqual(len(list_sales()), 1)
+        self.assertEqual(len(list_pcs()), 1)
 
-    def test_backup_is_valid_and_retention_is_enforced(self):
-        add_expense("CPU", "CPU", 100)
+    def test_sale_date_before_any_purchase_is_rejected_atomically(self):
+        tomorrow = date.today() + timedelta(days=1)
+        ids = [self.buy("CPU", "CPU", 100, tomorrow), self.buy("RAM", "RAM", 50)]
+
+        with self.assertRaisesRegex(ValidationError, "purchase date"):
+            sell_items(ids, 200, date.today())
+
+        self.assertEqual(list_sales(), ())
+        self.assertEqual({item.id for item in list_inventory()}, set(ids))
+
+    def test_delete_and_rename_groups_are_atomic(self):
+        ids = [self.buy("Cable", "Extra", 5), self.buy("Cable", "Extra", 6)]
+        rename_expenses(ids, "Power Cable")
+        self.assertEqual({item.name for item in list_expenses()}, {"Power Cable"})
+
+        assemble_pc("PC 1", [ids[1]])
+        with self.assertRaises(ValidationError):
+            delete_expenses(ids)
+        self.assertEqual({item.id for item in list_expenses()}, set(ids))
+
+    def test_renaming_pc_does_not_rewrite_parts(self):
+        item_id = self.buy("CPU", "CPU", 100)
+        pc_id = assemble_pc("PC 1", [item_id])
+        rename_pc(pc_id, "Workstation")
+
+        pc = list_pcs()[0]
+        self.assertEqual(pc.name, "Workstation")
+        self.assertEqual(pc.parts[0].name, "CPU")
+
+    def test_financial_summary_uses_current_inventory_and_realized_sales(self):
+        sold_id = self.buy("Sold", "Extra", 25)
+        self.buy("Stock", "Extra", 40)
+        sell_items([sold_id], 50)
+
+        summary = get_financial_summary()
+        self.assertEqual(summary.expense_cents, 6500)
+        self.assertEqual(summary.income_cents, 5000)
+        self.assertEqual(summary.profit_cents, 2500)
+        self.assertEqual(summary.inventory_cents, 4000)
+        self.assertEqual(summary.net_assets_cents, 2500)
+
+    def test_verified_backup_restore_and_retention(self):
+        self.buy("Old state", "CPU", 10)
         backup_directory = Path(self.temporary_directory.name) / "backups"
-
-        for _ in range(3):
-            create_backup(backup_directory, keep=2)
-
-        backups = list(backup_directory.glob("pcims_db_*.db"))
-        self.assertEqual(len(backups), 2)
-        for backup in backups:
-            with closing(sqlite3.connect(f"file:{backup.as_posix()}?mode=ro", uri=True)) as database:
-                self.assertEqual(database.execute("PRAGMA integrity_check").fetchone()[0], "ok")
-
-    def test_restore_is_atomic_and_preserves_a_pre_restore_backup(self):
-        add_expense("Before backup", "CPU", 10)
-        source_directory = Path(self.temporary_directory.name) / "source-backups"
-        source_backup = create_backup(source_directory)
-        add_expense("After backup", "RAM", 20)
-        safety_directory = Path(self.temporary_directory.name) / "safety-backups"
-
-        safety_backup = restore_backup(source_backup, safety_directory)
-
-        self.assertEqual([item["name"] for item in get_expenses()], ["Before backup"])
-        self.assertEqual(safety_backup.parent, safety_directory)
-        with closing(sqlite3.connect(f"file:{safety_backup.as_posix()}?mode=ro", uri=True)) as database:
-            self.assertEqual(database.execute("SELECT COUNT(*) FROM expenses").fetchone()[0], 2)
-
-    def test_invalid_restore_does_not_change_the_live_database(self):
-        add_expense("Keep me", "CPU", 10)
-        invalid_backup = Path(self.temporary_directory.name) / "invalid.db"
-        invalid_backup.write_text("not a sqlite database", encoding="utf-8")
-
-        with self.assertRaises(sqlite3.DatabaseError):
-            restore_backup(invalid_backup)
-
-        self.assertEqual([item["name"] for item in get_expenses()], ["Keep me"])
-
-    def test_restore_stages_source_before_retention_can_prune_it(self):
-        add_expense("Old state", "CPU", 10)
-        backup_directory = Path(self.temporary_directory.name) / "backups"
-        oldest_backup = create_backup(backup_directory)
-        add_expense("New state", "RAM", 20)
+        source = create_backup(backup_directory)
+        self.buy("New state", "RAM", 20)
         for _ in range(13):
             create_backup(backup_directory)
 
-        restore_backup(oldest_backup)
+        safety = restore_backup(source)
 
-        self.assertEqual([item["name"] for item in get_expenses()], ["Old state"])
+        self.assertEqual([item.name for item in list_expenses()], ["Old state"])
+        validate_database(safety)
+        self.assertLessEqual(len(list(backup_directory.glob("pcims_*.db"))), 14)
 
-    def test_sale_before_purchase_date_is_rejected_without_changes(self):
-        tomorrow = date.today() + timedelta(days=1)
-        item_id = add_expense("CPU", "CPU", 100, tomorrow)
+    def test_restore_rejects_old_or_corrupt_databases_without_changes(self):
+        self.buy("Keep me", "CPU", 10)
+        invalid = Path(self.temporary_directory.name) / "invalid.db"
+        invalid.write_text("not sqlite", encoding="utf-8")
 
-        with self.assertRaises(ValidationError):
-            sell_inventory_items([item_id], 100, date.today())
-
-        self.assertIn(item_id, [row[0] for row in get_inventory_items()])
-
-    def test_assembly_rolls_back_if_a_selected_component_disappears(self):
-        item_id = add_expense("CPU", "CPU", 100)
-
-        with self.assertRaises(NotFoundError):
-            assemble_inventory_pc("PC 1", {"CPU": "CPU", "RAM": "Missing"})
-
-        self.assertEqual(get_assembled_pcs(), [])
-        with connection() as database:
-            used_in = database.execute("SELECT used_in FROM expenses WHERE id=?", (item_id,)).fetchone()[0]
-        self.assertIsNone(used_in)
-
-    def test_pc_sale_and_undo_preserve_multiple_parts_of_the_same_type(self):
-        part_ids = [
-            add_expense("CPU", "CPU", 100),
-            add_expense("RAM", "RAM", 40),
-            add_expense("RAM", "RAM", 40),
-        ]
-        assemble_inventory_pc("PC 1", {"CPU": "CPU", "RAM": "RAM;RAM"})
-
-        sale_id = sell_assembled_pc("PC 1", 250, date.today())
-        self.assertEqual(len(get_sold_pc_parts(sale_id)), 3)
-        self.assertEqual(get_assembled_pcs(), [])
-
-        undo_sale(sale_id)
-        self.assertEqual(len(get_assembled_pcs()), 1)
-        inventory_ids = [row[0] for row in get_inventory_items()]
-        self.assertEqual(set(inventory_ids), set(part_ids))
-        with connection() as database:
-            assignments = database.execute(
-                "SELECT used_in FROM expenses ORDER BY id"
-            ).fetchall()
-        self.assertEqual(assignments, [("PC 1",), ("PC 1",), ("PC 1",)])
-
-    def test_pc_undo_name_collision_is_rejected_without_partial_changes(self):
-        add_expense("Old CPU", "CPU", 100)
-        assemble_inventory_pc("PC 1", {"CPU": "Old CPU"})
-        sale_id = sell_assembled_pc("PC 1", 125, date.today())
-        add_expense("New CPU", "CPU", 80)
-        assemble_inventory_pc("PC 1", {"CPU": "New CPU"})
-
-        with self.assertRaisesRegex(ValidationError, "assembled PC named 'PC 1'"):
-            undo_sale(sale_id)
-
-        self.assertEqual(len(get_sales()), 1)
-        self.assertEqual(len(get_assembled_pcs()), 1)
-
-    def test_group_rename_updates_each_component_reference(self):
-        ram_ids = [add_expense("RAM", "RAM", 40), add_expense("RAM", "RAM", 40)]
-        assemble_inventory_pc("PC 1", {"RAM": "RAM;RAM"})
-
-        rename_parts(ram_ids, "Renamed RAM")
-
-        pc = get_assembled_pcs()[0]
-        self.assertEqual(pc[7], "Renamed RAM;Renamed RAM")
-        self.assertEqual([item["name"] for item in get_expenses()], ["Renamed RAM", "Renamed RAM"])
-
-    def test_normalized_membership_remains_authoritative(self):
-        part_ids = [add_expense("CPU", "CPU", 100), add_expense("RAM", "RAM", 50)]
-        assemble_inventory_pc("PC 1", {"CPU": "CPU", "RAM": "RAM"})
-        with connection() as database:
-            database.execute("UPDATE expenses SET used_in='stale legacy value'")
-
-        self.assertEqual(get_total_pc_price("PC 1"), 150)
-        sale_id = sell_assembled_pc("PC 1", 200, date.today())
-        self.assertEqual(get_inventory_items(), [])
-        undo_sale(sale_id)
-        self.assertEqual({row[0] for row in get_inventory_items()}, set(part_ids))
-
-    def test_item_names_cannot_use_the_legacy_component_delimiter(self):
-        with self.assertRaises(ValidationError):
-            add_expense("RAM;GPU", "RAM", 10)
-
-
-class SchemaMigrationTests(unittest.TestCase):
-    def test_legacy_schema_is_upgraded_and_backfilled(self):
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "legacy.db"
-            with closing(sqlite3.connect(database_path)) as database:
-                database.executescript(
-                    """
-                    CREATE TABLE expenses (
-                        id INTEGER PRIMARY KEY, name TEXT, type TEXT, price REAL,
-                        purchase_date TEXT, in_inventory INTEGER, used_in TEXT
-                    );
-                    CREATE TABLE assembled_pcs (
-                        id INTEGER PRIMARY KEY, name TEXT, price REAL,
-                        cpu TEXT, cooler TEXT, gpu TEXT, motherboard TEXT, ram TEXT,
-                        ssd TEXT, hdd TEXT, pc_case TEXT, psu TEXT, fan TEXT, extra TEXT
-                    );
-                    CREATE TABLE income (
-                        id INTEGER PRIMARY KEY, old_id INTEGER, name TEXT, cost REAL,
-                        selling_price REAL, profit REAL, sale_date TEXT, is_pc INTEGER
-                    );
-                    INSERT INTO expenses VALUES
-                        (1,'CPU','CPU',99.99,'2026-01-01',1,'Legacy PC');
-                    INSERT INTO assembled_pcs
-                        (id,name,price,cpu) VALUES (1,'Legacy PC',99.99,'CPU');
-                    INSERT INTO income VALUES
-                        (1,NULL,'Prior sale',5.55,10.10,4.55,'2026-01-02',0);
-                    """
-                )
-                database.commit()
-
-            configure_database(database_path)
-            initialize_database()
-
-            with connection() as database:
-                self.assertEqual(database.execute("PRAGMA user_version").fetchone()[0], 2)
-                self.assertEqual(database.execute(
-                    "SELECT price_cents FROM expenses WHERE id=1"
-                ).fetchone()[0], 9999)
-                self.assertEqual(database.execute(
-                    "SELECT cost_cents,selling_price_cents,profit_cents FROM income WHERE id=1"
-                ).fetchone(), (555, 1010, 455))
-                self.assertEqual(database.execute(
-                    "SELECT pc_id,expense_id,component_type,position FROM assembled_pc_parts"
-                ).fetchone(), (1, 1, "CPU", 0))
+        with self.assertRaises(sqlite3.DatabaseError):
+            restore_backup(invalid)
+        self.assertEqual([item.name for item in list_expenses()], ["Keep me"])
 
 
 if __name__ == "__main__":
