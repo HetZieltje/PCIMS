@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from db.connection import connection, get_database_path
-from db.queries import REQUIRED_TABLES, SCHEMA_VERSION
+from db.queries import REQUIRED_TABLES, SCHEMA_COLUMNS, SCHEMA_VERSION
 
 
 def validate_database(path):
@@ -28,11 +28,15 @@ def validate_database(path):
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-    missing = REQUIRED_TABLES - tables
-    if missing:
-        raise sqlite3.DatabaseError(
-            f"Database is missing required tables: {', '.join(sorted(missing))}"
-        )
+        missing = REQUIRED_TABLES - tables
+        if missing:
+            raise sqlite3.DatabaseError(
+                f"Database is missing required tables: {', '.join(sorted(missing))}"
+            )
+        for table, expected in SCHEMA_COLUMNS.items():
+            actual = tuple(row[1] for row in database.execute(f'PRAGMA table_info("{table}")'))
+            if actual != expected:
+                raise sqlite3.DatabaseError(f"Database table '{table}' has an incompatible layout.")
 
 
 def create_backup(destination_directory=None, keep=14):

@@ -15,6 +15,13 @@ ITEM_TYPES = (
 REQUIRED_TABLES = {
     "expenses", "assembled_pcs", "pc_parts", "sales", "sale_items",
 }
+SCHEMA_COLUMNS = {
+    "expenses": ("id", "name", "item_type", "price_cents", "purchase_date"),
+    "assembled_pcs": ("id", "name"),
+    "pc_parts": ("pc_id", "expense_id", "position"),
+    "sales": ("id", "name", "kind", "cost_cents", "selling_price_cents", "sale_date"),
+    "sale_items": ("sale_id", "expense_id", "position"),
+}
 
 
 class ValidationError(ValueError):
@@ -96,7 +103,12 @@ def initialize_database():
         }
         version = database.execute("PRAGMA user_version").fetchone()[0]
         if tables:
-            if version != SCHEMA_VERSION or not REQUIRED_TABLES.issubset(tables):
+            columns_match = REQUIRED_TABLES.issubset(tables) and all(
+                tuple(row[1] for row in database.execute(f'PRAGMA table_info("{table}")'))
+                == expected
+                for table, expected in SCHEMA_COLUMNS.items()
+            )
+            if version != SCHEMA_VERSION or not columns_match:
                 raise SchemaVersionError(
                     f"Database schema {version} is incompatible with required schema "
                     f"{SCHEMA_VERSION}. Restore a current-format backup or choose a new database."

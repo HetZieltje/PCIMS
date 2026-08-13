@@ -82,6 +82,13 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.assertEqual(database.execute("PRAGMA user_version").fetchone()[0], 2)
             self.assertEqual([row[1] for row in database.execute("PRAGMA table_info(expenses)")], ["id", "price"])
 
+    def test_current_version_with_wrong_layout_is_rejected(self):
+        with connection() as database:
+            database.execute("ALTER TABLE expenses RENAME COLUMN price_cents TO price_value")
+
+        with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
+            initialize_database()
+
     def test_purchase_uses_integer_cents_and_iso_dates(self):
         item_id = self.buy("CPU", "cpu", "1,005", date(2026, 8, 13))
         expense = list_expenses()[0]

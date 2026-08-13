@@ -1,82 +1,59 @@
-"""Shared, consistently validated dialogs used by multiple tabs."""
+"""Reusable Qt dialogs for PCIMS workflows."""
 
-import tkinter as tk
-from decimal import Decimal, InvalidOperation
-from tkinter import messagebox, simpledialog
+from PySide6.QtCore import QDate
+from PySide6.QtWidgets import (
+    QDateEdit,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QLabel,
+    QLineEdit,
+    QVBoxLayout,
+)
 
-from app.calendar import DateEntry
-
-
-def parse_money_input(value):
-    """Parse a user-entered euro amount while preserving cent precision."""
-    normalized = str(value).strip().replace(",", ".").replace(" ", "")
-    if not normalized:
-        raise ValueError("Please enter a selling price.")
-    try:
-        amount = Decimal(normalized)
-    except InvalidOperation as exc:
-        raise ValueError("Price must be numeric.") from exc
-    if not amount.is_finite():
-        raise ValueError("Price must be numeric.")
-    if amount.as_tuple().exponent < -2:
-        raise ValueError("Price must have up to 2 decimal places.")
-    if amount < 0:
-        raise ValueError("Selling price cannot be negative.")
-    if amount >= Decimal("100000"):
-        raise ValueError("Selling price must be less than 100,000.")
-    return float(amount)
+from app.formatting import cents_as_decimal, parse_money_cents
 
 
-def ask_selling_price(parent, item_name):
-    while True:
-        entered = simpledialog.askstring(
-            "Selling Price",
-            f"Enter the total selling price for {item_name}:",
-            parent=parent,
+class SaleDialog(QDialog):
+    def __init__(self, item_name, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Record sale")
+        self.setModal(True)
+        self.amount = QLineEdit()
+        self.amount.setPlaceholderText("0.00")
+        self.sale_date = QDateEdit(QDate.currentDate())
+        self.sale_date.setCalendarPopup(True)
+        self.sale_date.setDisplayFormat("yyyy-MM-dd")
+        self.error_label = QLabel()
+        self.error_label.setStyleSheet("color: #c62828")
+
+        form = QFormLayout()
+        form.addRow("Item", QLabel(item_name))
+        form.addRow("Total selling price", self.amount)
+        form.addRow("Sale date", self.sale_date)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        if entered is None:
-            return None
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.error_label)
+        layout.addWidget(buttons)
+        self.amount.setFocus()
+
+    def _validate(self):
         try:
-            return parse_money_input(entered)
-        except ValueError as exc:
-            messagebox.showerror("Invalid Selling Price", str(exc), parent=parent)
+            self._amount_cents = parse_money_cents(self.amount.text())
+        except ValueError as error:
+            self.error_label.setText(str(error))
+            return
+        self.accept()
 
-
-def ask_sale_date(parent, item_name):
-    result = {"date": None}
-    popup = tk.Toplevel(parent)
-    popup.title("Select Sale Date")
-    popup.resizable(False, False)
-
-    tk.Label(popup, text=f"Select sale date for {item_name}:").pack(pady=(14, 8), padx=20)
-    entry = DateEntry(
-        popup, width=12, background="darkblue", foreground="white",
-        borderwidth=2, date_pattern="yyyy-mm-dd",
-    )
-    entry.pack(pady=8)
-
-    button_frame = tk.Frame(popup)
-    button_frame.pack(fill=tk.X, padx=16, pady=(8, 14))
-
-    def close(selected):
-        if selected:
-            try:
-                result["date"] = entry.get_date()
-            except ValueError as exc:
-                messagebox.showerror("Invalid Date", str(exc), parent=popup)
-                return
-        else:
-            result["date"] = None
-        popup.destroy()
-
-    tk.Button(button_frame, text="Cancel", command=lambda: close(False)).pack(side=tk.RIGHT, padx=4)
-    tk.Button(button_frame, text="Confirm", command=lambda: close(True)).pack(side=tk.RIGHT, padx=4)
-    popup.protocol("WM_DELETE_WINDOW", lambda: close(False))
-    popup.transient(parent.winfo_toplevel())
-    popup.grab_set()
-    popup.update_idletasks()
-    x = popup.winfo_screenwidth() // 2 - popup.winfo_width() // 2
-    y = popup.winfo_screenheight() // 2 - popup.winfo_height() // 2
-    popup.geometry(f"+{x}+{y}")
-    parent.wait_window(popup)
-    return result["date"]
+    @classmethod
+    def get_sale(cls, item_name, parent=None):
+        dialog = cls(item_name, parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return cents_as_decimal(dialog._amount_cents), dialog.sale_date.date().toPython()

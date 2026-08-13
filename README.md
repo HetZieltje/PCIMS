@@ -1,26 +1,63 @@
 # PCIMS
 
-PC Inventory Management Software is a local Tkinter application for tracking component purchases, inventory, assembled PCs, sales, and realized profit.
+PC Inventory Management Software is a cross-platform PySide6/Qt desktop
+application for purchases, component inventory, assembled PCs, sales, profit,
+and verified SQLite backups.
 
-## Run
+## Platforms
+
+PCIMS uses Qt and supports Windows and Linux. Build and test distributable
+packages on each target operating system.
+
+## Install and run
 
 ```powershell
-python -m pip install -r requirements.txt
-python app.py
+python -m venv .venv
+.venv\Scripts\python -m pip install -e .
+.venv\Scripts\python app.py
 ```
 
-`customtkinter` and `tkcalendar` provide the preferred appearance and calendar
-picker. If they cannot be installed, PCIMS falls back to standard Tk controls
-and an ISO-date field so the application remains usable offline.
+On Linux:
 
-Application data is stored in `%LOCALAPPDATA%\PCIMS` on Windows (or `~/.pcims` when `LOCALAPPDATA` is unavailable). An older `db/pcims_db.db` is copied to the user-data directory on first launch. Verified backups are created at startup and on a normal close; manual backup and restore controls are available on the Extras tab.
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python app.py
+```
+
+Application data follows platform conventions:
+
+- Windows: `%LOCALAPPDATA%\PCIMS`
+- Linux with `XDG_DATA_HOME`: `$XDG_DATA_HOME/pcims`
+- Other Linux environments: `~/.local/share/pcims`
+
+The application creates verified backups at startup and normal shutdown.
+Manual backup and restore controls are available under Settings.
+
+## Database policy
+
+The Qt rewrite uses one normalized schema with integer cents and ID-based
+relationships. Runtime migration and compatibility with pre-rewrite schemas
+are intentionally not included. An incompatible database is rejected without
+being modified; use a current-format backup or a new database path.
 
 ## Test
 
 ```powershell
-python -m unittest discover -s tests -v
+.venv\Scripts\python -m unittest discover -s tests -v
 ```
 
-Tests always configure a temporary SQLite file. They never open or delete the application database.
+Tests configure temporary SQLite files and the Qt offscreen platform. They do
+not open or delete the application database.
 
-For an explicitly isolated database outside the test suite, set `PCIMS_DB_PATH` before starting Python.
+## Build a desktop executable
+
+Qt's deployment tool builds for the operating system on which it is run:
+
+```powershell
+.venv\Scripts\pyside6-deploy app.py --name PCIMS
+```
+
+Run the equivalent `.venv/bin/pyside6-deploy` command on Linux. Release builds
+should be produced and smoke-tested independently on Windows and Linux; the CI
+workflow runs the complete backend and offscreen Qt test suite on both.

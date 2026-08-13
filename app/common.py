@@ -1,0 +1,56 @@
+"""Shared Qt helpers."""
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QHeaderView,
+    QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
+)
+
+
+ID_ROLE = Qt.ItemDataRole.UserRole
+
+
+def configure_table(table: QTableWidget, headers, stretch_column=1):
+    table.setColumnCount(len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.setAlternatingRowColors(True)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setSortingEnabled(True)
+    table.verticalHeader().setVisible(False)
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    if 0 <= stretch_column < len(headers):
+        header.setSectionResizeMode(stretch_column, QHeaderView.ResizeMode.Stretch)
+
+
+def table_item(text, record_id=None, alignment=None):
+    item = QTableWidgetItem(str(text))
+    if record_id is not None:
+        item.setData(ID_ROLE, int(record_id))
+    if alignment is not None:
+        item.setTextAlignment(alignment)
+    return item
+
+
+def selected_ids(table: QTableWidget):
+    rows = sorted({index.row() for index in table.selectionModel().selectedRows()})
+    return [table.item(row, 0).data(ID_ROLE) for row in rows]
+
+
+def show_error(parent, title, error):
+    QMessageBox.critical(parent, title, str(error))
+
+
+def ask_confirmation(parent, title, text):
+    return QMessageBox.question(
+        parent,
+        title,
+        text,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    ) == QMessageBox.StandardButton.Yes
