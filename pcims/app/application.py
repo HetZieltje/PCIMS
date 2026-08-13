@@ -40,7 +40,15 @@ def acquire_instance_lock(database_path=None):
 def main(argv=None):
     application = create_application(argv)
     install_exception_hook()
-    instance_lock = acquire_instance_lock()
+    try:
+        instance_lock = acquire_instance_lock()
+    except OSError as error:
+        QMessageBox.critical(
+            None,
+            "Data directory unavailable",
+            f"PCIMS could not access its data directory:\n\n{error}",
+        )
+        return 2
     if instance_lock is None:
         QMessageBox.critical(
             None,
@@ -52,6 +60,7 @@ def main(argv=None):
         try:
             initialize_database()
         except (
+            OSError,
             DatabaseIntegrityError,
             SchemaVersionError,
             sqlite3.DatabaseError,
@@ -70,7 +79,15 @@ def main(argv=None):
         except (OSError, ValueError, sqlite3.DatabaseError) as error:
             backup_warning = f"The startup backup could not be created:\n\n{error}"
 
-        window = MainWindow()
+        try:
+            window = MainWindow()
+        except (OSError, sqlite3.DatabaseError) as error:
+            QMessageBox.critical(
+                None,
+                "Database unavailable",
+                f"PCIMS could not load the database:\n\n{error}",
+            )
+            return 2
         window.show()
         if backup_warning:
             QMessageBox.warning(

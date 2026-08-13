@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 ID_ROLE = Qt.ItemDataRole.UserRole
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
-DATA_OPERATION_ERRORS = (ValueError, LookupError, sqlite3.DatabaseError)
+DATA_OPERATION_ERRORS = (OSError, ValueError, LookupError, sqlite3.DatabaseError)
 
 
 class SortableTableItem(QTableWidgetItem):

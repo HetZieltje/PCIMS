@@ -6,7 +6,7 @@ import unittest
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QTableWidgetSelectionRange,
 )
 
-from pcims.app.application import acquire_instance_lock, create_application
+from pcims.app.application import acquire_instance_lock, create_application, main
 from pcims.app.common import configure_table, table_item
 from pcims.app.errors import install_exception_hook
 from pcims.app.main_window import MainWindow
@@ -35,6 +35,8 @@ from pcims.db.queries import (
     list_pcs,
     list_sales,
 )
+
+TEST_DATE = date(2026, 8, 14)
 
 
 class QtWorkflowTests(unittest.TestCase):
@@ -74,7 +76,7 @@ class QtWorkflowTests(unittest.TestCase):
                     "name": name,
                     "item_type": item_type,
                     "price": price,
-                    "purchase_date": date.today(),
+                    "purchase_date": TEST_DATE,
                 }
             ]
         )[0]
@@ -293,6 +295,41 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertIsNotNone(third)
         third.unlock()
 
+    def test_startup_io_failure_is_reported_and_releases_instance_lock(self):
+        lock = MagicMock()
+        with (
+            patch("pcims.app.application.install_exception_hook"),
+            patch("pcims.app.application.acquire_instance_lock", return_value=lock),
+            patch(
+                "pcims.app.application.initialize_database",
+                side_effect=OSError("permission denied"),
+            ),
+            patch("pcims.app.application.QMessageBox.critical") as critical,
+        ):
+            result = main([])
+
+        self.assertEqual(result, 2)
+        critical.assert_called_once()
+        self.assertIn("permission denied", critical.call_args.args[2])
+        lock.unlock.assert_called_once()
+
+    def test_runtime_refresh_failure_is_reported_and_left_retryable(self):
+        window = MainWindow()
+        window._dirty_pages.add(window.inventory_page)
+        with (
+            patch.object(
+                window.inventory_page,
+                "refresh",
+                side_effect=sqlite3.OperationalError("disk I/O error"),
+            ),
+            patch("pcims.app.main_window.show_error") as show_error,
+        ):
+            window.refresh_current()
+
+        show_error.assert_called_once()
+        self.assertIn(window.inventory_page, window._dirty_pages)
+        window.deleteLater()
+
     def test_unexpected_exception_is_logged_and_reported(self):
         log_path = Path(self.temporary_directory.name) / "errors.log"
         previous = install_exception_hook(log_path)
@@ -344,7 +381,7 @@ class QtWorkflowTests(unittest.TestCase):
         )
         with patch(
             "pcims.app.pages.inventory.SaleDialog.get_sale",
-            return_value=(Decimal("20.00"), date.today()),
+            return_value=(Decimal("20.00"), TEST_DATE),
         ):
             inventory.sell_selected_parts()
 
@@ -377,7 +414,7 @@ class QtWorkflowTests(unittest.TestCase):
         inventory.pc_table.selectRow(0)
         with patch(
             "pcims.app.pages.inventory.SaleDialog.get_sale",
-            return_value=(Decimal("200.00"), date.today()),
+            return_value=(Decimal("200.00"), TEST_DATE),
         ):
             inventory.sell_selected_pc()
 

@@ -33,6 +33,8 @@ from pcims.db.queries import (
 )
 from pcims.money import MAX_MONEY_CENTS
 
+TEST_DATE = date(2026, 8, 14)
+
 
 class DatabaseWorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -270,9 +272,9 @@ class DatabaseWorkflowTests(unittest.TestCase):
             statements = []
 
             @contextmanager
-            def traced_connection():
+            def traced_connection(trace_statements=statements):
                 with connection() as database:
-                    database.set_trace_callback(statements.append)
+                    database.set_trace_callback(trace_statements.append)
                     yield database
 
             with patch("pcims.db.queries.connection", traced_connection):
@@ -293,7 +295,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def test_standalone_group_sale_is_one_record_and_undo_restores_all(self):
         ids = [self.buy("Fan", "Fan", 10) for _ in range(3)]
-        sale_id = sell_items(ids, "100.00", date.today())
+        sale_id = sell_items(ids, "100.00", TEST_DATE)
 
         sale = list_sales()[0]
         self.assertEqual(sale.id, sale_id)
@@ -315,7 +317,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.buy("RAM", "RAM", 45),
         ]
         pc_id = assemble_pc("PC 1", ids)
-        sale_id = sell_pc(pc_id, 250, date.today())
+        sale_id = sell_pc(pc_id, 250, TEST_DATE)
 
         self.assertEqual(list_pcs(), ())
         self.assertEqual(tuple(item.id for item in list_sales()[0].items), tuple(ids))
@@ -370,11 +372,11 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(len(list_pcs()), 1)
 
     def test_sale_date_before_any_purchase_is_rejected_atomically(self):
-        tomorrow = date.today() + timedelta(days=1)
+        tomorrow = TEST_DATE + timedelta(days=1)
         ids = [self.buy("CPU", "CPU", 100, tomorrow), self.buy("RAM", "RAM", 50)]
 
         with self.assertRaisesRegex(ValidationError, "purchase date"):
-            sell_items(ids, 200, date.today())
+            sell_items(ids, 200, TEST_DATE)
 
         self.assertEqual(list_sales(), ())
         self.assertEqual({item.id for item in list_inventory()}, set(ids))
@@ -470,6 +472,25 @@ class DatabaseWorkflowTests(unittest.TestCase):
         validate_database(result)
         self.assertTrue(result.has_cleanup_warnings)
         self.assertIn("simulated directory scan failure", result.cleanup_warning)
+
+    def test_temporary_cleanup_failure_preserves_primary_backup_error(self):
+        self.buy("Keep", "CPU", 10)
+        backup_directory = Path(self.temporary_directory.name) / "backups"
+
+        with (
+            patch(
+                "pcims.db.backup.os.replace",
+                side_effect=OSError("final replace failed"),
+            ),
+            patch.object(
+                Path, "unlink", side_effect=PermissionError("temporary file locked")
+            ),
+            self.assertRaisesRegex(OSError, "final replace failed") as raised,
+        ):
+            create_backup(backup_directory)
+
+        notes = getattr(raised.exception, "__notes__", ())
+        self.assertTrue(any("temporary file locked" in note for note in notes))
 
     def test_restore_rejects_old_or_corrupt_databases_without_changes(self):
         self.buy("Keep me", "CPU", 10)

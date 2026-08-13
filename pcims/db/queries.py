@@ -1,6 +1,6 @@
 """Current-schema data access and atomic business workflows for PCIMS."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from pcims.db.connection import connection
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
@@ -197,7 +197,7 @@ def _find_pc_name_collision(database, name, exclude_id=None):
 
 def _iso_date(value):
     if value is None:
-        return date.today().isoformat()
+        return datetime.now(UTC).astimezone().date().isoformat()
     if isinstance(value, datetime):
         value = value.date()
     if isinstance(value, date):

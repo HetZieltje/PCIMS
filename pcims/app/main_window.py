@@ -6,6 +6,7 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QCloseEvent, QColor, QPalette
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTabWidget
 
+from pcims.app.common import DATA_OPERATION_ERRORS, show_error
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
@@ -59,17 +60,27 @@ class MainWindow(QMainWindow):
         page = self.tabs.widget(index)
         if page not in self._dirty_pages:
             return
-        refresh = getattr(page, "refresh", None)
-        if callable(refresh):
-            refresh()
+        if not self._refresh_page(page):
+            return
         self._dirty_pages.discard(page)
+
+    def _refresh_page(self, page):
+        refresh = getattr(page, "refresh", None)
+        if not callable(refresh):
+            return True
+        try:
+            refresh()
+        except DATA_OPERATION_ERRORS as error:
+            show_error(self, "Unable to refresh data", error)
+            return False
+        return True
 
     def refresh_all(self):
         for page in self.pages:
-            refresh = getattr(page, "refresh", None)
-            if callable(refresh):
-                refresh()
-        self._dirty_pages.clear()
+            if self._refresh_page(page):
+                self._dirty_pages.discard(page)
+            else:
+                self._dirty_pages.add(page)
         self.statusBar().showMessage("Data refreshed", 2500)
 
     def _on_data_changed(self):

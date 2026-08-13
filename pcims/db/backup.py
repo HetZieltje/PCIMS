@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pcims.db.connection import connection, get_database_path
@@ -40,6 +40,19 @@ class BackupResult(os.PathLike):
         return "\n".join(self.cleanup_errors)
 
 
+def _remove_temporary(path, primary_error):
+    if not path.exists():
+        return
+    try:
+        path.unlink()
+    except OSError as cleanup_error:
+        if primary_error is None:
+            raise
+        primary_error.add_note(
+            f"Temporary file cleanup also failed for {path}: {cleanup_error}"
+        )
+
+
 def validate_database(path):
     resolved = Path(path).expanduser().resolve()
     with closing(sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)) as database:
@@ -69,17 +82,20 @@ def create_backup(destination_directory=None, keep=14):
         .resolve()
     )
     destination.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    stamp = datetime.now(UTC).astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
     final_path = destination / f"pcims_{stamp}.db"
     temporary_path = final_path.with_suffix(".tmp")
+    primary_error = None
     try:
         with connection() as source, closing(sqlite3.connect(temporary_path)) as target:
             source.backup(target)
         validate_database(temporary_path)
         os.replace(temporary_path, final_path)
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
+        _remove_temporary(temporary_path, primary_error)
 
     cleanup_errors = []
     try:
@@ -109,12 +125,15 @@ def restore_backup(backup_path, pre_restore_directory=None):
     staged_path = live_path.with_name(
         f".{live_path.name}.{uuid.uuid4().hex}.restore.tmp"
     )
+    primary_error = None
     try:
         shutil.copy2(source_path, staged_path)
         validate_database(staged_path)
         safety_backup = create_backup(pre_restore_directory)
         os.replace(staged_path, live_path)
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        if staged_path.exists():
-            staged_path.unlink()
+        _remove_temporary(staged_path, primary_error)
     return safety_backup
