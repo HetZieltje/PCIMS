@@ -58,6 +58,7 @@ being modified; use a current-format backup or a new database path.
 .venv\Scripts\python -X dev -W error -m unittest discover -s tests -v
 .venv\Scripts\ruff check .
 .venv\Scripts\mypy pcims --ignore-missing-imports --no-error-summary
+.venv\Scripts\mypy pcims/db pcims/domain.py pcims/money.py --strict --no-error-summary
 .venv\Scripts\bandit -q -r pcims
 ```
 

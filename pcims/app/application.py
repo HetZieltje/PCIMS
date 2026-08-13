@@ -10,11 +10,8 @@ from pcims.app.errors import install_exception_hook
 from pcims.app.main_window import MainWindow
 from pcims.db.backup import create_backup
 from pcims.db.connection import get_database_path
-from pcims.db.queries import (
-    DatabaseIntegrityError,
-    SchemaVersionError,
-    initialize_database,
-)
+from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
+from pcims.db.schema import initialize_database
 
 
 def create_application(argv=None):

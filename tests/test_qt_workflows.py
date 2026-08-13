@@ -30,11 +30,11 @@ from pcims.db.backup import BackupResult, create_backup
 from pcims.db.connection import configure_database
 from pcims.db.queries import (
     add_expenses,
-    initialize_database,
     list_expenses,
     list_pcs,
     list_sales,
 )
+from pcims.db.schema import initialize_database
 
 TEST_DATE = date(2026, 8, 14)
 

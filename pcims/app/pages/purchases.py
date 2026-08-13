@@ -30,7 +30,8 @@ from pcims.app.formatting import (
     format_cents,
     parse_money_cents,
 )
-from pcims.db.queries import ITEM_TYPES, add_expenses, list_expenses
+from pcims.db.queries import add_expenses, list_expenses
+from pcims.domain import ITEM_TYPES
 
 
 class PurchasesPage(QWidget):

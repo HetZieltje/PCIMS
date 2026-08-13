@@ -10,37 +10,33 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pcims.db.connection import connection, get_database_path
-from pcims.db.queries import (
-    DatabaseIntegrityError,
-    SchemaVersionError,
-    validate_current_data,
-    validate_schema,
-)
+from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
+from pcims.db.schema import validate_current_data, validate_schema
 
 
 @dataclass(frozen=True, slots=True)
-class BackupResult(os.PathLike):
+class BackupResult(os.PathLike[str]):
     """A verified backup plus any non-fatal retention cleanup failures."""
 
     path: Path
     cleanup_errors: tuple[str, ...] = ()
 
-    def __fspath__(self):
+    def __fspath__(self) -> str:
         return str(self.path)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return str(self.path)
 
     @property
-    def has_cleanup_warnings(self):
+    def has_cleanup_warnings(self) -> bool:
         return bool(self.cleanup_errors)
 
     @property
-    def cleanup_warning(self):
+    def cleanup_warning(self) -> str:
         return "\n".join(self.cleanup_errors)
 
 
-def _remove_temporary(path, primary_error):
+def _remove_temporary(path: Path, primary_error: BaseException | None) -> None:
     if not path.exists():
         return
     try:
@@ -53,7 +49,7 @@ def _remove_temporary(path, primary_error):
         )
 
 
-def validate_database(path):
+def validate_database(path: str | os.PathLike[str]) -> None:
     resolved = Path(path).expanduser().resolve()
     with closing(sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)) as database:
         integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
@@ -73,7 +69,9 @@ def validate_database(path):
             raise sqlite3.DatabaseError(str(error)) from error
 
 
-def create_backup(destination_directory=None, keep=14):
+def create_backup(
+    destination_directory: str | os.PathLike[str] | None = None, keep: int = 14
+) -> BackupResult:
     if keep < 1:
         raise ValueError("At least one backup must be retained.")
     destination = (
@@ -85,7 +83,7 @@ def create_backup(destination_directory=None, keep=14):
     stamp = datetime.now(UTC).astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
     final_path = destination / f"pcims_{stamp}.db"
     temporary_path = final_path.with_suffix(".tmp")
-    primary_error = None
+    primary_error: BaseException | None = None
     try:
         with connection() as source, closing(sqlite3.connect(temporary_path)) as target:
             source.backup(target)
@@ -97,7 +95,7 @@ def create_backup(destination_directory=None, keep=14):
     finally:
         _remove_temporary(temporary_path, primary_error)
 
-    cleanup_errors = []
+    cleanup_errors: list[str] = []
     try:
         backups = sorted(destination.glob("pcims_*.db"), reverse=True)
     except OSError as error:
@@ -113,7 +111,10 @@ def create_backup(destination_directory=None, keep=14):
     return BackupResult(final_path, tuple(cleanup_errors))
 
 
-def restore_backup(backup_path, pre_restore_directory=None):
+def restore_backup(
+    backup_path: str | os.PathLike[str],
+    pre_restore_directory: str | os.PathLike[str] | None = None,
+) -> BackupResult:
     source_path = Path(backup_path).expanduser().resolve()
     live_path = get_database_path().resolve()
     if not source_path.is_file():
@@ -125,7 +126,7 @@ def restore_backup(backup_path, pre_restore_directory=None):
     staged_path = live_path.with_name(
         f".{live_path.name}.{uuid.uuid4().hex}.restore.tmp"
     )
-    primary_error = None
+    primary_error: BaseException | None = None
     try:
         shutil.copy2(source_path, staged_path)
         validate_database(staged_path)

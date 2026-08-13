@@ -2,11 +2,13 @@
 
 import os
 import sqlite3
-from contextlib import contextmanager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 
-def get_data_dir():
+def get_data_dir() -> Path:
     """Return the per-user writable PCIMS data directory."""
     configured = os.environ.get("PCIMS_DATA_DIR")
     if configured:
@@ -20,38 +22,57 @@ def get_data_dir():
     return (Path.home() / ".local" / "share" / "pcims").resolve()
 
 
-_database_path = (
-    Path(os.environ.get("PCIMS_DB_PATH", get_data_dir() / "pcims.db"))
-    .expanduser()
-    .resolve()
-)
+@dataclass(frozen=True, slots=True)
+class Database:
+    """One explicit SQLite database location and its connection policy."""
+
+    path: Path
+
+    @classmethod
+    def at(cls, path: str | os.PathLike[str]) -> "Database":
+        return cls(Path(path).expanduser().resolve())
+
+    def connect(self) -> sqlite3.Connection:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        database = sqlite3.connect(self.path, timeout=10)
+        database.row_factory = sqlite3.Row
+        database.execute("PRAGMA foreign_keys = ON")
+        database.execute("PRAGMA busy_timeout = 10000")
+        return database
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Yield one transactional connection and always close it."""
+        connection = self.connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
 
-def get_database_path():
-    return _database_path
+_configured_path = os.environ.get("PCIMS_DB_PATH")
+_database = Database.at(_configured_path or get_data_dir() / "pcims.db")
 
 
-def configure_database(path):
-    """Point future connections at *path* (primarily for isolated tests)."""
-    global _database_path
-    _database_path = Path(path).expanduser().resolve()
+def get_database() -> Database:
+    return _database
 
 
-def get_connection():
-    _database_path.parent.mkdir(parents=True, exist_ok=True)
-    database = sqlite3.connect(_database_path, timeout=10)
-    database.row_factory = sqlite3.Row
-    database.execute("PRAGMA foreign_keys = ON")
-    database.execute("PRAGMA busy_timeout = 10000")
-    return database
+def get_database_path() -> Path:
+    return get_database().path
 
 
-@contextmanager
-def connection():
-    """Yield one transactional connection and always close it."""
-    database = get_connection()
-    try:
-        with database:
-            yield database
-    finally:
-        database.close()
+def configure_database(path: str | os.PathLike[str]) -> Database:
+    """Select the process database at the composition boundary and return it."""
+    global _database
+    _database = Database.at(path)
+    return _database
+
+
+def get_connection() -> sqlite3.Connection:
+    return get_database().connect()
+
+
+def connection() -> AbstractContextManager[sqlite3.Connection]:
+    return get_database().transaction()

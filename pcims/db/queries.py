@@ -1,148 +1,32 @@
 """Current-schema data access and atomic business workflows for PCIMS."""
 
+import sqlite3
+from collections.abc import Iterable
 from datetime import UTC, date, datetime
+from typing import NotRequired, TypedDict, cast
 
 from pcims.db.connection import connection
+from pcims.db.errors import NotFoundError, ValidationError
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
+from pcims.domain import ITEM_TYPES, ItemType, SaleKind
 from pcims.money import MAX_MONEY_CENTS, parse_money_cents
 
-SCHEMA_VERSION = 4
-ITEM_TYPES = (
-    "CPU",
-    "Cooler",
-    "GPU",
-    "Motherboard",
-    "RAM",
-    "SSD",
-    "HDD",
-    "Case",
-    "PSU",
-    "Fan",
-    "Extra",
-)
-_ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
-SCHEMA_DEFINITIONS = {
-    ("table", "expenses"): f"""CREATE TABLE expenses (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
-        item_type TEXT NOT NULL CHECK (item_type IN ({_ALLOWED_TYPES_SQL})),
-        price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
-        purchase_date TEXT NOT NULL
-            CHECK (purchase_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
-    )""",
-    ("table", "assembled_pcs"): """CREATE TABLE assembled_pcs (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0)
-    )""",
-    ("table", "pc_parts"): """CREATE TABLE pc_parts (
-        pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE,
-        expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
-        position INTEGER NOT NULL CHECK (position >= 0),
-        PRIMARY KEY (pc_id, expense_id),
-        UNIQUE (pc_id, position)
-    )""",
-    ("table", "sales"): """CREATE TABLE sales (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
-        kind TEXT NOT NULL CHECK (kind IN ('item', 'pc')),
-        cost_cents INTEGER NOT NULL CHECK (cost_cents >= 0),
-        selling_price_cents INTEGER NOT NULL CHECK (selling_price_cents >= 0),
-        sale_date TEXT NOT NULL
-            CHECK (sale_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
-    )""",
-    ("table", "sale_items"): """CREATE TABLE sale_items (
-        sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
-        expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
-        position INTEGER NOT NULL CHECK (position >= 0),
-        PRIMARY KEY (sale_id, expense_id),
-        UNIQUE (sale_id, position)
-    )""",
-    ("trigger", "pc_part_must_not_be_sold"): """CREATE TRIGGER pc_part_must_not_be_sold
-        BEFORE INSERT ON pc_parts
-        WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=NEW.expense_id)
-        BEGIN
-            SELECT RAISE(ABORT, 'sold expense cannot be assigned to a PC');
-        END""",
-    (
-        "trigger",
-        "sale_item_must_not_be_in_pc",
-    ): """CREATE TRIGGER sale_item_must_not_be_in_pc
-        BEFORE INSERT ON sale_items
-        WHEN EXISTS (SELECT 1 FROM pc_parts WHERE expense_id=NEW.expense_id)
-        BEGIN
-            SELECT RAISE(ABORT, 'assembled expense cannot be sold separately');
-        END""",
-}
+
+class PurchaseInput(TypedDict):
+    name: object
+    item_type: object
+    price: object
+    purchase_date: NotRequired[object]
 
 
-class ValidationError(ValueError):
-    pass
-
-
-class NotFoundError(LookupError):
-    pass
-
-
-class SchemaVersionError(RuntimeError):
-    pass
-
-
-class DatabaseIntegrityError(RuntimeError):
-    pass
-
-
-def _normalize_schema_sql(sql):
-    return " ".join(str(sql).split()).casefold()
-
-
-def validate_schema(database):
-    """Require the exact current tables, constraints, indexes, and triggers."""
-    version = database.execute("PRAGMA user_version").fetchone()[0]
-    actual = {
-        (row[0], row[1]): _normalize_schema_sql(row[2])
-        for row in database.execute(
-            """SELECT type,name,sql FROM sqlite_master
-               WHERE name NOT LIKE 'sqlite_%'
-                 AND type IN ('table','index','trigger','view')"""
-        )
-    }
-    expected = {
-        key: _normalize_schema_sql(sql) for key, sql in SCHEMA_DEFINITIONS.items()
-    }
-    if version == SCHEMA_VERSION and actual == expected:
-        return
-
-    missing = sorted(name for key, name in expected.keys() - actual.keys())
-    unexpected = sorted(name for key, name in actual.keys() - expected.keys())
-    changed = sorted(
-        name
-        for key, name in expected.keys() & actual.keys()
-        if expected[(key, name)] != actual[(key, name)]
-    )
-    differences = []
-    if version != SCHEMA_VERSION:
-        differences.append(f"version {version}, expected {SCHEMA_VERSION}")
-    if missing:
-        differences.append(f"missing {', '.join(missing)}")
-    if unexpected:
-        differences.append(f"unexpected {', '.join(unexpected)}")
-    if changed:
-        differences.append(f"changed {', '.join(changed)}")
-    raise SchemaVersionError(
-        "Database schema is incompatible with the current format"
-        f" ({'; '.join(differences)}). Restore a current-format backup or choose "
-        "a new database."
-    )
-
-
-def _text(value, label):
+def _text(value: object, label: str) -> str:
     normalized = str(value).strip() if value is not None else ""
     if not normalized:
         raise ValidationError(f"{label} cannot be blank.")
     return normalized
 
 
-def _item_type(value):
+def _item_type(value: object) -> ItemType:
     normalized = _text(value, "Item type").casefold()
     for item_type in ITEM_TYPES:
         if item_type.casefold() == normalized:
@@ -150,16 +34,16 @@ def _item_type(value):
     raise ValidationError(f"Item type must be one of: {', '.join(ITEM_TYPES)}.")
 
 
-def _money_cents(value, label="Price"):
+def _money_cents(value: object, label: str = "Price") -> int:
     try:
         return parse_money_cents(value, label)
     except ValueError as exc:
         raise ValidationError(str(exc)) from exc
 
 
-def _positive_id(value, label="ID"):
+def _positive_id(value: object, label: str = "ID") -> int:
     try:
-        parsed = int(value)
+        parsed = int(str(value).strip())
     except (TypeError, ValueError) as exc:
         raise ValidationError(f"{label} must be a positive integer.") from exc
     if parsed <= 0:
@@ -167,7 +51,7 @@ def _positive_id(value, label="ID"):
     return parsed
 
 
-def _unique_ids(values, label):
+def _unique_ids(values: Iterable[object], label: str) -> list[int]:
     ids = [_positive_id(value, label) for value in values]
     if not ids:
         raise ValidationError(f"At least one {label.lower()} is required.")
@@ -176,14 +60,16 @@ def _unique_ids(values, label):
     return ids
 
 
-def _bounded_cents_total(values, label):
+def _bounded_cents_total(values: Iterable[int], label: str) -> int:
     total = sum(values)
     if total > MAX_MONEY_CENTS:
         raise ValidationError(f"{label} is too large.")
     return total
 
 
-def _find_pc_name_collision(database, name, exclude_id=None):
+def _find_pc_name_collision(
+    database: sqlite3.Connection, name: str, exclude_id: int | None = None
+) -> sqlite3.Row | None:
     folded = name.casefold()
     return next(
         (
@@ -195,7 +81,7 @@ def _find_pc_name_collision(database, name, exclude_id=None):
     )
 
 
-def _iso_date(value):
+def _iso_date(value: object | None) -> str:
     if value is None:
         return datetime.now(UTC).astimezone().date().isoformat()
     if isinstance(value, datetime):
@@ -208,125 +94,11 @@ def _iso_date(value):
         raise ValidationError("Date must use the YYYY-MM-DD format.") from exc
 
 
-def validate_current_data(database):
-    """Reject structurally valid databases with invalid business records."""
-    date_fields = (
-        ("expenses", "purchase date", "SELECT id,purchase_date FROM expenses"),
-        ("sales", "sale date", "SELECT id,sale_date FROM sales"),
-    )
-    for table, label, query in date_fields:
-        for row_id, stored_date in database.execute(query):
-            try:
-                date.fromisoformat(stored_date)
-            except (TypeError, ValueError) as exc:
-                raise DatabaseIntegrityError(
-                    f"Database contains an invalid {label} in {table} row {row_id}."
-                ) from exc
-
-    money_fields = (
-        (
-            "expenses",
-            "SELECT id FROM expenses WHERE price_cents<0 OR price_cents>? LIMIT 1",
-        ),
-        (
-            "sales",
-            "SELECT id FROM sales WHERE cost_cents<0 OR cost_cents>? LIMIT 1",
-        ),
-        (
-            "sales",
-            """SELECT id FROM sales
-               WHERE selling_price_cents<0 OR selling_price_cents>? LIMIT 1""",
-        ),
-    )
-    for table, query in money_fields:
-        invalid = database.execute(query, (MAX_MONEY_CENTS,)).fetchone()
-        if invalid:
-            raise DatabaseIntegrityError(
-                f"Database contains an invalid monetary value in {table} "
-                f"row {invalid[0]}."
-            )
-
-    conflict = database.execute(
-        """SELECT pp.expense_id FROM pc_parts pp
-           JOIN sale_items si ON si.expense_id=pp.expense_id LIMIT 1"""
-    ).fetchone()
-    if conflict:
-        raise DatabaseIntegrityError(
-            f"Expense {conflict[0]} is both assigned to a PC and recorded as sold."
-        )
-
-    empty_pc = database.execute(
-        """SELECT p.id FROM assembled_pcs p
-           LEFT JOIN pc_parts pp ON pp.pc_id=p.id
-           GROUP BY p.id HAVING COUNT(pp.expense_id)=0 LIMIT 1"""
-    ).fetchone()
-    if empty_pc:
-        raise DatabaseIntegrityError(f"Assembled PC {empty_pc[0]} has no components.")
-
-    seen_pc_names = {}
-    for pc_id, pc_name in database.execute("SELECT id,name FROM assembled_pcs"):
-        folded_name = pc_name.casefold()
-        if folded_name in seen_pc_names:
-            raise DatabaseIntegrityError(
-                f"Assembled PCs {seen_pc_names[folded_name]} and {pc_id} have "
-                "case-insensitively duplicate names."
-            )
-        seen_pc_names[folded_name] = pc_id
-
-    invalid_sale = database.execute(
-        """SELECT s.id FROM sales s
-           LEFT JOIN sale_items si ON si.sale_id=s.id
-           LEFT JOIN expenses e ON e.id=si.expense_id
-           GROUP BY s.id
-           HAVING COUNT(si.expense_id)=0
-               OR s.cost_cents<>COALESCE(SUM(e.price_cents),0)
-               OR s.sale_date<MAX(e.purchase_date)
-           LIMIT 1"""
-    ).fetchone()
-    if invalid_sale:
-        raise DatabaseIntegrityError(
-            f"Sale {invalid_sale[0]} has inconsistent items, cost, or dates."
-        )
-
-
-def initialize_database():
-    """Create the current schema, or reject any incompatible existing schema."""
-    with connection() as database:
-        objects_exist = database.execute(
-            "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
-        ).fetchone()
-        if objects_exist:
-            validate_schema(database)
-            integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
-            if integrity != "ok":
-                raise DatabaseIntegrityError(
-                    f"Database integrity check failed: {integrity}"
-                )
-            foreign_key_violations = database.execute(
-                "PRAGMA foreign_key_check"
-            ).fetchall()
-            if foreign_key_violations:
-                table, row_id, referenced_table, _ = foreign_key_violations[0]
-                raise DatabaseIntegrityError(
-                    f"Database foreign-key check failed at {table} row {row_id} "
-                    f"(missing {referenced_table} record)."
-                )
-            validate_current_data(database)
-            return
-
-        statements = ";\n".join(SCHEMA_DEFINITIONS.values())
-        database.executescript(
-            f"BEGIN IMMEDIATE;\n{statements};\n"
-            f"PRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
-        )
-        validate_schema(database)
-
-
-def _expense_from_row(row):
+def _expense_from_row(row: sqlite3.Row) -> Expense:
     return Expense(
         id=row["id"],
         name=row["name"],
-        item_type=row["item_type"],
+        item_type=cast(ItemType, row["item_type"]),
         price_cents=row["price_cents"],
         purchase_date=date.fromisoformat(row["purchase_date"]),
         pc_id=row["pc_id"],
@@ -345,7 +117,14 @@ _EXPENSE_SELECT = """
 """
 
 
-def add_expenses(items):
+def _insert_id(cursor: sqlite3.Cursor) -> int:
+    row_id = cursor.lastrowid
+    if row_id is None:
+        raise sqlite3.DatabaseError("SQLite did not return an inserted row ID.")
+    return row_id
+
+
+def add_expenses(items: Iterable[PurchaseInput]) -> list[int]:
     """Record one or more purchased items atomically."""
     normalized = [
         (
@@ -360,23 +139,27 @@ def add_expenses(items):
         raise ValidationError("At least one purchase item is required.")
     with connection() as database:
         return [
-            database.execute(
-                "INSERT INTO expenses (name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
-                item,
-            ).lastrowid
+            _insert_id(
+                database.execute(
+                    "INSERT INTO expenses (name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
+                    item,
+                )
+            )
             for item in normalized
         ]
 
 
-def list_expenses():
+def list_expenses() -> tuple[Expense, ...]:
     with connection() as database:
         rows = database.execute(_EXPENSE_SELECT + " ORDER BY e.id").fetchall()
     return tuple(_expense_from_row(row) for row in rows)
 
 
-def list_inventory(item_type=None, available_only=False):
+def list_inventory(
+    item_type: object | None = None, available_only: bool = False
+) -> tuple[Expense, ...]:
     clauses = ["si.sale_id IS NULL"]
-    parameters = []
+    parameters: list[object] = []
     if item_type is not None:
         clauses.append("e.item_type=?")
         parameters.append(_item_type(item_type))
@@ -393,7 +176,7 @@ def list_inventory(item_type=None, available_only=False):
     return tuple(_expense_from_row(row) for row in rows)
 
 
-def delete_expenses(expense_ids):
+def delete_expenses(expense_ids: Iterable[object]) -> None:
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
     with connection() as database:
@@ -418,7 +201,7 @@ def delete_expenses(expense_ids):
         )
 
 
-def rename_expenses(expense_ids, new_name):
+def rename_expenses(expense_ids: Iterable[object], new_name: object) -> None:
     ids = _unique_ids(expense_ids, "Expense ID")
     new_name = _text(new_name, "New item name")
     placeholders = ",".join("?" for _ in ids)
@@ -437,7 +220,7 @@ def rename_expenses(expense_ids, new_name):
         )
 
 
-def assemble_pc(name, expense_ids):
+def assemble_pc(name: object, expense_ids: Iterable[object]) -> int:
     name = _text(name, "PC name")
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
@@ -453,9 +236,9 @@ def assemble_pc(name, expense_ids):
         for row in rows:
             if row["pc_id"] is not None or row["sale_id"] is not None:
                 raise ValidationError(f"'{row['name']}' is not available for assembly.")
-        pc_id = database.execute(
-            "INSERT INTO assembled_pcs (name) VALUES (?)", (name,)
-        ).lastrowid
+        pc_id = _insert_id(
+            database.execute("INSERT INTO assembled_pcs (name) VALUES (?)", (name,))
+        )
         database.executemany(
             "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
             ((pc_id, expense_id, position) for position, expense_id in enumerate(ids)),
@@ -463,7 +246,7 @@ def assemble_pc(name, expense_ids):
         return pc_id
 
 
-def list_pcs():
+def list_pcs() -> tuple[AssembledPC, ...]:
     with connection() as database:
         pcs = database.execute(
             "SELECT id,name FROM assembled_pcs ORDER BY name,id"
@@ -471,15 +254,15 @@ def list_pcs():
         rows = database.execute(
             _EXPENSE_SELECT + " WHERE p.id IS NOT NULL ORDER BY p.id,pp.position"
         ).fetchall()
-    parts_by_pc = {pc["id"]: [] for pc in pcs}
+    parts_by_pc: dict[int, list[Expense]] = {int(pc["id"]): [] for pc in pcs}
     for row in rows:
-        parts_by_pc[row["pc_id"]].append(_expense_from_row(row))
+        parts_by_pc[int(row["pc_id"])].append(_expense_from_row(row))
     return tuple(
         AssembledPC(pc["id"], pc["name"], tuple(parts_by_pc[pc["id"]])) for pc in pcs
     )
 
 
-def disassemble_pc(pc_id):
+def disassemble_pc(pc_id: object) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
     with connection() as database:
         result = database.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
@@ -487,7 +270,7 @@ def disassemble_pc(pc_id):
             raise NotFoundError(f"PC {pc_id} does not exist.")
 
 
-def rename_pc(pc_id, new_name):
+def rename_pc(pc_id: object, new_name: object) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
     new_name = _text(new_name, "New PC name")
     with connection() as database:
@@ -501,7 +284,7 @@ def rename_pc(pc_id, new_name):
             raise NotFoundError(f"PC {pc_id} does not exist.")
 
 
-def _validate_sale_date(rows, sale_day):
+def _validate_sale_date(rows: Iterable[sqlite3.Row], sale_day: str) -> None:
     for row in rows:
         if sale_day < row["purchase_date"]:
             raise ValidationError(
@@ -509,7 +292,9 @@ def _validate_sale_date(rows, sale_day):
             )
 
 
-def sell_items(expense_ids, selling_price, sale_date=None):
+def sell_items(
+    expense_ids: Iterable[object], selling_price: object, sale_date: object | None = None
+) -> int:
     ids = _unique_ids(expense_ids, "Expense ID")
     selling_cents = _money_cents(selling_price, "Selling price")
     sale_day = _iso_date(sale_date)
@@ -529,10 +314,12 @@ def sell_items(expense_ids, selling_price, sale_date=None):
         cost_cents = _bounded_cents_total(
             (row["price_cents"] for row in rows), "Combined item cost"
         )
-        sale_id = database.execute(
-            "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'item',?,?,?)",
-            (name, cost_cents, selling_cents, sale_day),
-        ).lastrowid
+        sale_id = _insert_id(
+            database.execute(
+                "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'item',?,?,?)",
+                (name, cost_cents, selling_cents, sale_day),
+            )
+        )
         database.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
             (
@@ -543,7 +330,9 @@ def sell_items(expense_ids, selling_price, sale_date=None):
         return sale_id
 
 
-def sell_pc(pc_id, selling_price, sale_date=None):
+def sell_pc(
+    pc_id: object, selling_price: object, sale_date: object | None = None
+) -> int:
     pc_id = _positive_id(pc_id, "PC ID")
     selling_cents = _money_cents(selling_price, "Selling price")
     sale_day = _iso_date(sale_date)
@@ -564,10 +353,12 @@ def sell_pc(pc_id, selling_price, sale_date=None):
         )
         expense_ids = [row["id"] for row in rows]
         database.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
-        sale_id = database.execute(
-            "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'pc',?,?,?)",
-            (pc["name"], cost_cents, selling_cents, sale_day),
-        ).lastrowid
+        sale_id = _insert_id(
+            database.execute(
+                "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'pc',?,?,?)",
+                (pc["name"], cost_cents, selling_cents, sale_day),
+            )
+        )
         database.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
             (
@@ -578,7 +369,7 @@ def sell_pc(pc_id, selling_price, sale_date=None):
         return sale_id
 
 
-def list_sales():
+def list_sales() -> tuple[Sale, ...]:
     with connection() as database:
         sales = database.execute(
             "SELECT id,name,kind,cost_cents,selling_price_cents,sale_date FROM sales ORDER BY id"
@@ -587,14 +378,16 @@ def list_sales():
             _EXPENSE_SELECT
             + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
         ).fetchall()
-    items_by_sale = {sale["id"]: [] for sale in sales}
+    items_by_sale: dict[int, list[Expense]] = {
+        int(sale["id"]): [] for sale in sales
+    }
     for row in rows:
-        items_by_sale[row["sale_id"]].append(_expense_from_row(row))
+        items_by_sale[int(row["sale_id"])].append(_expense_from_row(row))
     return tuple(
         Sale(
             id=sale["id"],
             name=sale["name"],
-            kind=sale["kind"],
+            kind=cast(SaleKind, sale["kind"]),
             cost_cents=sale["cost_cents"],
             selling_price_cents=sale["selling_price_cents"],
             sale_date=date.fromisoformat(sale["sale_date"]),
@@ -604,7 +397,7 @@ def list_sales():
     )
 
 
-def undo_sale(sale_id):
+def undo_sale(sale_id: object) -> None:
     sale_id = _positive_id(sale_id, "Sale ID")
     with connection() as database:
         sale = database.execute(
@@ -628,9 +421,11 @@ def undo_sale(sale_id):
                     f"Cannot undo while an assembled PC named '{collision['name']}' exists."
                 )
             database.execute("DELETE FROM sales WHERE id=?", (sale_id,))
-            pc_id = database.execute(
-                "INSERT INTO assembled_pcs (name) VALUES (?)", (sale["name"],)
-            ).lastrowid
+            pc_id = _insert_id(
+                database.execute(
+                    "INSERT INTO assembled_pcs (name) VALUES (?)", (sale["name"],)
+                )
+            )
             database.executemany(
                 "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
                 (
@@ -642,7 +437,7 @@ def undo_sale(sale_id):
             database.execute("DELETE FROM sales WHERE id=?", (sale_id,))
 
 
-def get_financial_summary():
+def get_financial_summary() -> FinancialSummary:
     with connection() as database:
         expense_cents = database.execute(
             "SELECT COALESCE(SUM(price_cents),0) FROM expenses"

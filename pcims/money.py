@@ -10,7 +10,7 @@ _GROUPED_US = re.compile(r"^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$")
 _GROUPED_EU = re.compile(r"^\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$")
 
 
-def _normalize_number(value):
+def _normalize_number(value: object) -> str | None:
     text = "".join(str(value).replace("€", "").split())
     if _GROUPED_US.fullmatch(text):
         return text.replace(",", "")
@@ -21,7 +21,7 @@ def _normalize_number(value):
     return None
 
 
-def parse_money_cents(value, label="Amount"):
+def parse_money_cents(value: object, label: str = "Amount") -> int:
     """Parse plain, US-grouped, or EU-grouped money without floating point."""
     normalized = _normalize_number(value)
     if normalized is None:

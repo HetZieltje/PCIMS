@@ -1,0 +1,232 @@
+"""Exact schema definition, creation, and semantic integrity checks."""
+
+import sqlite3
+from datetime import date
+
+from pcims.db.connection import connection
+from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
+from pcims.domain import ITEM_TYPES
+from pcims.money import MAX_MONEY_CENTS
+
+SCHEMA_VERSION = 4
+_ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
+SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
+    ("table", "expenses"): f"""CREATE TABLE expenses (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        item_type TEXT NOT NULL CHECK (item_type IN ({_ALLOWED_TYPES_SQL})),
+        price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+        purchase_date TEXT NOT NULL
+            CHECK (purchase_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+    )""",
+    ("table", "assembled_pcs"): """CREATE TABLE assembled_pcs (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0)
+    )""",
+    ("table", "pc_parts"): """CREATE TABLE pc_parts (
+        pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE,
+        expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        PRIMARY KEY (pc_id, expense_id),
+        UNIQUE (pc_id, position)
+    )""",
+    ("table", "sales"): """CREATE TABLE sales (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        kind TEXT NOT NULL CHECK (kind IN ('item', 'pc')),
+        cost_cents INTEGER NOT NULL CHECK (cost_cents >= 0),
+        selling_price_cents INTEGER NOT NULL CHECK (selling_price_cents >= 0),
+        sale_date TEXT NOT NULL
+            CHECK (sale_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+    )""",
+    ("table", "sale_items"): """CREATE TABLE sale_items (
+        sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+        expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        PRIMARY KEY (sale_id, expense_id),
+        UNIQUE (sale_id, position)
+    )""",
+    ("trigger", "pc_part_must_not_be_sold"): """CREATE TRIGGER pc_part_must_not_be_sold
+        BEFORE INSERT ON pc_parts
+        WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=NEW.expense_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'sold expense cannot be assigned to a PC');
+        END""",
+    (
+        "trigger",
+        "sale_item_must_not_be_in_pc",
+    ): """CREATE TRIGGER sale_item_must_not_be_in_pc
+        BEFORE INSERT ON sale_items
+        WHEN EXISTS (SELECT 1 FROM pc_parts WHERE expense_id=NEW.expense_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'assembled expense cannot be sold separately');
+        END""",
+}
+
+
+def _normalize_schema_sql(sql: object) -> str:
+    return " ".join(str(sql).split()).casefold()
+
+
+def validate_schema(database: sqlite3.Connection) -> None:
+    """Require the exact current tables, constraints, indexes, and triggers."""
+    version = int(database.execute("PRAGMA user_version").fetchone()[0])
+    actual = {
+        (str(row[0]), str(row[1])): _normalize_schema_sql(row[2])
+        for row in database.execute(
+            """SELECT type,name,sql FROM sqlite_master
+               WHERE name NOT LIKE 'sqlite_%'
+                 AND type IN ('table','index','trigger','view')"""
+        )
+    }
+    expected = {
+        key: _normalize_schema_sql(sql) for key, sql in SCHEMA_DEFINITIONS.items()
+    }
+    if version == SCHEMA_VERSION and actual == expected:
+        return
+
+    missing = sorted(name for _, name in expected.keys() - actual.keys())
+    unexpected = sorted(name for _, name in actual.keys() - expected.keys())
+    changed = sorted(
+        name
+        for kind, name in expected.keys() & actual.keys()
+        if expected[(kind, name)] != actual[(kind, name)]
+    )
+    differences: list[str] = []
+    if version != SCHEMA_VERSION:
+        differences.append(f"version {version}, expected {SCHEMA_VERSION}")
+    if missing:
+        differences.append(f"missing {', '.join(missing)}")
+    if unexpected:
+        differences.append(f"unexpected {', '.join(unexpected)}")
+    if changed:
+        differences.append(f"changed {', '.join(changed)}")
+    raise SchemaVersionError(
+        "Database schema is incompatible with the current format"
+        f" ({'; '.join(differences)}). Restore a current-format backup or choose "
+        "a new database."
+    )
+
+
+def _validate_dates(database: sqlite3.Connection) -> None:
+    date_fields = (
+        ("expenses", "purchase date", "SELECT id,purchase_date FROM expenses"),
+        ("sales", "sale date", "SELECT id,sale_date FROM sales"),
+    )
+    for table, label, query in date_fields:
+        for row_id, stored_date in database.execute(query):
+            try:
+                date.fromisoformat(stored_date)
+            except (TypeError, ValueError) as exc:
+                raise DatabaseIntegrityError(
+                    f"Database contains an invalid {label} in {table} row {row_id}."
+                ) from exc
+
+
+def _validate_money(database: sqlite3.Connection) -> None:
+    money_fields = (
+        (
+            "expenses",
+            "SELECT id FROM expenses WHERE price_cents<0 OR price_cents>? LIMIT 1",
+        ),
+        (
+            "sales",
+            "SELECT id FROM sales WHERE cost_cents<0 OR cost_cents>? LIMIT 1",
+        ),
+        (
+            "sales",
+            """SELECT id FROM sales
+               WHERE selling_price_cents<0 OR selling_price_cents>? LIMIT 1""",
+        ),
+    )
+    for table, query in money_fields:
+        invalid = database.execute(query, (MAX_MONEY_CENTS,)).fetchone()
+        if invalid:
+            raise DatabaseIntegrityError(
+                f"Database contains an invalid monetary value in {table} "
+                f"row {invalid[0]}."
+            )
+
+
+def _validate_relationships(database: sqlite3.Connection) -> None:
+    conflict = database.execute(
+        """SELECT pp.expense_id FROM pc_parts pp
+           JOIN sale_items si ON si.expense_id=pp.expense_id LIMIT 1"""
+    ).fetchone()
+    if conflict:
+        raise DatabaseIntegrityError(
+            f"Expense {conflict[0]} is both assigned to a PC and recorded as sold."
+        )
+
+    empty_pc = database.execute(
+        """SELECT p.id FROM assembled_pcs p
+           LEFT JOIN pc_parts pp ON pp.pc_id=p.id
+           GROUP BY p.id HAVING COUNT(pp.expense_id)=0 LIMIT 1"""
+    ).fetchone()
+    if empty_pc:
+        raise DatabaseIntegrityError(f"Assembled PC {empty_pc[0]} has no components.")
+
+    seen_pc_names: dict[str, int] = {}
+    for pc_id, pc_name in database.execute("SELECT id,name FROM assembled_pcs"):
+        folded_name = pc_name.casefold()
+        if folded_name in seen_pc_names:
+            raise DatabaseIntegrityError(
+                f"Assembled PCs {seen_pc_names[folded_name]} and {pc_id} have "
+                "case-insensitively duplicate names."
+            )
+        seen_pc_names[folded_name] = pc_id
+
+    invalid_sale = database.execute(
+        """SELECT s.id FROM sales s
+           LEFT JOIN sale_items si ON si.sale_id=s.id
+           LEFT JOIN expenses e ON e.id=si.expense_id
+           GROUP BY s.id
+           HAVING COUNT(si.expense_id)=0
+               OR s.cost_cents<>COALESCE(SUM(e.price_cents),0)
+               OR s.sale_date<MAX(e.purchase_date)
+           LIMIT 1"""
+    ).fetchone()
+    if invalid_sale:
+        raise DatabaseIntegrityError(
+            f"Sale {invalid_sale[0]} has inconsistent items, cost, or dates."
+        )
+
+
+def validate_current_data(database: sqlite3.Connection) -> None:
+    """Reject structurally valid databases with invalid business records."""
+    _validate_dates(database)
+    _validate_money(database)
+    _validate_relationships(database)
+
+
+def initialize_database() -> None:
+    """Create the current schema, or reject any incompatible existing schema."""
+    with connection() as database:
+        objects_exist = database.execute(
+            "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone()
+        if objects_exist:
+            validate_schema(database)
+            integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise DatabaseIntegrityError(
+                    f"Database integrity check failed: {integrity}"
+                )
+            foreign_key_violations = database.execute(
+                "PRAGMA foreign_key_check"
+            ).fetchall()
+            if foreign_key_violations:
+                table, row_id, referenced_table, _ = foreign_key_violations[0]
+                raise DatabaseIntegrityError(
+                    f"Database foreign-key check failed at {table} row {row_id} "
+                    f"(missing {referenced_table} record)."
+                )
+            validate_current_data(database)
+            return
+
+        statements = ";\n".join(SCHEMA_DEFINITIONS.values())
+        database.executescript(
+            f"BEGIN IMMEDIATE;\n{statements};\n"
+            f"PRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
+        )
+        validate_schema(database)

@@ -7,20 +7,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 from pcims.db.backup import create_backup, restore_backup, validate_database
-from pcims.db.connection import configure_database, connection
-from pcims.db.queries import (
-    SCHEMA_DEFINITIONS,
-    SCHEMA_VERSION,
+from pcims.db.connection import Database, configure_database, connection, get_database
+from pcims.db.errors import (
     DatabaseIntegrityError,
     NotFoundError,
     SchemaVersionError,
     ValidationError,
+)
+from pcims.db.queries import (
     add_expenses,
     assemble_pc,
     delete_expenses,
     disassemble_pc,
     get_financial_summary,
-    initialize_database,
     list_expenses,
     list_inventory,
     list_pcs,
@@ -31,6 +30,7 @@ from pcims.db.queries import (
     sell_pc,
     undo_sale,
 )
+from pcims.db.schema import SCHEMA_DEFINITIONS, SCHEMA_VERSION, initialize_database
 from pcims.money import MAX_MONEY_CENTS
 
 TEST_DATE = date(2026, 8, 14)
@@ -45,6 +45,18 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary_directory.cleanup()
+
+    def test_database_configuration_is_an_explicit_immutable_value(self):
+        configured = get_database()
+        independent = Database.at(Path(self.temporary_directory.name) / "other.db")
+
+        self.assertEqual(configured.path, self.database_path.resolve())
+        self.assertNotEqual(configured, independent)
+        with independent.transaction() as database:
+            database.execute("CREATE TABLE isolated (id INTEGER PRIMARY KEY)")
+        self.assertTrue(independent.path.is_file())
+        with self.assertRaises(sqlite3.OperationalError), configured.transaction() as database:
+            database.execute("SELECT * FROM isolated")
 
     def buy(self, name, item_type, price, purchase_date=None):
         return add_expenses(
@@ -148,7 +160,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         )
 
         with (
-            patch("pcims.db.queries.SCHEMA_DEFINITIONS", broken),
+            patch("pcims.db.schema.SCHEMA_DEFINITIONS", broken),
             self.assertRaises(sqlite3.OperationalError),
         ):
             initialize_database()

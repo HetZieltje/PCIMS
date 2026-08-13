@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
 
 from pcims.app.common import DATA_OPERATION_ERRORS, ID_ROLE, show_error
 from pcims.app.formatting import format_cents
-from pcims.db.queries import ITEM_TYPES, assemble_pc, list_inventory, list_pcs
+from pcims.db.queries import assemble_pc, list_inventory, list_pcs
+from pcims.domain import ITEM_TYPES
 
 
 class AssemblePage(QWidget):

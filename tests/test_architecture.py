@@ -38,6 +38,16 @@ class ArchitectureTests(unittest.TestCase):
         ):
             self.assertNotIn(legacy_term, source.casefold())
 
+    def test_schema_and_workflows_have_separate_modules(self):
+        root = Path(__file__).parents[1] / "pcims" / "db"
+        queries = (root / "queries.py").read_text(encoding="utf-8")
+        schema = (root / "schema.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("CREATE TABLE", queries)
+        self.assertNotIn("PRAGMA user_version", queries)
+        self.assertIn("SCHEMA_DEFINITIONS", schema)
+        self.assertIn("validate_current_data", schema)
+
     def test_linux_desktop_install_assets_are_present_and_user_scoped(self):
         root = Path(__file__).parents[1]
         installer = (root / "scripts" / "install-linux.sh").read_text(encoding="utf-8")

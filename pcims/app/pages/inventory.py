@@ -25,7 +25,6 @@ from pcims.app.common import (
 from pcims.app.dialogs import SaleDialog
 from pcims.app.formatting import format_cents
 from pcims.db.queries import (
-    ITEM_TYPES,
     delete_expenses,
     disassemble_pc,
     list_inventory,
@@ -35,6 +34,7 @@ from pcims.db.queries import (
     sell_items,
     sell_pc,
 )
+from pcims.domain import ITEM_TYPES
 
 
 class InventoryPage(QWidget):
