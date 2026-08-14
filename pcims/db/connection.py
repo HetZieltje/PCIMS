@@ -35,6 +35,15 @@ def get_data_dir() -> Path:
     return (Path.home() / ".local" / "share" / "pcims").resolve()
 
 
+def ensure_private_directory(path: str | os.PathLike[str]) -> Path:
+    """Create one application-owned directory and restrict POSIX access."""
+    resolved = Path(path).expanduser().resolve()
+    resolved.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        resolved.chmod(0o700)
+    return resolved
+
+
 @dataclass(frozen=True, slots=True)
 class Database:
     """One explicit SQLite database location and its connection policy."""
@@ -90,6 +99,8 @@ class Database:
 
 
 def default_database() -> Database:
-    """Build the environment-selected database without mutable process state."""
+    """Build an explicit override or protect the platform-default data location."""
     configured_path = os.environ.get("PCIMS_DB_PATH")
-    return Database.at(configured_path or get_data_dir() / "pcims.db")
+    if configured_path:
+        return Database.at(configured_path)
+    return Database.at(ensure_private_directory(get_data_dir()) / "pcims.db")

@@ -61,27 +61,29 @@ being modified; use a current-format backup or a new database path.
 .venv\Scripts\python -X dev -W error -m unittest discover -s tests -v
 .venv\Scripts\ruff check .
 .venv\Scripts\mypy pcims --strict --no-error-summary
-.venv\Scripts\bandit -q -r pcims
+.venv\Scripts\bandit -q -r pcims scripts
 ```
 
-Regenerate `requirements.lock` and `requirements-dev.lock` deliberately with
-the `uv pip compile` commands recorded in their headers whenever dependency
-ranges are changed.
+Regenerate the runtime, development, and build lock files deliberately whenever
+dependency ranges are changed; never hand-edit hashes independently of the
+resolved package versions.
 
 Tests configure temporary SQLite files and the Qt offscreen platform. They do
 not open or delete the application database. CI runs the same checks on Windows
 and Linux with Python 3.11, 3.13, and 3.14, validates the installed dependency
-graph, then builds the wheel reproducibly, installs it, and smoke-tests its backend and Qt frontend
-from outside the source checkout.
+graph, then builds the wheel reproducibly, installs it, and smoke-tests its
+backend and Qt frontend from outside the source checkout. The Linux job also
+performs one real, user-scoped desktop installation from the locked dependencies
+and validates its generated desktop entry.
 
-## Build a desktop executable
+## Release artifacts
 
-Qt's deployment tool builds for the operating system on which it is run:
+The reproducible wheel is the authoritative cross-platform release artifact.
+On Linux, `scripts/install-linux.sh` turns the checked-out release into a
+transactional, user-scoped desktop installation. Both paths are exercised in
+CI.
 
-```powershell
-.venv\Scripts\pyside6-deploy app.py --name PCIMS
-```
-
-Run the equivalent `.venv/bin/pyside6-deploy` command on Linux. Release builds
-should be produced and smoke-tested independently on Windows and Linux; the CI
-workflow runs the complete backend and offscreen Qt test suite on both.
+Ad-hoc `pyside6-deploy` output is not treated as a release artifact because its
+Nuitka toolchain, platform libraries, signing, and installed-program smoke test
+are not yet locked into this repository. A native executable should only be
+published after that platform-specific pipeline is reproducible and verified.

@@ -12,7 +12,7 @@ from typing import cast
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from pcims.db.connection import get_data_dir
+from pcims.db.connection import ensure_private_directory, get_data_dir
 
 ExceptionHook = Callable[
     [type[BaseException], BaseException, TracebackType | None], None
@@ -28,8 +28,13 @@ def log_exception(
     log_path: str | Path | None = None,
 ) -> Path | None:
     """Append one traceback to a bounded, thread-safe diagnostic log."""
-    destination = Path(log_path or get_data_dir() / "pcims-errors.log").resolve()
     try:
+        if log_path is None:
+            destination = (
+                ensure_private_directory(get_data_dir()) / "pcims-errors.log"
+            )
+        else:
+            destination = Path(log_path).resolve()
         with _log_lock:
             destination.parent.mkdir(parents=True, exist_ok=True)
             rotation_warning: str | None = None

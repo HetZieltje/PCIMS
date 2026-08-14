@@ -102,11 +102,11 @@ def main(
     services: ApplicationServices | None = None,
 ) -> int:
     application = create_application(argv)
-    services = services or default_services()
     previous_hook = install_exception_hook()
     try:
         try:
-            return _run_application(application, services)
+            active_services = services or default_services()
+            return _run_application(application, active_services)
         except Exception as error:  # noqa: BLE001 - application bootstrap boundary
             sys.excepthook(type(error), error, error.__traceback__)
             return 1

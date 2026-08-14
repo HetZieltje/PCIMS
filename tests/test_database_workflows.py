@@ -18,7 +18,7 @@ from pcims.db.backup import (
     restore_backup,
     validate_database,
 )
-from pcims.db.connection import Database
+from pcims.db.connection import Database, default_database
 from pcims.db.errors import (
     DatabaseIntegrityError,
     NotFoundError,
@@ -63,6 +63,20 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(stat.S_IMODE(self.database_path.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(backup.path.stat().st_mode), 0o600)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits are not available")
+    def test_default_data_directory_is_private_to_the_user(self):
+        data_directory = Path(self.temporary_directory.name) / "private-data"
+
+        with patch.dict(
+            os.environ,
+            {"PCIMS_DATA_DIR": str(data_directory)},
+        ):
+            os.environ.pop("PCIMS_DB_PATH", None)
+            configured = default_database()
+
+        self.assertEqual(configured.path.parent, data_directory.resolve())
+        self.assertEqual(stat.S_IMODE(data_directory.stat().st_mode), 0o700)
 
     def test_database_configuration_is_an_explicit_immutable_value(self):
         configured = self.database

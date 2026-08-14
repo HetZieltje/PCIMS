@@ -32,6 +32,18 @@ install_root="$data_home/pcims/application"
 mkdir -p "$install_root"
 printf '%s\n' old > "$install_root/version-marker"
 
+outside_root="$test_root/outside"
+mkdir -p "$outside_root"
+printf '%s\n' untouched > "$outside_root/version-marker"
+if PCIMS_PLATFORM=Linux XDG_DATA_HOME="$data_home" \
+    PCIMS_INSTALL_ROOT="$outside_root" PYTHON="$fake_python" \
+    sh scripts/install-linux.sh >/dev/null 2>&1
+then
+    printf '%s\n' "Installer unexpectedly accepted an external install root." >&2
+    exit 1
+fi
+test "$(cat "$outside_root/version-marker")" = untouched
+
 if PCIMS_PLATFORM=Linux XDG_DATA_HOME="$data_home" PCIMS_INSTALL_ROOT="$install_root" \
     PYTHON="$fake_python" FAKE_PIP_FAIL=1 sh scripts/install-linux.sh >/dev/null 2>&1
 then

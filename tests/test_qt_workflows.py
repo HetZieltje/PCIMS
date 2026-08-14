@@ -985,6 +985,23 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertIn("Log rotation failed: rotation target locked", content)
         self.assertIn("traceback must survive", content)
 
+    def test_error_reporting_survives_an_unavailable_default_data_directory(self):
+        error = RuntimeError("fallback diagnostic")
+
+        with (
+            patch(
+                "pcims.app.errors.ensure_private_directory",
+                side_effect=PermissionError("data directory denied"),
+            ),
+            patch("pcims.app.errors.traceback.print_exception") as print_exception,
+        ):
+            destination = log_exception(type(error), error, error.__traceback__)
+
+        self.assertIsNone(destination)
+        print_exception.assert_called_once_with(
+            type(error), error, error.__traceback__
+        )
+
     def test_assemble_page_checks_concrete_ids_and_assembles(self):
         expected_ids = [
             self.purchase("RAM", "RAM", 40),

@@ -10,9 +10,36 @@ fi
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 project_directory=$(CDPATH= cd -- "$script_directory/.." && pwd)
 data_home=${XDG_DATA_HOME:-"${HOME:?}/.local/share"}
-install_root=${PCIMS_INSTALL_ROOT:-"$data_home/pcims/application"}
 python_command=${PYTHON:-python3}
+mkdir -p "$data_home"
+data_home=$(CDPATH= cd -- "$data_home" && pwd -P)
+case "$data_home" in
+    ""|/)
+        printf '%s\n' "Refusing unsafe application data root: $data_home" >&2
+        exit 1
+        ;;
+esac
+application_parent="$data_home/pcims"
+install_root="$application_parent/application"
+if [ -n "${PCIMS_INSTALL_ROOT:-}" ] && [ "$PCIMS_INSTALL_ROOT" != "$install_root" ]; then
+    printf '%s\n' "PCIMS_INSTALL_ROOT must be $install_root" >&2
+    exit 1
+fi
+if [ -L "$application_parent" ]; then
+    printf '%s\n' "Refusing symbolic-link application directory: $application_parent" >&2
+    exit 1
+fi
+mkdir -p "$application_parent"
+resolved_application_parent=$(CDPATH= cd -- "$application_parent" && pwd -P)
+if [ "$resolved_application_parent" != "$application_parent" ]; then
+    printf '%s\n' "Application directory escaped its data root." >&2
+    exit 1
+fi
 desktop_directory="$data_home/applications"
+if [ -L "$desktop_directory" ]; then
+    printf '%s\n' "Refusing symbolic-link desktop directory: $desktop_directory" >&2
+    exit 1
+fi
 desktop_target="$desktop_directory/pcims.desktop"
 desktop_temporary="$desktop_target.tmp"
 install_parent=$(dirname -- "$install_root")
@@ -22,12 +49,6 @@ previous_root="$install_parent/.${install_name}.previous.$$"
 old_moved=0
 new_installed=0
 
-case "$install_root" in
-    ""|/)
-        printf '%s\n' "Refusing unsafe installation target: $install_root" >&2
-        exit 1
-        ;;
-esac
 if [ -e "$staging_root" ] || [ -e "$previous_root" ]; then
     printf '%s\n' "Temporary installation path already exists." >&2
     exit 1
