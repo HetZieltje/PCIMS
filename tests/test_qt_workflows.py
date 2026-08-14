@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 from datetime import date
+from importlib.metadata import version
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -127,6 +128,9 @@ class QtWorkflowTests(unittest.TestCase):
         window.refresh_all()
         self.wait_for_window(window)
         window.deleteLater()
+
+    def test_qt_application_version_matches_installed_distribution(self):
+        self.assertEqual(self.application.applicationVersion(), version("pcims"))
 
     def test_page_construction_performs_no_database_io(self):
         services = MagicMock(spec=ApplicationServices)

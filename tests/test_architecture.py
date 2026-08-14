@@ -162,6 +162,36 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("TypedDict", purchases)
         self.assertIn("expense: NewExpense", purchases)
 
+    def test_only_composition_root_can_choose_default_services(self):
+        root = Path(__file__).parents[1] / "pcims"
+        consumers = {
+            path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+            for path in root.rglob("*.py")
+            if path.name != "services.py"
+        }
+        occurrences = [
+            name for name, source in consumers.items() if "default_services()" in source
+        ]
+        self.assertEqual(occurrences, ["app/application.py"])
+        for name, source in consumers.items():
+            if name.startswith("app/pages/") or name == "app/main_window.py":
+                self.assertNotIn("ApplicationServices | None", source)
+
+    def test_database_creation_is_explicit_and_runtime_version_has_one_source(self):
+        root = Path(__file__).parents[1]
+        connection = (root / "pcims" / "db" / "connection.py").read_text(
+            encoding="utf-8"
+        )
+        application = (root / "pcims" / "app" / "application.py").read_text(
+            encoding="utf-8"
+        )
+        version = (root / "pcims" / "version.py").read_text(encoding="utf-8")
+        self.assertIn("create: bool = False", connection)
+        self.assertIn("mode=rw", connection)
+        self.assertIn("setApplicationVersion(application_version())", application)
+        self.assertIn('version("pcims")', version)
+        self.assertNotIn("1.0.0", version)
+
 
 if __name__ == "__main__":
     unittest.main()

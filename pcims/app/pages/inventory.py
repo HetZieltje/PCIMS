@@ -27,7 +27,7 @@ from pcims.app.table_model import (
 from pcims.app.tasks import TaskManager
 from pcims.db.models import AssembledPC, Expense
 from pcims.domain import ITEM_TYPES
-from pcims.services import ApplicationServices, InventorySnapshot, default_services
+from pcims.services import ApplicationServices, InventorySnapshot
 
 
 def _component_summary(pc: AssembledPC) -> str:
@@ -45,12 +45,12 @@ class InventoryPage(AsyncCommandPage):
 
     def __init__(
         self,
-        services: ApplicationServices | None = None,
+        services: ApplicationServices,
         parent: QWidget | None = None,
         tasks: TaskManager | None = None,
     ) -> None:
         super().__init__(parent, tasks)
-        self.services = services or default_services()
+        self.services = services
         self._all_parts: tuple[Expense, ...] = ()
         self._parts: dict[int, Expense] = {}
         self._pcs: dict[int, AssembledPC] = {}

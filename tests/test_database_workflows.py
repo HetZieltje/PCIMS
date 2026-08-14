@@ -48,11 +48,23 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(configured.path, self.database_path.resolve())
         self.assertNotEqual(configured, independent)
-        with independent.transaction() as database:
+        with closing(independent.connect(create=True)) as database:
             database.execute("CREATE TABLE isolated (id INTEGER PRIMARY KEY)")
+            database.commit()
         self.assertTrue(independent.path.is_file())
         with self.assertRaises(sqlite3.OperationalError), configured.transaction() as database:
             database.execute("SELECT * FROM isolated")
+
+    def test_read_transaction_never_creates_a_missing_database_or_directory(self):
+        missing = Database.at(
+            Path(self.temporary_directory.name) / "missing-parent" / "missing.db"
+        )
+
+        with self.assertRaises(sqlite3.OperationalError), missing.transaction():
+            self.fail("A read transaction unexpectedly opened a missing database.")
+
+        self.assertFalse(missing.path.exists())
+        self.assertFalse(missing.path.parent.exists())
 
     def test_live_connections_use_durable_wal_and_defensive_pragmas(self):
         with closing(self.database.connect()) as database:

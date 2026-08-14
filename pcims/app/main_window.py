@@ -22,7 +22,7 @@ from pcims.app.pages.sales import SalesPage
 from pcims.app.pages.settings import SettingsPage
 from pcims.app.tasks import BackgroundTask, TaskManager
 from pcims.db.backup import BackupResult
-from pcims.services import ApplicationServices, default_services
+from pcims.services import ApplicationServices
 
 SnapshotT = TypeVar("SnapshotT")
 
@@ -56,9 +56,9 @@ class RefreshState:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, services: ApplicationServices | None = None) -> None:
+    def __init__(self, services: ApplicationServices) -> None:
         super().__init__()
-        self.services = services or default_services()
+        self.services = services
         self.setWindowTitle("PCIMS — PC Inventory Management")
         self.resize(1240, 800)
         self.setMinimumSize(900, 600)

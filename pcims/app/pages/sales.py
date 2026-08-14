@@ -23,7 +23,7 @@ from pcims.app.table_model import (
 )
 from pcims.app.tasks import TaskManager
 from pcims.db.models import Expense, Sale
-from pcims.services import ApplicationServices, SalesSnapshot, default_services
+from pcims.services import ApplicationServices, SalesSnapshot
 
 
 def _expense_status(item: Expense) -> str:
@@ -37,12 +37,12 @@ class SalesPage(AsyncCommandPage):
 
     def __init__(
         self,
-        services: ApplicationServices | None = None,
+        services: ApplicationServices,
         parent: QWidget | None = None,
         tasks: TaskManager | None = None,
     ) -> None:
         super().__init__(parent, tasks)
-        self.services = services or default_services()
+        self.services = services
         self._sales: dict[int, Sale] = {}
         self.summary_labels: dict[str, QLabel] = {}
         summary_box = QGroupBox("Financial summary")

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from pcims.app.assembly_model import AssemblyTreeModel
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.tasks import TaskManager
-from pcims.services import ApplicationServices, AssembleSnapshot, default_services
+from pcims.services import ApplicationServices, AssembleSnapshot
 
 
 class AssemblePage(AsyncCommandPage):
@@ -23,12 +23,12 @@ class AssemblePage(AsyncCommandPage):
 
     def __init__(
         self,
-        services: ApplicationServices | None = None,
+        services: ApplicationServices,
         parent: QWidget | None = None,
         tasks: TaskManager | None = None,
     ) -> None:
         super().__init__(parent, tasks)
-        self.services = services or default_services()
+        self.services = services
         self.name = QLineEdit()
         self.name.setMaximumWidth(360)
         self.tree_model = AssemblyTreeModel()

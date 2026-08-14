@@ -13,6 +13,7 @@ from pcims.app.errors import install_exception_hook
 from pcims.app.main_window import MainWindow
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.services import ApplicationServices, default_services
+from pcims.version import application_version
 
 
 def create_application(argv: Sequence[str] | None = None) -> QApplication:
@@ -25,6 +26,7 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
     application.setApplicationName("PCIMS")
     application.setApplicationDisplayName("PC Inventory Management")
     application.setOrganizationName("PCIMS")
+    application.setApplicationVersion(application_version())
     fusion = QStyleFactory.create("Fusion")
     if fusion is not None:
         application.setStyle(fusion)

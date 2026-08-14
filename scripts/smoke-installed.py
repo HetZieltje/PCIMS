@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from pcims.db.connection import Database
 from pcims.domain import NewExpense, SaleTerms
 from pcims.services import ApplicationServices
+from pcims.version import application_version
 
 
 def main() -> None:
@@ -14,6 +15,8 @@ def main() -> None:
     gui_entry = next(entry for entry in entry_points if entry.name == "pcims")
     if gui_entry.value != "pcims.app.application:main":
         raise RuntimeError(f"Unexpected GUI entry point: {gui_entry.value}")
+    if application_version() != distribution("pcims").version:
+        raise RuntimeError("Runtime and installed distribution versions differ.")
 
     with TemporaryDirectory() as temporary_directory:
         services = ApplicationServices(

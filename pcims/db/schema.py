@@ -202,7 +202,7 @@ def validate_current_data(database: sqlite3.Connection) -> None:
 
 def _initialize_database(database: Database) -> None:
     """Create the current schema, or reject any incompatible existing schema."""
-    with closing(database.connect()) as setup_connection:
+    with closing(database.connect(create=True)) as setup_connection:
         journal_mode = setup_connection.execute("PRAGMA journal_mode = WAL").fetchone()[
             0
         ]

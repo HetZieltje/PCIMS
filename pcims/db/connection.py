@@ -39,9 +39,15 @@ class Database:
     def at(cls, path: str | os.PathLike[str]) -> "Database":
         return cls(Path(path).expanduser().resolve())
 
-    def connect(self) -> sqlite3.Connection:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        database = sqlite3.connect(self.path, timeout=10)
+    def connect(self, *, create: bool = False) -> sqlite3.Connection:
+        """Open an existing database, unless creation is explicitly requested."""
+        if create:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            database = sqlite3.connect(self.path, timeout=10)
+        else:
+            database = sqlite3.connect(
+                f"{self.path.as_uri()}?mode=rw", uri=True, timeout=10
+            )
         database.row_factory = sqlite3.Row
         database.execute("PRAGMA foreign_keys = ON")
         database.execute("PRAGMA busy_timeout = 10000")

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from pcims.app.common import ask_confirmation, show_error
 from pcims.app.tasks import TaskManager
 from pcims.db.backup import BackupResult
-from pcims.services import ApplicationServices, default_services
+from pcims.services import ApplicationServices
 
 
 class SettingsPage(QWidget):
@@ -27,7 +27,7 @@ class SettingsPage(QWidget):
 
     def __init__(
         self,
-        services: ApplicationServices | None = None,
+        services: ApplicationServices,
         theme: str = "system",
         has_pending_changes: Callable[[], bool] | None = None,
         parent: QWidget | None = None,
@@ -35,7 +35,7 @@ class SettingsPage(QWidget):
     ) -> None:
         super().__init__(parent)
         self.tasks = tasks or TaskManager(self)
-        self.services = services or default_services()
+        self.services = services
         self._has_pending_changes = has_pending_changes or (lambda: False)
         database_path = self.services.database_path
         path_label = QLabel(str(database_path))
