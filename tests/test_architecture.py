@@ -182,6 +182,8 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("smoke-installed.py", installer)
         self.assertIn('install_root="$application_parent/application"', installer)
         self.assertIn("Refusing symbolic-link application directory", installer)
+        self.assertIn("Another PCIMS installation is already running", installer)
+        self.assertIn("Multiple interrupted installations require manual recovery", installer)
         self.assertIn('Exec="@PCIMS_PYTHON@" -m pcims.app.application', desktop)
         self.assertIn("Terminal=false", desktop)
 
@@ -195,6 +197,9 @@ class ArchitectureTests(unittest.TestCase):
         workflow = (root / ".github" / "workflows" / "test.yml").read_text(
             encoding="utf-8"
         )
+        verification = (root / "scripts" / "verify.py").read_text(
+            encoding="utf-8"
+        )
         for lock in (runtime_lock, development_lock):
             self.assertIn("--hash=sha256:", lock)
             self.assertIn("pyside6==", lock)
@@ -204,13 +209,18 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("--require-hashes -r requirements-build.lock", workflow)
         self.assertIn("cache-dependency-path:", workflow)
         self.assertIn("--no-build-isolation", workflow)
-        self.assertIn("python -m build --wheel --no-isolation", workflow)
-        self.assertIn("verify-reproducible-wheel.py", workflow)
+        self.assertIn("python scripts/verify.py --output-directory dist", workflow)
+        self.assertIn('"--no-isolation"', verification)
+        self.assertIn("verify-reproducible-wheel.py", verification)
+        self.assertIn("copy_clean_source", verification)
+        self.assertIn("verify_wheel_contents", verification)
+        self.assertIn("zipfile.ZipFile", verification)
         self.assertIn('SOURCE_DATE_EPOCH: "315532800"', workflow)
         self.assertNotIn("pip install --upgrade pip", workflow)
         self.assertIn("python -m pip check", workflow)
-        self.assertIn("python -m compileall -q pcims scripts", workflow)
-        self.assertIn("bandit -q -r pcims scripts", workflow)
+        self.assertIn('"compileall", "-q", "pcims", "scripts"', verification)
+        self.assertIn('"bandit", "-q", "-r", "pcims", "scripts"', verification)
+        self.assertIn("test-linux-installer.sh", verification)
         self.assertIn("Install the real Linux desktop application", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertNotIn("actions/checkout@v", workflow)

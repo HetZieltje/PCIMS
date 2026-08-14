@@ -131,6 +131,38 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         connection.close.assert_called_once()
 
+    def test_connection_cleanup_cannot_hide_configuration_failure(self):
+        path = Path(self.temporary_directory.name) / "double-failure.db"
+        path.touch()
+        connection = MagicMock()
+        connection.execute.side_effect = OSError("pragma rejected")
+        connection.close.side_effect = RuntimeError("close rejected")
+
+        with (
+            patch("pcims.db.connection.sqlite3.connect", return_value=connection),
+            self.assertRaisesRegex(OSError, "pragma rejected") as raised,
+        ):
+            Database.at(path).connect(create=True)
+
+        notes = getattr(raised.exception, "__notes__", ())
+        self.assertTrue(any("close rejected" in note for note in notes))
+
+    def test_transaction_cleanup_cannot_hide_primary_failure(self):
+        connection = MagicMock()
+        connection.rollback.side_effect = OSError("rollback rejected")
+        connection.close.side_effect = OSError("close rejected")
+
+        with (
+            patch.object(Database, "connect", return_value=connection),
+            self.assertRaisesRegex(ValueError, "primary failure") as raised,
+            self.database.transaction(write=True),
+        ):
+            raise ValueError("primary failure")
+
+        notes = getattr(raised.exception, "__notes__", ())
+        self.assertTrue(any("rollback rejected" in note for note in notes))
+        self.assertTrue(any("close rejected" in note for note in notes))
+
     def test_read_transaction_never_creates_a_missing_database_or_directory(self):
         missing = Database.at(
             Path(self.temporary_directory.name) / "missing-parent" / "missing.db"

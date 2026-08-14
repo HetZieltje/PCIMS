@@ -46,13 +46,11 @@ install_parent=$(dirname -- "$install_root")
 install_name=$(basename -- "$install_root")
 staging_root="$install_parent/.${install_name}.new.$$"
 previous_root="$install_parent/.${install_name}.previous.$$"
+lock_directory="$install_parent/.install.lock"
+lock_pid_file="$lock_directory/pid"
 old_moved=0
 new_installed=0
-
-if [ -e "$staging_root" ] || [ -e "$previous_root" ]; then
-    printf '%s\n' "Temporary installation path already exists." >&2
-    exit 1
-fi
+lock_owned=0
 
 cleanup() {
     status=$?
@@ -68,11 +66,89 @@ cleanup() {
     if [ -f "$desktop_temporary" ] && [ ! -L "$desktop_temporary" ]; then
         rm -f -- "$desktop_temporary"
     fi
+    if [ "$lock_owned" -eq 1 ] && [ -d "$lock_directory" ] && [ ! -L "$lock_directory" ]; then
+        if [ -f "$lock_pid_file" ] && [ ! -L "$lock_pid_file" ]; then
+            rm -f -- "$lock_pid_file"
+        fi
+        rmdir -- "$lock_directory"
+    fi
     exit "$status"
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$install_parent"
+if ! mkdir "$lock_directory" 2>/dev/null; then
+    if [ -L "$lock_directory" ] || [ ! -d "$lock_directory" ]; then
+        printf '%s\n' "Installation lock is not a regular directory." >&2
+        exit 1
+    fi
+    lock_holder=
+    if [ -f "$lock_pid_file" ] && [ ! -L "$lock_pid_file" ]; then
+        lock_holder=$(sed -n '1p' "$lock_pid_file")
+    fi
+    case "$lock_holder" in
+        *[!0-9]*|"") ;;
+        *)
+            if kill -0 "$lock_holder" 2>/dev/null; then
+                printf '%s\n' "Another PCIMS installation is already running." >&2
+                exit 1
+            fi
+            ;;
+    esac
+    if [ -f "$lock_pid_file" ] && [ ! -L "$lock_pid_file" ]; then
+        rm -f -- "$lock_pid_file"
+    fi
+    if ! rmdir -- "$lock_directory" || ! mkdir "$lock_directory"; then
+        printf '%s\n' "Stale installation lock could not be recovered." >&2
+        exit 1
+    fi
+fi
+lock_owned=1
+printf '%s\n' "$$" > "$lock_pid_file"
+
+stale_previous=
+stale_previous_count=0
+for candidate in "$install_parent"/."$install_name".previous.*; do
+    if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
+        continue
+    fi
+    if [ -L "$candidate" ] || [ ! -d "$candidate" ]; then
+        printf '%s\n' "Unsafe stale installation path: $candidate" >&2
+        exit 1
+    fi
+    stale_previous=$candidate
+    stale_previous_count=$((stale_previous_count + 1))
+done
+if [ "$stale_previous_count" -gt 1 ]; then
+    printf '%s\n' "Multiple interrupted installations require manual recovery." >&2
+    exit 1
+fi
+if [ "$stale_previous_count" -eq 1 ]; then
+    if [ -e "$install_root" ]; then
+        if [ -L "$install_root" ] || [ ! -d "$install_root" ]; then
+            printf '%s\n' "Installation target is not a regular directory: $install_root" >&2
+            exit 1
+        fi
+        rm -rf -- "$stale_previous"
+    else
+        mv "$stale_previous" "$install_root"
+    fi
+fi
+for candidate in "$install_parent"/."$install_name".new.*; do
+    if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
+        continue
+    fi
+    if [ -L "$candidate" ] || [ ! -d "$candidate" ]; then
+        printf '%s\n' "Unsafe stale installation path: $candidate" >&2
+        exit 1
+    fi
+    rm -rf -- "$candidate"
+done
+
+if [ -e "$staging_root" ] || [ -e "$previous_root" ]; then
+    printf '%s\n' "Temporary installation path already exists." >&2
+    exit 1
+fi
+
 "$python_command" -m venv "$staging_root"
 "$staging_root/bin/python" -m pip install \
     --require-hashes -r "$project_directory/requirements.lock"
@@ -116,7 +192,9 @@ if [ -d "$previous_root" ] && [ ! -L "$previous_root" ]; then
 fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$desktop_directory"
+    if ! update-desktop-database "$desktop_directory"; then
+        printf '%s\n' "Warning: desktop menu cache could not be refreshed." >&2
+    fi
 fi
 
 printf 'PCIMS installed. Launch it from your desktop menu or run:\n%s\n' \

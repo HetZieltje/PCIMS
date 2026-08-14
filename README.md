@@ -62,10 +62,7 @@ being modified; use a current-format backup or a new database path.
 ```powershell
 .venv\Scripts\python -m pip install --require-hashes -r requirements-dev.lock
 .venv\Scripts\python -m pip install --no-deps -e .
-.venv\Scripts\python -X dev -W error -m unittest discover -s tests -v
-.venv\Scripts\ruff check .
-.venv\Scripts\mypy pcims --strict --no-error-summary
-.venv\Scripts\bandit -q -r pcims scripts
+.venv\Scripts\python scripts\verify.py
 ```
 
 Regenerate the runtime, development, and build lock files deliberately whenever
@@ -73,12 +70,12 @@ dependency ranges are changed; never hand-edit hashes independently of the
 resolved package versions.
 
 Tests configure temporary SQLite files and the Qt offscreen platform. They do
-not open or delete the application database. CI runs the same checks on Windows
-and Linux with Python 3.11, 3.13, and 3.14, validates the installed dependency
-graph, then builds the wheel reproducibly, installs it, and smoke-tests its
-backend and Qt frontend from outside the source checkout. The Linux job also
-performs one real, user-scoped desktop installation from the locked dependencies
-and validates its generated desktop entry.
+not open or delete the application database. `scripts/verify.py` stops at the
+first failed test, quality check, build, or installed-wheel smoke test. CI runs
+that same gate on Windows and Linux with Python 3.11, 3.13, and 3.14, then
+installs the resulting wheel as a package. The Linux job also performs one real,
+user-scoped desktop installation from the locked dependencies and validates its
+generated desktop entry.
 
 ## Release artifacts
 

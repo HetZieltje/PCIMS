@@ -44,6 +44,32 @@ then
 fi
 test "$(cat "$outside_root/version-marker")" = untouched
 
+stale_previous="$data_home/pcims/.application.previous.99999999"
+mv "$install_root" "$stale_previous"
+mkdir "$data_home/pcims/.install.lock"
+printf '%s\n' 99999999 > "$data_home/pcims/.install.lock/pid"
+if PCIMS_PLATFORM=Linux XDG_DATA_HOME="$data_home" PCIMS_INSTALL_ROOT="$install_root" \
+    PYTHON="$fake_python" FAKE_PIP_FAIL=1 sh scripts/install-linux.sh >/dev/null 2>&1
+then
+    printf '%s\n' "Interrupted installation recovery ignored a staged failure." >&2
+    exit 1
+fi
+test "$(cat "$install_root/version-marker")" = old
+test ! -e "$stale_previous"
+test ! -e "$data_home/pcims/.install.lock"
+
+mkdir "$data_home/pcims/.install.lock"
+printf '%s\n' "$$" > "$data_home/pcims/.install.lock/pid"
+if PCIMS_PLATFORM=Linux XDG_DATA_HOME="$data_home" PCIMS_INSTALL_ROOT="$install_root" \
+    PYTHON="$fake_python" sh scripts/install-linux.sh >/dev/null 2>&1
+then
+    printf '%s\n' "Installer ignored a live installation lock." >&2
+    exit 1
+fi
+test "$(cat "$install_root/version-marker")" = old
+rm -f "$data_home/pcims/.install.lock/pid"
+rmdir "$data_home/pcims/.install.lock"
+
 if PCIMS_PLATFORM=Linux XDG_DATA_HOME="$data_home" PCIMS_INSTALL_ROOT="$install_root" \
     PYTHON="$fake_python" FAKE_PIP_FAIL=1 sh scripts/install-linux.sh >/dev/null 2>&1
 then

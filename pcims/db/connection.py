@@ -91,8 +91,13 @@ class Database:
             database.execute("PRAGMA busy_timeout = 10000")
             database.execute("PRAGMA synchronous = FULL")
             database.execute("PRAGMA trusted_schema = OFF")
-        except BaseException:
-            database.close()
+        except BaseException as error:
+            try:
+                database.close()
+            except BaseException as cleanup_error:  # noqa: BLE001 - preserve primary
+                error.add_note(
+                    f"Connection cleanup also failed: {cleanup_error}"
+                )
             raise
         return database
 
@@ -101,15 +106,29 @@ class Database:
         """Yield a snapshot read or immediately locked write transaction."""
         with self.gate.shared():
             connection = self.connect()
+            primary_error: BaseException | None = None
             try:
                 connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
                 yield connection
                 connection.commit()
-            except BaseException:
-                connection.rollback()
+            except BaseException as error:
+                primary_error = error
+                try:
+                    connection.rollback()
+                except BaseException as cleanup_error:  # noqa: BLE001 - preserve primary
+                    error.add_note(
+                        f"Transaction rollback also failed: {cleanup_error}"
+                    )
                 raise
             finally:
-                connection.close()
+                try:
+                    connection.close()
+                except BaseException as cleanup_error:
+                    if primary_error is None:
+                        raise
+                    primary_error.add_note(
+                        f"Connection cleanup also failed: {cleanup_error}"
+                    )
 
 
 def default_database() -> Database:
