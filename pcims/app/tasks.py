@@ -6,6 +6,7 @@ from typing import Generic, TypeVar
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 
 from pcims.app.errors import log_exception
+from pcims.db.errors import NotFoundError, ValidationError
 
 ResultT = TypeVar("ResultT")
 
@@ -28,7 +29,8 @@ class BackgroundTask(QRunnable, Generic[ResultT]):
         try:
             result = self.operation()
         except Exception as error:  # noqa: BLE001 - task boundary reports failures
-            log_exception(type(error), error, error.__traceback__)
+            if not isinstance(error, (ValidationError, NotFoundError)):
+                log_exception(type(error), error, error.__traceback__)
             self.signals.failed.emit(error)
         else:
             self.signals.succeeded.emit(result)
@@ -36,6 +38,8 @@ class BackgroundTask(QRunnable, Generic[ResultT]):
 
 class TaskManager(QObject):
     """Own every background task for one UI lifetime."""
+
+    became_idle = Signal()
 
     def __init__(
         self,
@@ -65,11 +69,19 @@ class TaskManager(QObject):
 
         def succeeded(result: ResultT) -> None:
             self._active.pop(task_id, None)
-            on_success(result)
+            try:
+                on_success(result)
+            finally:
+                if not self._active:
+                    self.became_idle.emit()
 
         def failed(error: Exception) -> None:
             self._active.pop(task_id, None)
-            on_failure(error)
+            try:
+                on_failure(error)
+            finally:
+                if not self._active:
+                    self.became_idle.emit()
 
         task.signals.succeeded.connect(succeeded)
         task.signals.failed.connect(failed)

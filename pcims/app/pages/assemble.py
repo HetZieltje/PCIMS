@@ -1,25 +1,20 @@
-from collections import defaultdict
-
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QTreeWidget,
-    QTreeWidgetItem,
+    QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
+from pcims.app.assembly_model import AssemblyTreeModel
 from pcims.app.async_page import AsyncCommandPage
-from pcims.app.formatting import format_cents
-from pcims.app.table_model import ID_ROLE
 from pcims.app.tasks import TaskManager
-from pcims.db.models import Expense
-from pcims.domain import ITEM_TYPES, ItemType
 from pcims.services import ApplicationServices, AssembleSnapshot, default_services
 
 
@@ -36,12 +31,16 @@ class AssemblePage(AsyncCommandPage):
         self.services = services or default_services()
         self.name = QLineEdit()
         self.name.setMaximumWidth(360)
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(("Component", "Cost", "Purchased", "ID"))
+        self.tree_model = AssemblyTreeModel()
+        self.tree = QTreeView()
+        self.tree.setModel(self.tree_model)
         self.tree.setAlternatingRowColors(True)
-        self.tree.setColumnHidden(3, True)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tree.header().setStretchLastSection(False)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         assemble_button = QPushButton("Assemble selected components")
         assemble_button.clicked.connect(self.assemble)
 
@@ -61,55 +60,10 @@ class AssemblePage(AsyncCommandPage):
         return self.services.assemble_snapshot()
 
     def apply_snapshot(self, snapshot: AssembleSnapshot) -> None:
-        selected_ids = {
-            int(item.data(0, ID_ROLE))
-            for index in range(self.tree.topLevelItemCount())
-            for item in self._children(self.tree.topLevelItem(index))
-            if item.checkState(0) == Qt.CheckState.Checked
-        }
-        grouped: defaultdict[ItemType, list[Expense]] = defaultdict(list)
-        for expense in snapshot.available_inventory:
-            grouped[expense.item_type].append(expense)
-        self.tree.clear()
-        for item_type in ITEM_TYPES:
-            if not grouped[item_type]:
-                continue
-            group = QTreeWidgetItem(
-                (f"{item_type} ({len(grouped[item_type])})", "", "", "")
-            )
-            group.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            self.tree.addTopLevelItem(group)
-            for expense in grouped[item_type]:
-                child = QTreeWidgetItem(
-                    (
-                        expense.name,
-                        format_cents(expense.price_cents),
-                        expense.purchase_date.isoformat(),
-                        str(expense.id),
-                    )
-                )
-                child.setData(0, ID_ROLE, expense.id)
-                child.setFlags(
-                    child.flags()
-                    | Qt.ItemFlag.ItemIsUserCheckable
-                    | Qt.ItemFlag.ItemIsSelectable
-                )
-                child.setCheckState(
-                    0,
-                    Qt.CheckState.Checked
-                    if expense.id in selected_ids
-                    else Qt.CheckState.Unchecked,
-                )
-                group.addChild(child)
-            group.setExpanded(True)
+        self.tree_model.set_records(snapshot.available_inventory)
+        self.tree.expandAll()
         if not self.name.text().strip():
             self.name.setText(self._next_name(snapshot.pc_names))
-
-    @staticmethod
-    def _children(parent: QTreeWidgetItem | None) -> list[QTreeWidgetItem]:
-        if parent is None:
-            return []
-        return [parent.child(index) for index in range(parent.childCount())]
 
     @staticmethod
     def _next_name(pc_names: tuple[str, ...]) -> str:
@@ -120,12 +74,7 @@ class AssemblePage(AsyncCommandPage):
         return f"PC {index}"
 
     def assemble(self) -> None:
-        ids = [
-            int(child.data(0, ID_ROLE))
-            for group_index in range(self.tree.topLevelItemCount())
-            for child in self._children(self.tree.topLevelItem(group_index))
-            if child.checkState(0) == Qt.CheckState.Checked
-        ]
+        ids = self.tree_model.checked_ids
         if not ids:
             QMessageBox.warning(self, "No components", "Select at least one component.")
             return

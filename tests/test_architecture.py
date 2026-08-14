@@ -104,6 +104,8 @@ class ArchitectureTests(unittest.TestCase):
                 source = path.read_text(encoding="utf-8")
                 self.assertNotIn("QTableWidget", source)
                 self.assertNotIn("QTableWidgetItem", source)
+                self.assertNotIn("QTreeWidget", source)
+                self.assertNotIn("QTreeWidgetItem", source)
 
     def test_background_work_has_one_owned_lifecycle_and_explicit_refresh_contracts(self):
         app = Path(__file__).parents[1] / "pcims" / "app"
@@ -113,7 +115,9 @@ class ArchitectureTests(unittest.TestCase):
         main_window = (app / "main_window.py").read_text(encoding="utf-8")
         self.assertNotIn("run_in_background", source)
         self.assertIn("class TaskManager", source)
+        self.assertIn("became_idle = Signal()", source)
         self.assertIn("bind_refresh(", main_window)
+        self.assertNotIn("QTimer", main_window)
         self.assertNotIn('getattr(page, "load_snapshot"', main_window)
         self.assertNotIn('getattr(page, "command_running"', main_window)
 

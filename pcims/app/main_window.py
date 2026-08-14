@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
-from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer
+from PySide6.QtCore import QByteArray, QSettings, Qt
 from PySide6.QtGui import QCloseEvent, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -67,6 +67,7 @@ class MainWindow(QMainWindow):
         self._close_requested = False
         self._close_backup_running = False
         self.tasks = TaskManager(self)
+        self.tasks.became_idle.connect(self._continue_close)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -368,11 +369,14 @@ class MainWindow(QMainWindow):
         self._continue_close()
 
     def _continue_close(self) -> None:
-        if not self._close_requested or self._close_backup_running:
+        if (
+            not self._close_requested
+            or self._close_backup_running
+            or self._closing_after_backup
+        ):
             return
         if self.tasks.active:
             self.statusBar().showMessage("Waiting for background work to finish…")
-            QTimer.singleShot(10, self._continue_close)
             return
         self._close_backup_running = True
         self.statusBar().showMessage("Backing up before closing…")
@@ -392,6 +396,7 @@ class MainWindow(QMainWindow):
                 f"Some old backups could not be removed:\n{backup.cleanup_warning}",
             )
         self._closing_after_backup = True
+        self._close_requested = False
         self.setEnabled(True)
         self.close()
 
@@ -406,6 +411,7 @@ class MainWindow(QMainWindow):
         )
         if answer == QMessageBox.StandardButton.Yes:
             self._closing_after_backup = True
+            self._close_requested = False
             self.setEnabled(True)
             self.close()
             return

@@ -16,6 +16,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox, QTableView
 
 from pcims.app.application import acquire_instance_lock, create_application, main
+from pcims.app.assembly_model import AssemblyTreeModel
 from pcims.app.errors import install_exception_hook, log_exception
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
@@ -31,6 +32,7 @@ from pcims.app.table_model import (
 from pcims.app.tasks import TaskManager
 from pcims.db.backup import BackupResult
 from pcims.db.connection import Database
+from pcims.db.errors import ValidationError
 from pcims.domain import NewExpense, SaleTerms
 from pcims.services import ApplicationServices
 
@@ -91,6 +93,22 @@ class QtWorkflowTests(unittest.TestCase):
         return self.services.add_expenses(
             [NewExpense.create(name, item_type, price, TEST_DATE)]
         )[0]
+
+    @staticmethod
+    def check_all_assembly_parts(page):
+        checked = []
+        model = page.tree_model
+        for group_row in range(model.rowCount()):
+            group = model.index(group_row, 0)
+            for child_row in range(model.rowCount(group)):
+                child = model.index(child_row, 0, group)
+                model.setData(
+                    child,
+                    Qt.CheckState.Checked,
+                    Qt.ItemDataRole.CheckStateRole,
+                )
+                checked.append(child.data(Qt.ItemDataRole.UserRole))
+        return checked
 
     def test_main_window_constructs_and_refreshes_every_page(self):
         window = MainWindow(self.services)
@@ -265,6 +283,27 @@ class QtWorkflowTests(unittest.TestCase):
         show_error.assert_called_once()
         log_error.assert_called_once()
         self.assertIn("simulated disk failure", str(show_error.call_args.args[2]))
+        page.deleteLater()
+
+    def test_expected_domain_conflict_is_reported_without_crash_traceback(self):
+        page = PurchasesPage(self.services)
+        page.name.setText("Conflicting item")
+        page.price.setText("1.00")
+        page.add_line()
+
+        with (
+            patch(
+                "pcims.services.ApplicationServices.add_expenses",
+                side_effect=ValidationError("expected conflict"),
+            ),
+            patch("pcims.app.async_page.show_error") as show_error,
+            patch("pcims.app.tasks.log_exception") as log_error,
+        ):
+            page.commit_purchase()
+            self.wait_for_page(page)
+
+        show_error.assert_called_once()
+        log_error.assert_not_called()
         page.deleteLater()
 
     def test_close_warns_before_discarding_staged_purchase(self):
@@ -564,6 +603,28 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(model.index(0, 0).data(), "0")
         self.assertEqual(model.index(9999, 0).data(), "9999")
 
+    def test_assembly_tree_model_preserves_checked_record_identity(self):
+        cpu_id = self.purchase("CPU", "CPU", 100)
+        ram_id = self.purchase("RAM", "RAM", 50)
+        records = self.services.assemble_snapshot().available_inventory
+        model = AssemblyTreeModel()
+        model.set_records(records)
+        cpu_group = model.index(0, 0)
+        cpu = model.index(0, 0, cpu_group)
+        self.assertEqual(cpu.data(Qt.ItemDataRole.UserRole), cpu_id)
+        self.assertTrue(
+            model.setData(
+                cpu,
+                Qt.CheckState.Checked,
+                Qt.ItemDataRole.CheckStateRole,
+            )
+        )
+
+        model.set_records(tuple(reversed(records)))
+
+        self.assertEqual(model.checked_ids, (cpu_id,))
+        self.assertNotIn(ram_id, model.checked_ids)
+
     def test_database_lock_allows_only_one_application_instance(self):
         database_path = Path(self.temporary_directory.name) / "locked.db"
         first = acquire_instance_lock(database_path)
@@ -829,13 +890,7 @@ class QtWorkflowTests(unittest.TestCase):
         page = AssemblePage(self.services)
         page.refresh()
         page.name.setText("Linux workstation")
-        checked = []
-        for group_index in range(page.tree.topLevelItemCount()):
-            group = page.tree.topLevelItem(group_index)
-            for child_index in range(group.childCount()):
-                child = group.child(child_index)
-                child.setCheckState(0, Qt.CheckState.Checked)
-                checked.append(child.data(0, Qt.ItemDataRole.UserRole))
+        checked = self.check_all_assembly_parts(page)
         page.assemble()
         self.wait_for_page(page)
 
@@ -908,7 +963,7 @@ class QtWorkflowTests(unittest.TestCase):
         assemble = AssemblePage(self.services)
         assemble.refresh()
         assemble.name.setText("Test PC")
-        assemble.tree.topLevelItem(0).child(0).setCheckState(0, Qt.CheckState.Checked)
+        self.check_all_assembly_parts(assemble)
         assemble.assemble()
         self.wait_for_page(assemble)
 
@@ -937,10 +992,7 @@ class QtWorkflowTests(unittest.TestCase):
         assemble = AssemblePage(self.services)
         assemble.refresh()
         assemble.name.setText("PC 1")
-        for group_index in range(assemble.tree.topLevelItemCount()):
-            group = assemble.tree.topLevelItem(group_index)
-            for child_index in range(group.childCount()):
-                group.child(child_index).setCheckState(0, Qt.CheckState.Checked)
+        self.check_all_assembly_parts(assemble)
         assemble.assemble()
         self.wait_for_page(assemble)
 
