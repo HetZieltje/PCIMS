@@ -84,6 +84,30 @@ def _remove_temporary(path: Path, primary_error: BaseException | None) -> None:
         )
 
 
+def _prune_backups(
+    destination: Path, prefix: str, keep: int
+) -> tuple[str, ...]:
+    """Retain the newest files by metadata, independent of wall-clock names."""
+    warnings: list[str] = []
+    try:
+        paths = tuple(destination.glob(f"{prefix}*.db"))
+    except OSError as error:
+        return (f"Unable to inspect old backups in {destination}: {error}",)
+    timestamped: list[tuple[int, str, Path]] = []
+    for path in paths:
+        try:
+            timestamped.append((path.stat().st_mtime_ns, path.name, path))
+        except OSError as error:
+            warnings.append(f"Unable to inspect backup {path}: {error}")
+    timestamped.sort(reverse=True)
+    for _timestamp, _name, old_backup in timestamped[keep:]:
+        try:
+            old_backup.unlink()
+        except OSError as error:
+            warnings.append(f"{old_backup}: {error}")
+    return tuple(warnings)
+
+
 def validate_database(path: str | os.PathLike[str]) -> None:
     resolved = Path(path).expanduser().resolve()
     with closing(sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)) as database:
@@ -148,18 +172,7 @@ def _create_backup(
         _remove_temporary(temporary_path, primary_error)
 
     warnings = publication_errors
-    try:
-        backups = sorted(destination.glob(f"{prefix}*.db"), reverse=True)
-    except OSError as error:
-        warnings.append(
-            f"Unable to inspect old backups in {destination}: {error}"
-        )
-        backups = []
-    for old_backup in backups[keep:]:
-        try:
-            old_backup.unlink()
-        except OSError as error:
-            warnings.append(f"{old_backup}: {error}")
+    warnings.extend(_prune_backups(destination, prefix, keep))
     return BackupResult(final_path, tuple(warnings))
 
 

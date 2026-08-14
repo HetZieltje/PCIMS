@@ -71,7 +71,7 @@ ranges are changed.
 Tests configure temporary SQLite files and the Qt offscreen platform. They do
 not open or delete the application database. CI runs the same checks on Windows
 and Linux with Python 3.11, 3.13, and 3.14, validates the installed dependency
-graph, then builds, installs, and smoke-tests the wheel's backend and Qt frontend
+graph, then builds the wheel reproducibly, installs it, and smoke-tests its backend and Qt frontend
 from outside the source checkout.
 
 ## Build a desktop executable

@@ -62,15 +62,15 @@ class Database:
         try:
             if os.name != "nt":
                 self.path.chmod(0o600)
+            database.row_factory = sqlite3.Row
+            register_database_collations(database)
+            database.execute("PRAGMA foreign_keys = ON")
+            database.execute("PRAGMA busy_timeout = 10000")
+            database.execute("PRAGMA synchronous = FULL")
+            database.execute("PRAGMA trusted_schema = OFF")
         except BaseException:
             database.close()
             raise
-        database.row_factory = sqlite3.Row
-        register_database_collations(database)
-        database.execute("PRAGMA foreign_keys = ON")
-        database.execute("PRAGMA busy_timeout = 10000")
-        database.execute("PRAGMA synchronous = FULL")
-        database.execute("PRAGMA trusted_schema = OFF")
         return database
 
     @contextmanager

@@ -18,6 +18,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
+      SOURCE_DATE_EPOCH: "315532800"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -42,7 +43,11 @@ jobs:
       - run: ruff check .
       - run: mypy pcims --strict --no-error-summary
       - run: bandit -q -r pcims
-      - run: python -m build --no-isolation
+      - name: Build reproducible wheel
+        run: |
+          python -m build --wheel --no-isolation --outdir dist
+          python -m build --wheel --no-isolation --outdir dist-rebuilt
+          python scripts/verify-reproducible-wheel.py dist dist-rebuilt
       - name: Install and smoke built wheel
         shell: bash
         run: |

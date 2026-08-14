@@ -8,7 +8,7 @@ import unittest
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -76,6 +76,20 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(independent.path.is_file())
         with self.assertRaises(sqlite3.OperationalError), configured.transaction() as database:
             database.execute("SELECT * FROM isolated")
+
+    def test_connection_is_closed_if_hardening_configuration_fails(self):
+        path = Path(self.temporary_directory.name) / "configuration-failure.db"
+        path.touch()
+        connection = MagicMock()
+        connection.execute.side_effect = OSError("pragma rejected")
+
+        with (
+            patch("pcims.db.connection.sqlite3.connect", return_value=connection),
+            self.assertRaisesRegex(OSError, "pragma rejected"),
+        ):
+            Database.at(path).connect(create=True)
+
+        connection.close.assert_called_once()
 
     def test_read_transaction_never_creates_a_missing_database_or_directory(self):
         missing = Database.at(
@@ -793,6 +807,18 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertNotEqual(
             first.path.name.split("_")[1], other_first.path.name.split("_")[1]
         )
+
+    def test_clock_rollback_cannot_delete_the_just_created_backup(self):
+        first = create_backup(keep=2, database=self.database)
+        os.utime(first.path, ns=(1, 1))
+        old_clock = datetime(2000, 1, 1, tzinfo=UTC)
+
+        with patch("pcims.db.backup.datetime") as clock:
+            clock.now.return_value = old_clock
+            second = create_backup(keep=1, database=self.database)
+
+        self.assertFalse(first.path.exists())
+        self.assertTrue(second.path.exists())
 
     def test_backup_flushes_file_and_directory_around_atomic_publish(self):
         self.buy("Keep", "CPU", 10)
