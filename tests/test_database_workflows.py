@@ -983,6 +983,17 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertFalse(first.path.exists())
         self.assertTrue(second.path.exists())
 
+    def test_repeated_wall_clock_timestamp_still_creates_distinct_backups(self):
+        repeated_time = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+        with patch("pcims.db.backup.datetime") as clock:
+            clock.now.return_value = repeated_time
+            first = create_backup(database=self.database)
+            second = create_backup(database=self.database)
+
+        self.assertNotEqual(first.path, second.path)
+        self.assertTrue(first.path.is_file())
+        self.assertTrue(second.path.is_file())
+
     def test_non_file_cannot_consume_a_backup_retention_slot(self):
         first = create_backup(keep=2, database=self.database)
         matching_directory = first.path.with_name(
@@ -1037,6 +1048,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertTrue(result.path.is_file())
         self.assertTrue(result.has_warnings)
+        self.assertFalse(result.durable)
         self.assertIn("Backup was created", result.warning_text)
         validate_database(result)
 
@@ -1068,6 +1080,45 @@ class DatabaseWorkflowTests(unittest.TestCase):
             restore_backup(invalid, database=self.database)
         self.assertEqual(
             [item.name for item in self.services.list_expenses()], ["Keep me"]
+        )
+
+    def test_restore_rejects_a_hard_link_alias_of_the_live_database(self):
+        self.buy("Keep me", "CPU", 10)
+        alias = Path(self.temporary_directory.name) / "live-alias.db"
+        os.link(self.database_path, alias)
+
+        with self.assertRaisesRegex(ValueError, "active database"):
+            restore_backup(alias, database=self.database)
+
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()], ["Keep me"]
+        )
+
+    def test_restore_requires_a_distinct_durable_safety_backup(self):
+        self.buy("Old state", "CPU", 10)
+        source = create_backup(database=self.database)
+        self.buy("Current state", "RAM", 20)
+        unsafe_results = (
+            BackupResult(
+                self.database_path.with_name("not-durable.db"),
+                ("directory flush failed",),
+                False,
+            ),
+            BackupResult(source.path),
+            BackupResult(self.database_path),
+        )
+
+        for unsafe in unsafe_results:
+            with (
+                self.subTest(unsafe=unsafe),
+                patch("pcims.db.backup.create_backup", return_value=unsafe),
+                self.assertRaises((OSError, RuntimeError)),
+            ):
+                restore_backup(source, database=self.database)
+
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()],
+            ["Old state", "Current state"],
         )
 
     def test_restore_removes_stale_wal_sidecars_before_replacing_main_file(self):
@@ -1124,9 +1175,16 @@ class DatabaseWorkflowTests(unittest.TestCase):
         source = create_backup(database=self.database)
         self.buy("Discarded state", "RAM", 20)
 
+        sync_calls = 0
+
+        def fail_restored_directory(_path):
+            nonlocal sync_calls
+            sync_calls += 1
+            if sync_calls == 2:
+                raise OSError("simulated restore directory flush failure")
+
         with patch(
-            "pcims.db.backup._sync_directory",
-            side_effect=OSError("simulated restore directory flush failure"),
+            "pcims.db.backup._sync_directory", side_effect=fail_restored_directory
         ):
             safety = restore_backup(source, database=self.database)
 

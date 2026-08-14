@@ -16,6 +16,7 @@ class BackupResult(os.PathLike[str]):
 
     path: Path
     warnings: tuple[str, ...] = ()
+    durable: bool = True
 
     def __fspath__(self) -> str:
         return str(self.path)

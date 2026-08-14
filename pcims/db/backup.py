@@ -40,6 +40,16 @@ def _backup_prefix(database: Database) -> str:
     return f"pcims_{digest}_"
 
 
+def _paths_alias(first: Path, second: Path) -> bool:
+    """Compare existing file identity while retaining a path-only fallback."""
+    if first == second:
+        return True
+    try:
+        return first.samefile(second)
+    except OSError:
+        return False
+
+
 def _remove_live_sidecars(database_path: Path) -> None:
     """Remove journals belonging to the old main file before atomic replacement."""
     for suffix in ("-wal", "-shm"):
@@ -139,10 +149,11 @@ def _create_backup(
     destination.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
     prefix = _backup_prefix(database)
-    final_path = destination / f"{prefix}{stamp}.db"
+    final_path = destination / f"{prefix}{stamp}_{uuid.uuid4().hex}.db"
     temporary_path = final_path.with_suffix(".tmp")
     primary_error: BaseException | None = None
     publication_errors: list[str] = []
+    durable = True
     try:
         with database.transaction() as source, closing(
             sqlite3.connect(temporary_path)
@@ -156,6 +167,7 @@ def _create_backup(
         try:
             _sync_directory(destination)
         except OSError as error:
+            durable = False
             publication_errors.append(
                 f"Backup was created, but its directory could not be flushed: {error}"
             )
@@ -167,7 +179,7 @@ def _create_backup(
 
     warnings = publication_errors
     warnings.extend(_prune_backups(destination, prefix, keep))
-    return BackupResult(final_path, tuple(warnings))
+    return BackupResult(final_path, tuple(warnings), durable)
 
 
 def create_backup(
@@ -191,7 +203,7 @@ def _restore_backup(
     live_path = database.path
     if not source_path.is_file():
         raise FileNotFoundError(f"Backup does not exist: {source_path}")
-    if source_path == live_path:
+    if _paths_alias(source_path, live_path):
         raise ValueError("The active database cannot be restored over itself.")
     validate_database(source_path)
 
@@ -205,6 +217,16 @@ def _restore_backup(
             staged_path.chmod(0o600)
         validate_database(staged_path)
         safety_backup = create_backup(pre_restore_directory, database=database)
+        if not safety_backup.durable:
+            raise OSError(
+                "Restore stopped because its safety backup was not durably published."
+            )
+        if _paths_alias(safety_backup.path, source_path) or _paths_alias(
+            safety_backup.path, live_path
+        ):
+            raise RuntimeError(
+                "Restore stopped because its safety backup is not a distinct file."
+            )
         _sync_file(staged_path)
         _checkpoint_live_database(database)
         _remove_live_sidecars(live_path)
@@ -218,6 +240,7 @@ def _restore_backup(
                     *safety_backup.warnings,
                     f"Database was restored, but its directory could not be flushed: {error}",
                 ),
+                safety_backup.durable,
             )
     except BaseException as error:
         primary_error = error
