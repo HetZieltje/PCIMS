@@ -1,8 +1,6 @@
 """Main Qt window and application-wide presentation state."""
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import TypeVar, cast
+from typing import cast
 
 from PySide6.QtCore import QByteArray, QSettings, Qt
 from PySide6.QtGui import QCloseEvent, QColor, QPalette
@@ -11,7 +9,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QTabWidget,
-    QWidget,
 )
 
 from pcims.app.common import show_error
@@ -20,39 +17,10 @@ from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
 from pcims.app.pages.sales import SalesPage
 from pcims.app.pages.settings import SettingsPage
-from pcims.app.tasks import BackgroundTask, TaskManager
+from pcims.app.refresh import RefreshCoordinator, bind_refresh
+from pcims.app.tasks import TaskManager
 from pcims.db.backup import BackupResult
 from pcims.services import ApplicationServices
-
-SnapshotT = TypeVar("SnapshotT")
-
-
-@dataclass(frozen=True, slots=True)
-class RefreshBinding:
-    page: QWidget
-    load: Callable[[], object]
-    apply: Callable[[object], None]
-
-
-def bind_refresh(
-    page: QWidget,
-    load: Callable[[], SnapshotT],
-    apply: Callable[[SnapshotT], None],
-) -> RefreshBinding:
-    """Erase one page's snapshot type only at Qt's dynamic signal boundary."""
-
-    def apply_typed(snapshot: object) -> None:
-        apply(cast(SnapshotT, snapshot))
-
-    return RefreshBinding(page, load, apply_typed)
-
-
-@dataclass(slots=True)
-class RefreshState:
-    requested_generation: int = 0
-    running_generation: int | None = None
-    task: BackgroundTask[object] | None = None
-    pending: bool = False
 
 
 class MainWindow(QMainWindow):
@@ -114,11 +82,13 @@ class MainWindow(QMainWindow):
                 lambda snapshot: self.sales_page.apply_snapshot(snapshot),
             ),
         )
-        self._refresh_bindings = {binding.page: binding for binding in bindings}
-        self._dirty_pages: set[QWidget] = set(self.data_pages)
-        self._refresh_states: dict[QWidget, RefreshState] = {
-            page: RefreshState() for page in self.data_pages
-        }
+        self.refreshes = RefreshCoordinator(self.tasks, bindings, self)
+        self.refreshes.refreshed.connect(
+            lambda: self.statusBar().showMessage("Data refreshed", 2500)
+        )
+        self.refreshes.failed.connect(
+            lambda _page, error: show_error(self, "Unable to refresh data", error)
+        )
         for page, title in zip(
             self.pages,
             ("Inventory", "Purchases", "Assemble", "Sales and History", "Settings"),
@@ -163,95 +133,22 @@ class MainWindow(QMainWindow):
     def refresh_current(self, index: int | None = None) -> None:
         index = self.tabs.currentIndex() if index is None else index
         page = self.tabs.widget(index)
-        if page not in self._dirty_pages:
-            return
-        self._start_refresh(page)
-
-    def _start_refresh(self, page: QWidget) -> None:
-        state = self._refresh_states.get(page)
-        if state is None:
-            self._dirty_pages.discard(page)
-            return
-        state.requested_generation += 1
-        if state.task is not None:
-            state.pending = True
-            return
-        self._launch_refresh(page, state)
-
-    def _launch_refresh(self, page: QWidget, state: RefreshState) -> None:
-        binding = self._refresh_bindings.get(page)
-        if binding is None:
-            self._dirty_pages.discard(page)
-            return
-        generation = state.requested_generation
-        state.running_generation = generation
-        state.pending = False
-        state.task = self.tasks.run(
-            binding.load,
-            lambda snapshot: self._refresh_succeeded(page, generation, snapshot),
-            lambda error: self._refresh_failed(page, generation, error),
-        )
-
-    def _refresh_succeeded(
-        self,
-        page: QWidget,
-        generation: int,
-        snapshot: object,
-    ) -> None:
-        state = self._finish_refresh(page, generation)
-        if state is None:
-            return
-        if state.requested_generation == generation:
-            self._refresh_bindings[page].apply(snapshot)
-            self._dirty_pages.discard(page)
-            self.statusBar().showMessage("Data refreshed", 2500)
-        self._launch_pending_refresh(page, state)
-
-    def _refresh_failed(
-        self, page: QWidget, generation: int, error: Exception
-    ) -> None:
-        state = self._finish_refresh(page, generation)
-        if state is None:
-            return
-        if state.requested_generation == generation:
-            self._dirty_pages.add(page)
-            show_error(self, "Unable to refresh data", error)
-        self._launch_pending_refresh(page, state)
-
-    def _finish_refresh(
-        self, page: QWidget, generation: int
-    ) -> RefreshState | None:
-        state = self._refresh_states.get(page)
-        if state is None or state.running_generation != generation:
-            return None
-        state.task = None
-        state.running_generation = None
-        return state
-
-    def _launch_pending_refresh(self, page: QWidget, state: RefreshState) -> None:
-        if state.pending:
-            self._launch_refresh(page, state)
+        if page is not None:
+            self.refreshes.start_if_dirty(page)
 
     @property
     def refresh_running(self) -> bool:
-        return any(state.task is not None for state in self._refresh_states.values())
+        return self.refreshes.active
 
     def _cancel_pending_refreshes(self) -> None:
-        for state in self._refresh_states.values():
-            state.requested_generation += 1
-            state.pending = False
+        self.refreshes.cancel_pending()
 
     def refresh_all(self) -> None:
-        self._dirty_pages.update(self.data_pages)
-        for page in self.data_pages:
-            self._start_refresh(page)
+        self.refreshes.refresh_all()
         self.statusBar().showMessage("Refreshing dataâ€¦")
 
     def _on_data_changed(self) -> None:
-        for state in self._refresh_states.values():
-            state.requested_generation += 1
-        self._dirty_pages.update(self.data_pages)
-        self.refresh_current()
+        self.refreshes.invalidate_all(self.tabs.currentWidget())
         self.statusBar().showMessage("Data updated", 2500)
 
     def _after_database_restore(self) -> None:

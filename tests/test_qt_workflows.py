@@ -397,7 +397,7 @@ class QtWorkflowTests(unittest.TestCase):
             release_refresh.wait(2)
             return "late snapshot"
 
-        window._dirty_pages.add(window.inventory_page)
+        window.refreshes.mark_dirty(window.inventory_page)
         with (
             patch.object(
                 window.inventory_page,
@@ -735,7 +735,7 @@ class QtWorkflowTests(unittest.TestCase):
     def test_runtime_refresh_failure_is_reported_and_left_retryable(self):
         window = MainWindow(self.services)
         self.wait_for_window(window)
-        window._dirty_pages.add(window.inventory_page)
+        window.refreshes.mark_dirty(window.inventory_page)
         with (
             patch.object(
                 window.inventory_page,
@@ -748,7 +748,7 @@ class QtWorkflowTests(unittest.TestCase):
             self.wait_for_window(window)
 
         show_error.assert_called_once()
-        self.assertIn(window.inventory_page, window._dirty_pages)
+        self.assertTrue(window.refreshes.is_dirty(window.inventory_page))
         window.deleteLater()
 
     def test_stale_async_refresh_cannot_overwrite_a_newer_result(self):
@@ -767,7 +767,7 @@ class QtWorkflowTests(unittest.TestCase):
                 return "old snapshot"
             return "new snapshot"
 
-        window._dirty_pages.add(window.inventory_page)
+        window.refreshes.mark_dirty(window.inventory_page)
         with (
             patch.object(
                 window.inventory_page, "load_snapshot", side_effect=load_snapshot
@@ -799,7 +799,7 @@ class QtWorkflowTests(unittest.TestCase):
             release_inventory.wait(2)
             return "obsolete inventory"
 
-        window._dirty_pages.add(window.inventory_page)
+        window.refreshes.mark_dirty(window.inventory_page)
         with (
             patch.object(
                 window.inventory_page,
@@ -808,14 +808,14 @@ class QtWorkflowTests(unittest.TestCase):
             ),
             patch.object(window.inventory_page, "apply_snapshot") as apply_snapshot,
         ):
-            window._start_refresh(window.inventory_page)
+            window.refreshes.start(window.inventory_page)
             self.wait_until(inventory_started.is_set)
             window.purchases_page.data_changed.emit()
             release_inventory.set()
             self.wait_for_window(window)
 
         apply_snapshot.assert_not_called()
-        self.assertIn(window.inventory_page, window._dirty_pages)
+        self.assertTrue(window.refreshes.is_dirty(window.inventory_page))
         window.deleteLater()
 
     def test_database_mutation_keeps_the_qt_event_loop_responsive(self):

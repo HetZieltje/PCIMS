@@ -1,16 +1,19 @@
 """In-process coordination for live database operations and replacement."""
 
 import threading
+import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 _registry_lock = threading.Lock()
-_registry: dict[Path, "DatabaseGate"] = {}
+_registry: weakref.WeakValueDictionary[Path, "DatabaseGate"] = (
+    weakref.WeakValueDictionary()
+)
 
 
 def gate_for(path: Path) -> "DatabaseGate":
-    """Return one coordination gate for each resolved database identity."""
+    """Return one live coordination gate for each resolved database identity."""
     resolved = path.resolve()
     with _registry_lock:
         return _registry.setdefault(resolved, DatabaseGate())

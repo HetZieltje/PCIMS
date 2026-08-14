@@ -45,14 +45,20 @@ class ArchitectureTests(unittest.TestCase):
     def test_schema_reads_records_and_commands_have_separate_modules(self):
         root = Path(__file__).parents[1] / "pcims" / "db"
         reads = (root / "reads.py").read_text(encoding="utf-8")
-        commands = (root / "commands.py").read_text(encoding="utf-8")
+        commands = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in root.glob("*_commands.py")
+        )
         records = (root / "records.py").read_text(encoding="utf-8")
         schema = (root / "schema.py").read_text(encoding="utf-8")
 
         self.assertFalse((root / "queries.py").exists())
+        self.assertFalse((root / "commands.py").exists())
         self.assertIn("class ReadQueries", reads)
         self.assertNotIn("INSERT INTO", reads)
         self.assertIn("def sell_pc", commands)
+        self.assertIn("def assemble_pc", commands)
+        self.assertIn("def add_expenses", commands)
         self.assertNotIn("class ReadQueries", commands)
         self.assertIn("def expense_from_row", records)
         self.assertNotIn("CREATE TABLE", reads + commands + records)
@@ -75,13 +81,19 @@ class ArchitectureTests(unittest.TestCase):
             with self.subTest(path=path.name):
                 source = path.read_text(encoding="utf-8")
                 self.assertNotIn("from pcims.db.commands", source)
+                self.assertNotIn("from pcims.db.expense_commands", source)
+                self.assertNotIn("from pcims.db.assembly_commands", source)
+                self.assertNotIn("from pcims.db.sale_commands", source)
                 self.assertNotIn("from pcims.db.reads", source)
                 self.assertNotIn("from pcims.db.backup import create_backup", source)
 
     def test_service_commands_are_typed_and_normalized_outside_sql_workflows(self):
         root = Path(__file__).parents[1] / "pcims"
         services = (root / "services.py").read_text(encoding="utf-8")
-        commands = (root / "db" / "commands.py").read_text(encoding="utf-8")
+        commands = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (root / "db").glob("*_commands.py")
+        )
         self.assertNotIn("PurchaseInput", services)
         self.assertNotIn("Iterable[object]", services)
         self.assertNotIn("selling_price: object", services)
@@ -114,10 +126,13 @@ class ArchitectureTests(unittest.TestCase):
             path.read_text(encoding="utf-8") for path in app.rglob("*.py")
         )
         main_window = (app / "main_window.py").read_text(encoding="utf-8")
+        refresh = (app / "refresh.py").read_text(encoding="utf-8")
         self.assertNotIn("run_in_background", source)
         self.assertIn("class TaskManager", source)
         self.assertIn("became_idle = Signal()", source)
         self.assertIn("bind_refresh(", main_window)
+        self.assertIn("class RefreshCoordinator", refresh)
+        self.assertNotIn("class RefreshState", main_window)
         self.assertNotIn("QTimer", main_window)
         self.assertNotIn('getattr(page, "load_snapshot"', main_window)
         self.assertNotIn('getattr(page, "command_running"', main_window)

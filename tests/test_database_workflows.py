@@ -1,7 +1,9 @@
+import gc
 import sqlite3
 import tempfile
 import threading
 import unittest
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import date, timedelta
@@ -14,7 +16,6 @@ from pcims.db.backup import (
     restore_backup,
     validate_database,
 )
-from pcims.db.commands import add_expenses
 from pcims.db.connection import Database
 from pcims.db.errors import (
     DatabaseIntegrityError,
@@ -22,6 +23,8 @@ from pcims.db.errors import (
     SchemaVersionError,
     ValidationError,
 )
+from pcims.db.expense_commands import add_expenses
+from pcims.db.gate import gate_for
 from pcims.db.reads import ReadQueries, list_pcs, list_sales
 from pcims.db.schema import SCHEMA_DEFINITIONS, SCHEMA_VERSION, initialize_database
 from pcims.domain import NewExpense, SaleTerms
@@ -41,6 +44,16 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary_directory.cleanup()
+
+    def test_idle_database_gates_do_not_accumulate_process_global_state(self):
+        transient_path = self.database_path.with_name("transient.db")
+        transient_gate = gate_for(transient_path)
+        gate_reference = weakref.ref(transient_gate)
+
+        del transient_gate
+        gc.collect()
+
+        self.assertIsNone(gate_reference())
 
     def test_database_configuration_is_an_explicit_immutable_value(self):
         configured = self.database
