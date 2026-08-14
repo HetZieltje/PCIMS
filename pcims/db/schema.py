@@ -9,45 +9,49 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
     ("table", "expenses"): f"""CREATE TABLE expenses (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL CHECK (length(trim(name)) > 0),
         item_type TEXT NOT NULL CHECK (item_type IN ({_ALLOWED_TYPES_SQL})),
-        price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+        price_cents INTEGER NOT NULL
+            CHECK (price_cents >= 0 AND price_cents <= {MAX_MONEY_CENTS}),
         purchase_date TEXT NOT NULL
             CHECK (purchase_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
-    )""",
+    ) STRICT""",
     ("table", "assembled_pcs"): """CREATE TABLE assembled_pcs (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL COLLATE PCIMS_NOCASE UNIQUE
             CHECK (length(trim(name)) > 0)
-    )""",
+    ) STRICT""",
     ("table", "pc_parts"): """CREATE TABLE pc_parts (
         pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE,
         expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
         position INTEGER NOT NULL CHECK (position >= 0),
         PRIMARY KEY (pc_id, expense_id),
         UNIQUE (pc_id, position)
-    )""",
-    ("table", "sales"): """CREATE TABLE sales (
+    ) STRICT""",
+    ("table", "sales"): f"""CREATE TABLE sales (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL CHECK (length(trim(name)) > 0),
         kind TEXT NOT NULL CHECK (kind IN ('item', 'pc')),
-        cost_cents INTEGER NOT NULL CHECK (cost_cents >= 0),
-        selling_price_cents INTEGER NOT NULL CHECK (selling_price_cents >= 0),
+        cost_cents INTEGER NOT NULL
+            CHECK (cost_cents >= 0 AND cost_cents <= {MAX_MONEY_CENTS}),
+        selling_price_cents INTEGER NOT NULL
+            CHECK (selling_price_cents >= 0
+                   AND selling_price_cents <= {MAX_MONEY_CENTS}),
         sale_date TEXT NOT NULL
             CHECK (sale_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
-    )""",
+    ) STRICT""",
     ("table", "sale_items"): """CREATE TABLE sale_items (
         sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
         expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
         position INTEGER NOT NULL CHECK (position >= 0),
         PRIMARY KEY (sale_id, expense_id),
         UNIQUE (sale_id, position)
-    )""",
+    ) STRICT""",
     ("trigger", "pc_part_must_not_be_sold"): """CREATE TRIGGER pc_part_must_not_be_sold
         BEFORE INSERT ON pc_parts
         WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=NEW.expense_id)

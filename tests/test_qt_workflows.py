@@ -717,8 +717,12 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_startup_io_failure_is_reported_and_releases_instance_lock(self):
         lock = MagicMock()
+        previous_hook = sys.excepthook
         with (
-            patch("pcims.app.application.install_exception_hook"),
+            patch(
+                "pcims.app.application.install_exception_hook",
+                return_value=previous_hook,
+            ),
             patch("pcims.app.application.acquire_instance_lock", return_value=lock),
             patch(
                 "pcims.services.ApplicationServices.initialize",
@@ -732,6 +736,7 @@ class QtWorkflowTests(unittest.TestCase):
         critical.assert_called_once()
         self.assertIn("permission denied", critical.call_args.args[2])
         lock.unlock.assert_called_once()
+        self.assertIs(sys.excepthook, previous_hook)
 
     def test_runtime_refresh_failure_is_reported_and_left_retryable(self):
         window = MainWindow(self.services)

@@ -61,6 +61,16 @@ def _backup_prefix(database: Database) -> str:
     return f"pcims_{digest}_"
 
 
+def _remove_live_sidecars(database_path: Path) -> None:
+    """Remove journals belonging to the old main file before atomic replacement."""
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(f"{database_path}{suffix}")
+        try:
+            sidecar.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _remove_temporary(path: Path, primary_error: BaseException | None) -> None:
     if not path.exists():
         return
@@ -179,6 +189,7 @@ def _restore_backup(
         validate_database(staged_path)
         safety_backup = create_backup(pre_restore_directory, database=database)
         _sync_file(staged_path)
+        _remove_live_sidecars(live_path)
         os.replace(staged_path, live_path)
         _sync_directory(live_path.parent)
     except BaseException as error:

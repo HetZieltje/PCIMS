@@ -42,13 +42,9 @@ def acquire_instance_lock(database_path: Path) -> QLockFile | None:
     return lock if lock.tryLock(0) else None
 
 
-def main(
-    argv: Sequence[str] | None = None,
-    services: ApplicationServices | None = None,
+def _run_application(
+    application: QApplication, services: ApplicationServices
 ) -> int:
-    application = create_application(argv)
-    services = services or default_services()
-    install_exception_hook()
     try:
         instance_lock = acquire_instance_lock(services.database_path)
     except OSError as error:
@@ -91,6 +87,19 @@ def main(
         return application.exec()
     finally:
         instance_lock.unlock()
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    services: ApplicationServices | None = None,
+) -> int:
+    application = create_application(argv)
+    services = services or default_services()
+    previous_hook = install_exception_hook()
+    try:
+        return _run_application(application, services)
+    finally:
+        sys.excepthook = previous_hook
 
 
 if __name__ == "__main__":

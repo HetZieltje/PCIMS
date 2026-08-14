@@ -293,6 +293,20 @@ class DatabaseWorkflowTests(unittest.TestCase):
             count = database.execute("SELECT COUNT(*) FROM assembled_pcs").fetchone()[0]
         self.assertEqual(count, 0)
 
+    def test_schema_rejects_wrong_types_and_out_of_range_money_directly(self):
+        invalid_values = ("not-an-integer", MAX_MONEY_CENTS + 1)
+        for invalid in invalid_values:
+            with (
+                self.subTest(value=invalid),
+                self.assertRaises(sqlite3.IntegrityError),
+                self.database.transaction(write=True) as database,
+            ):
+                database.execute(
+                    "INSERT INTO expenses "
+                    "(name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
+                    ("Invalid", "CPU", invalid, TEST_DATE.isoformat()),
+                )
+
     def test_membership_indexes_cover_display_order(self):
         with self.database.transaction() as database:
             for table in ("pc_parts", "sale_items"):
@@ -791,6 +805,23 @@ class DatabaseWorkflowTests(unittest.TestCase):
             restore_backup(invalid, database=self.database)
         self.assertEqual(
             [item.name for item in self.services.list_expenses()], ["Keep me"]
+        )
+
+    def test_restore_removes_stale_wal_sidecars_before_replacing_main_file(self):
+        self.buy("Restored state", "CPU", 10)
+        source = create_backup(database=self.database)
+        sidecars = tuple(Path(f"{self.database_path}{suffix}") for suffix in ("-wal", "-shm"))
+        for sidecar in sidecars:
+            sidecar.write_bytes(b"stale journal")
+        safety = BackupResult(self.database_path.with_name("safety.db"))
+
+        with patch("pcims.db.backup.create_backup", return_value=safety):
+            result = restore_backup(source, database=self.database)
+
+        self.assertEqual(result, safety)
+        self.assertTrue(all(not sidecar.exists() for sidecar in sidecars))
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()], ["Restored state"]
         )
 
     def test_backup_rejects_foreign_key_violations(self):
