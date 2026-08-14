@@ -10,7 +10,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pcims.contracts import BackupResult
+from pcims.contracts import BackupResult, RestoreResult
 from pcims.db.connection import Database, register_database_collations
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.db.schema import validate_current_data, validate_schema
@@ -86,7 +86,10 @@ def _remove_temporary(path: Path, primary_error: BaseException | None) -> None:
 
 
 def _prune_backups(
-    destination: Path, prefix: str, keep: int
+    destination: Path,
+    prefix: str,
+    keep: int,
+    protected_paths: tuple[Path, ...] = (),
 ) -> tuple[str, ...]:
     """Retain the newest files by metadata, independent of wall-clock names."""
     warnings: list[str] = []
@@ -105,6 +108,8 @@ def _prune_backups(
             timestamped.append((metadata.st_mtime_ns, path.name, path))
     timestamped.sort(reverse=True)
     for _timestamp, _name, old_backup in timestamped[keep:]:
+        if any(_paths_alias(old_backup, protected) for protected in protected_paths):
+            continue
         try:
             old_backup.unlink()
         except OSError as error:
@@ -138,6 +143,7 @@ def _create_backup(
     keep: int = 14,
     *,
     database: Database,
+    protected_paths: tuple[Path, ...] = (),
 ) -> BackupResult:
     if keep < 1:
         raise ValueError("At least one backup must be retained.")
@@ -178,7 +184,7 @@ def _create_backup(
         _remove_temporary(temporary_path, primary_error)
 
     warnings = publication_errors
-    warnings.extend(_prune_backups(destination, prefix, keep))
+    warnings.extend(_prune_backups(destination, prefix, keep, protected_paths))
     return BackupResult(final_path, tuple(warnings), durable)
 
 
@@ -190,7 +196,12 @@ def create_backup(
 ) -> BackupResult:
     """Create and retain one backup without racing other maintenance."""
     with database.gate.maintenance():
-        return _create_backup(destination_directory, keep, database=database)
+        return _create_backup(
+            destination_directory,
+            keep,
+            database=database,
+            protected_paths=(database.path,),
+        )
 
 
 def _restore_backup(
@@ -198,7 +209,7 @@ def _restore_backup(
     pre_restore_directory: str | os.PathLike[str] | None = None,
     *,
     database: Database,
-) -> BackupResult:
+) -> RestoreResult:
     source_path = Path(backup_path).expanduser().resolve()
     live_path = database.path
     if not source_path.is_file():
@@ -216,7 +227,11 @@ def _restore_backup(
         if os.name != "nt":
             staged_path.chmod(0o600)
         validate_database(staged_path)
-        safety_backup = create_backup(pre_restore_directory, database=database)
+        safety_backup = _create_backup(
+            pre_restore_directory,
+            database=database,
+            protected_paths=(source_path, live_path),
+        )
         if not safety_backup.durable:
             raise OSError(
                 "Restore stopped because its safety backup was not durably published."
@@ -231,23 +246,26 @@ def _restore_backup(
         _checkpoint_live_database(database)
         _remove_live_sidecars(live_path)
         os.replace(staged_path, live_path)
+        restore_warnings: tuple[str, ...] = ()
+        restored_durable = True
         try:
             _sync_directory(live_path.parent)
         except OSError as error:
-            safety_backup = BackupResult(
-                safety_backup.path,
-                (
-                    *safety_backup.warnings,
-                    f"Database was restored, but its directory could not be flushed: {error}",
-                ),
-                safety_backup.durable,
+            restored_durable = False
+            restore_warnings = (
+                f"Database was restored, but its directory could not be flushed: {error}",
             )
     except BaseException as error:
         primary_error = error
         raise
     finally:
         _remove_temporary(staged_path, primary_error)
-    return safety_backup
+    return RestoreResult(
+        source_path,
+        safety_backup,
+        restore_warnings,
+        restored_durable,
+    )
 
 
 def restore_backup(
@@ -255,7 +273,7 @@ def restore_backup(
     pre_restore_directory: str | os.PathLike[str] | None = None,
     *,
     database: Database,
-) -> BackupResult:
+) -> RestoreResult:
     """Atomically replace the live database after all operations have drained."""
     with database.gate.maintenance(), database.gate.exclusive():
         return _restore_backup(backup_path, pre_restore_directory, database=database)

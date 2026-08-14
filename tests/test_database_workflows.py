@@ -966,13 +966,26 @@ class DatabaseWorkflowTests(unittest.TestCase):
         for _ in range(13):
             create_backup(backup_directory, database=self.database)
 
-        safety = restore_backup(source, database=self.database)
+        result = restore_backup(source, database=self.database)
 
         self.assertEqual(
             [item.name for item in self.services.list_expenses()], ["Old state"]
         )
-        validate_database(safety)
-        self.assertLessEqual(len(list(backup_directory.glob("pcims_*.db"))), 14)
+        self.assertEqual(result.source_path, source.path)
+        validate_database(result.safety_backup)
+        self.assertTrue(source.path.is_file())
+        self.assertLessEqual(len(list(backup_directory.glob("pcims_*.db"))), 15)
+
+    def test_restore_retention_never_prunes_the_selected_source(self):
+        self.buy("Protected source", "CPU", 10)
+        source = create_backup(keep=20, database=self.database)
+        for _ in range(14):
+            create_backup(keep=20, database=self.database)
+
+        result = restore_backup(source, database=self.database)
+
+        self.assertTrue(source.path.is_file())
+        self.assertEqual(result.source_path, source.path)
 
     def test_backup_and_restore_support_uri_special_characters_in_paths(self):
         special_directory = Path(self.temporary_directory.name) / "data # 100% ready"
@@ -1186,7 +1199,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         for unsafe in unsafe_results:
             with (
                 self.subTest(unsafe=unsafe),
-                patch("pcims.db.backup.create_backup", return_value=unsafe),
+                patch("pcims.db.backup._create_backup", return_value=unsafe),
                 self.assertRaises((OSError, RuntimeError)),
             ):
                 restore_backup(source, database=self.database)
@@ -1204,10 +1217,11 @@ class DatabaseWorkflowTests(unittest.TestCase):
             sidecar.write_bytes(b"stale journal")
         safety = BackupResult(self.database_path.with_name("safety.db"))
 
-        with patch("pcims.db.backup.create_backup", return_value=safety):
+        with patch("pcims.db.backup._create_backup", return_value=safety):
             result = restore_backup(source, database=self.database)
 
-        self.assertEqual(result, safety)
+        self.assertEqual(result.source_path, source.path)
+        self.assertEqual(result.safety_backup, safety)
         self.assertTrue(all(not sidecar.exists() for sidecar in sidecars))
         self.assertEqual(
             [item.name for item in self.services.list_expenses()], ["Restored state"]
@@ -1233,7 +1247,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             real_replace(source_path, destination_path)
 
         with (
-            patch("pcims.db.backup.create_backup", return_value=safety),
+            patch("pcims.db.backup._create_backup", return_value=safety),
             patch("pcims.db.backup.os.replace", side_effect=fail_live_replace),
             self.assertRaisesRegex(PermissionError, "simulated live database lock"),
         ):
@@ -1261,10 +1275,12 @@ class DatabaseWorkflowTests(unittest.TestCase):
         with patch(
             "pcims.db.backup._sync_directory", side_effect=fail_restored_directory
         ):
-            safety = restore_backup(source, database=self.database)
+            result = restore_backup(source, database=self.database)
 
-        self.assertTrue(safety.has_warnings)
-        self.assertIn("Database was restored", safety.warning_text)
+        self.assertTrue(result.has_warnings)
+        self.assertFalse(result.durable)
+        self.assertTrue(result.safety_backup.durable)
+        self.assertIn("Database was restored", result.warning_text)
         self.assertEqual(
             [item.name for item in self.services.list_expenses()], ["Old state"]
         )

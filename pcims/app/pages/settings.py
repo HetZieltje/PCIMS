@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from pcims.app.common import ask_confirmation, show_error
 from pcims.app.tasks import TaskManager
-from pcims.contracts import BackupResult, MaintenanceOperations
+from pcims.contracts import BackupResult, MaintenanceOperations, RestoreResult
 
 
 class SettingsPage(QWidget):
@@ -149,25 +149,27 @@ class SettingsPage(QWidget):
         self.restore_button.setText("Restore backup…")
         show_error(self, "Restore failed", error)
 
-    def _restore_finished(self, safety: BackupResult) -> None:
+    def _restore_finished(self, result: RestoreResult) -> None:
         self.window().setEnabled(True)
         self.restore_button.setText("Restore backup…")
         self.database_restored.emit()
         warning_note = (
-            f"\n\nRecovery warnings:\n{safety.warning_text}"
-            if safety.has_warnings
+            f"\n\nRecovery warnings:\n{result.warning_text}"
+            if result.has_warnings
             else ""
         )
         message_box = (
             QMessageBox.warning
-            if safety.has_warnings
+            if result.has_warnings
             else QMessageBox.information
         )
         message_box(
             self,
             "Restore complete with warning"
-            if safety.has_warnings
+            if result.has_warnings
             else "Restore complete",
-            f"The database was restored. Previous data was saved to:\n{safety}"
+            f"The database was restored from:\n{result.source_path}\n\n"
+            "Previous data was saved to:\n"
+            f"{result.safety_backup.path}"
             f"{warning_note}",
         )

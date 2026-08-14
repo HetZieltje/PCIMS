@@ -34,6 +34,28 @@ class BackupResult(os.PathLike[str]):
 
 
 @dataclass(frozen=True, slots=True)
+class RestoreResult:
+    """A completed restore, its rollback artifact, and publication status."""
+
+    source_path: Path
+    safety_backup: BackupResult
+    warnings: tuple[str, ...] = ()
+    durable: bool = True
+
+    @property
+    def all_warnings(self) -> tuple[str, ...]:
+        return (*self.safety_backup.warnings, *self.warnings)
+
+    @property
+    def has_warnings(self) -> bool:
+        return bool(self.all_warnings)
+
+    @property
+    def warning_text(self) -> str:
+        return "\n".join(self.all_warnings)
+
+
+@dataclass(frozen=True, slots=True)
 class InventorySnapshot:
     inventory: tuple[Expense, ...]
     pcs: tuple[AssembledPC, ...]
@@ -96,4 +118,4 @@ class MaintenanceOperations(Protocol):
         self,
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
-    ) -> BackupResult: ...
+    ) -> RestoreResult: ...

@@ -10,6 +10,7 @@ from pcims.contracts import (
     BackupResult,
     InventorySnapshot,
     PurchasesSnapshot,
+    RestoreResult,
     SalesSnapshot,
 )
 from pcims.db.assembly_commands import (
@@ -141,7 +142,7 @@ class ApplicationServices:
         self,
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
-    ) -> BackupResult:
+    ) -> RestoreResult:
         return restore_backup(
             backup_path, pre_restore_directory, database=self.database
         )
