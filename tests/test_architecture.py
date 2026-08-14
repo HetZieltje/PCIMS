@@ -125,8 +125,38 @@ class ArchitectureTests(unittest.TestCase):
         )
         self.assertIn("XDG_DATA_HOME", installer)
         self.assertNotIn("sudo", installer)
-        self.assertIn('Exec="@PCIMS_EXECUTABLE@"', desktop)
+        self.assertIn("requirements.lock", installer)
+        self.assertIn("--require-hashes", installer)
+        self.assertIn("staging_root", installer)
+        self.assertIn("smoke-installed.py", installer)
+        self.assertIn('Exec="@PCIMS_PYTHON@" -m pcims.app.application', desktop)
         self.assertIn("Terminal=false", desktop)
+
+    def test_dependencies_have_cross_platform_hash_locks(self):
+        root = Path(__file__).parents[1]
+        runtime_lock = (root / "requirements.lock").read_text(encoding="utf-8")
+        development_lock = (root / "requirements-dev.lock").read_text(
+            encoding="utf-8"
+        )
+        workflow = (root / ".github" / "workflows" / "test.yml").read_text(
+            encoding="utf-8"
+        )
+        for lock in (runtime_lock, development_lock):
+            self.assertIn("--hash=sha256:", lock)
+            self.assertIn("pyside6==", lock)
+        self.assertIn("--require-hashes -r requirements-dev.lock", workflow)
+
+    def test_purchase_staging_uses_immutable_domain_records(self):
+        purchases = (
+            Path(__file__).parents[1]
+            / "pcims"
+            / "app"
+            / "pages"
+            / "purchases.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("@dataclass(frozen=True, slots=True)", purchases)
+        self.assertNotIn("TypedDict", purchases)
+        self.assertIn("expense: NewExpense", purchases)
 
 
 if __name__ == "__main__":

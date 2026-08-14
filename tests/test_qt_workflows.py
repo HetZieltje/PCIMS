@@ -20,7 +20,7 @@ from pcims.app.errors import install_exception_hook, log_exception
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
-from pcims.app.pages.purchases import PurchasesPage
+from pcims.app.pages.purchases import PurchasesPage, StagedPurchase
 from pcims.app.pages.sales import SalesPage
 from pcims.app.table_model import (
     Column,
@@ -230,7 +230,7 @@ class QtWorkflowTests(unittest.TestCase):
 
         self.assertEqual(len(page._staged), 3)
         self.assertEqual(
-            [item["price_cents"] for item in page._staged], [334, 333, 333]
+            [item.expense.price_cents for item in page._staged], [334, 333, 333]
         )
         with patch("pcims.app.pages.purchases.QMessageBox.information"):
             page.commit_purchase()
@@ -270,7 +270,9 @@ class QtWorkflowTests(unittest.TestCase):
     def test_close_warns_before_discarding_staged_purchase(self):
         window = MainWindow(self.services)
         self.wait_for_window(window)
-        window.purchases_page._staged.append({"staged_id": 1})
+        window.purchases_page._staged.append(
+            StagedPurchase(1, NewExpense.create("Pending", "Extra", 1, TEST_DATE))
+        )
         event = QCloseEvent()
         with patch(
             "pcims.app.main_window.QMessageBox.question",
@@ -446,7 +448,9 @@ class QtWorkflowTests(unittest.TestCase):
         self.purchase("Later item", "RAM", 50)
         window = MainWindow(self.services)
         self.wait_for_window(window)
-        window.purchases_page._staged.append({"staged_id": 1})
+        window.purchases_page._staged.append(
+            StagedPurchase(1, NewExpense.create("Pending", "Extra", 1, TEST_DATE))
+        )
         loop = QEventLoop()
 
         with (
@@ -481,7 +485,9 @@ class QtWorkflowTests(unittest.TestCase):
         self.purchase("Existing item", "Extra", 10)
         window = MainWindow(self.services)
         self.wait_for_window(window)
-        window.purchases_page._staged.append({"staged_id": 1})
+        window.purchases_page._staged.append(
+            StagedPurchase(1, NewExpense.create("Pending", "Extra", 1, TEST_DATE))
+        )
         missing = Path(self.temporary_directory.name) / "missing.db"
         loop = QEventLoop()
         with (

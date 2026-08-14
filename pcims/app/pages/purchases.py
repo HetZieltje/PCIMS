@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from datetime import date
-from typing import TypedDict, cast
+from typing import cast
 
 from PySide6.QtCore import QDate, QStringListModel, Qt, Signal
 from PySide6.QtWidgets import (
@@ -38,12 +39,10 @@ from pcims.domain import ITEM_TYPES, ItemType, NewExpense
 from pcims.services import ApplicationServices, PurchasesSnapshot, default_services
 
 
-class StagedPurchase(TypedDict):
+@dataclass(frozen=True, slots=True)
+class StagedPurchase:
     staged_id: int
-    name: str
-    item_type: ItemType
-    price_cents: int
-    purchase_date: date
+    expense: NewExpense
 
 
 class PurchasesPage(AsyncCommandPage):
@@ -97,23 +96,31 @@ class PurchasesPage(AsyncCommandPage):
             (
                 Column(
                     "Line",
-                    lambda item: str(item["staged_id"]),
-                    lambda item: item["staged_id"],
+                    lambda item: str(item.staged_id),
+                    lambda item: item.staged_id,
                 ),
-                Column("Name", lambda item: item["name"], lambda item: item["name"].casefold()),
-                Column("Type", lambda item: item["item_type"], lambda item: item["item_type"]),
+                Column(
+                    "Name",
+                    lambda item: item.expense.name,
+                    lambda item: item.expense.name.casefold(),
+                ),
+                Column(
+                    "Type",
+                    lambda item: item.expense.item_type,
+                    lambda item: item.expense.item_type,
+                ),
                 Column(
                     "Cost",
-                    lambda item: format_cents(item["price_cents"]),
-                    lambda item: item["price_cents"],
+                    lambda item: format_cents(item.expense.price_cents),
+                    lambda item: item.expense.price_cents,
                 ),
                 Column(
                     "Purchase date",
-                    lambda item: item["purchase_date"].isoformat(),
-                    lambda item: item["purchase_date"].toordinal(),
+                    lambda item: item.expense.purchase_date.isoformat(),
+                    lambda item: item.expense.purchase_date.toordinal(),
                 ),
             ),
-            lambda item: item["staged_id"],
+            lambda item: item.staged_id,
         )
         self.table = QTableView()
         configure_table_view(self.table, self.table_model)
@@ -175,13 +182,15 @@ class PurchasesPage(AsyncCommandPage):
         purchase_date = cast(date, self.purchase_date.date().toPython())
         for price_cents in prices:
             self._staged.append(
-                {
-                    "staged_id": self._next_staged_id,
-                    "name": name,
-                    "item_type": cast(ItemType, self.type.currentText()),
-                    "price_cents": price_cents,
-                    "purchase_date": purchase_date,
-                }
+                StagedPurchase(
+                    self._next_staged_id,
+                    NewExpense(
+                        name,
+                        cast(ItemType, self.type.currentText()),
+                        price_cents,
+                        purchase_date,
+                    ),
+                )
             )
             self._next_staged_id += 1
         self.name.clear()
@@ -192,7 +201,7 @@ class PurchasesPage(AsyncCommandPage):
 
     def remove_selected(self) -> None:
         ids = set(selected_ids(self.table))
-        self._staged = [item for item in self._staged if item["staged_id"] not in ids]
+        self._staged = [item for item in self._staged if item.staged_id not in ids]
         self._render_staged()
 
     def commit_purchase(self) -> None:
@@ -201,15 +210,7 @@ class PurchasesPage(AsyncCommandPage):
                 self, "Nothing to record", "Add at least one item first."
             )
             return
-        items = [
-            NewExpense(
-                item["name"],
-                item["item_type"],
-                item["price_cents"],
-                item["purchase_date"],
-            )
-            for item in self._staged
-        ]
+        items = [item.expense for item in self._staged]
         count = len(items)
         self.run_command(
             lambda: self.services.add_expenses(items),
@@ -226,6 +227,7 @@ class PurchasesPage(AsyncCommandPage):
     def _render_staged(self) -> None:
         self.table_model.set_records(self._staged)
         self.total_label.setText(
-            f"Staged total: {format_cents(sum(item['price_cents'] for item in self._staged))}"
+            "Staged total: "
+            f"{format_cents(sum(item.expense.price_cents for item in self._staged))}"
         )
         self.commit_button.setEnabled(bool(self._staged))

@@ -33,7 +33,9 @@ sh scripts/install-linux.sh
 ```
 
 This writes only beneath `$XDG_DATA_HOME` (or `~/.local/share`) and does not
-require `sudo`. Rerunning it upgrades the installed application in place.
+require `sudo`. Each run builds and smoke-tests a fresh environment using the
+hash-locked runtime dependencies, then replaces the prior installation only
+after verification succeeds.
 
 Application data follows platform conventions:
 
@@ -54,12 +56,17 @@ being modified; use a current-format backup or a new database path.
 ## Development checks
 
 ```powershell
-.venv\Scripts\python -m pip install -e ".[dev]"
+.venv\Scripts\python -m pip install --require-hashes -r requirements-dev.lock
+.venv\Scripts\python -m pip install --no-deps -e .
 .venv\Scripts\python -X dev -W error -m unittest discover -s tests -v
 .venv\Scripts\ruff check .
 .venv\Scripts\mypy pcims --strict --no-error-summary
 .venv\Scripts\bandit -q -r pcims
 ```
+
+Regenerate `requirements.lock` and `requirements-dev.lock` deliberately with
+the `uv pip compile` commands recorded in their headers whenever dependency
+ranges are changed.
 
 Tests configure temporary SQLite files and the Qt offscreen platform. They do
 not open or delete the application database. CI runs the same checks on Windows

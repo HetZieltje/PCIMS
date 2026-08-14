@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$(uname -s)" != "Linux" ]; then
+platform=${PCIMS_PLATFORM:-$(uname -s)}
+if [ "$platform" != "Linux" ]; then
     printf '%s\n' "This installer supports Linux only." >&2
     exit 1
 fi
@@ -14,13 +15,70 @@ python_command=${PYTHON:-python3}
 desktop_directory="$data_home/applications"
 desktop_target="$desktop_directory/pcims.desktop"
 desktop_temporary="$desktop_target.tmp"
+install_parent=$(dirname -- "$install_root")
+install_name=$(basename -- "$install_root")
+staging_root="$install_parent/.${install_name}.new.$$"
+previous_root="$install_parent/.${install_name}.previous.$$"
+swapped=0
 
-"$python_command" -m venv "$install_root"
-"$install_root/bin/python" -m pip install --upgrade "$project_directory"
+case "$install_root" in
+    ""|/)
+        printf '%s\n' "Refusing unsafe installation target: $install_root" >&2
+        exit 1
+        ;;
+esac
+if [ -e "$staging_root" ] || [ -e "$previous_root" ]; then
+    printf '%s\n' "Temporary installation path already exists." >&2
+    exit 1
+fi
+
+cleanup() {
+    status=$?
+    if [ "$swapped" -eq 1 ] && [ -d "$previous_root" ] && [ ! -L "$previous_root" ]; then
+        if [ ! -e "$install_root" ]; then
+            mv "$previous_root" "$install_root"
+        fi
+    fi
+    if [ -d "$staging_root" ] && [ ! -L "$staging_root" ]; then
+        rm -rf -- "$staging_root"
+    fi
+    exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+mkdir -p "$install_parent"
+"$python_command" -m venv "$staging_root"
+"$staging_root/bin/python" -m pip install \
+    --require-hashes -r "$project_directory/requirements.lock"
+"$staging_root/bin/python" -m pip install --no-deps "$project_directory"
+(
+    cd "${TMPDIR:-/tmp}"
+    "$staging_root/bin/python" "$project_directory/scripts/smoke-installed.py"
+)
+
+if [ -e "$install_root" ]; then
+    if [ -L "$install_root" ] || [ ! -d "$install_root" ]; then
+        printf '%s\n' "Installation target is not a regular directory: $install_root" >&2
+        exit 1
+    fi
+    mv "$install_root" "$previous_root"
+    swapped=1
+fi
+if ! mv "$staging_root" "$install_root"; then
+    if [ "$swapped" -eq 1 ]; then
+        mv "$previous_root" "$install_root"
+        swapped=0
+    fi
+    exit 1
+fi
+swapped=0
+if [ -d "$previous_root" ] && [ ! -L "$previous_root" ]; then
+    rm -rf -- "$previous_root"
+fi
 
 mkdir -p "$desktop_directory"
-escaped_executable=$(printf '%s' "$install_root/bin/pcims" | sed 's/[&|]/\\&/g')
-sed "s|@PCIMS_EXECUTABLE@|$escaped_executable|g" \
+escaped_python=$(printf '%s' "$install_root/bin/python" | sed 's/[&|]/\\&/g')
+sed "s|@PCIMS_PYTHON@|$escaped_python|g" \
     "$project_directory/packaging/linux/pcims.desktop" > "$desktop_temporary"
 chmod 644 "$desktop_temporary"
 mv "$desktop_temporary" "$desktop_target"
@@ -30,4 +88,4 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 printf 'PCIMS installed. Launch it from your desktop menu or run:\n%s\n' \
-    "$install_root/bin/pcims"
+    "$install_root/bin/python -m pcims.app.application"

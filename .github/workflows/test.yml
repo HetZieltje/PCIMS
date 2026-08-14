@@ -26,11 +26,13 @@ jobs:
       - name: Validate Linux desktop integration
         if: runner.os == 'Linux'
         run: |
-          sh -n scripts/install-linux.sh
-          sed 's|@PCIMS_EXECUTABLE@|/tmp/pcims|' packaging/linux/pcims.desktop > /tmp/pcims.desktop
+          sh -n scripts/install-linux.sh tests/test-linux-installer.sh
+          sh tests/test-linux-installer.sh
+          sed 's|@PCIMS_PYTHON@|/usr/bin/python3|' packaging/linux/pcims.desktop > /tmp/pcims.desktop
           desktop-file-validate /tmp/pcims.desktop
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install --require-hashes -r requirements-dev.lock
+      - run: python -m pip install --no-deps -e .
       - run: python -X dev -W error -m unittest discover -s tests -v
       - run: ruff check .
       - run: mypy pcims --strict --no-error-summary
