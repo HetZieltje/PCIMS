@@ -9,7 +9,7 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
     ("table", "expenses"): f"""CREATE TABLE expenses (
@@ -19,7 +19,8 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         price_cents INTEGER NOT NULL
             CHECK (price_cents >= 0 AND price_cents <= {MAX_MONEY_CENTS}),
         purchase_date TEXT NOT NULL
-            CHECK (purchase_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+            CHECK (purchase_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                   AND COALESCE(strftime('%Y-%m-%d',purchase_date)=purchase_date,0))
     ) STRICT""",
     ("table", "assembled_pcs"): """CREATE TABLE assembled_pcs (
         id INTEGER PRIMARY KEY,
@@ -41,7 +42,8 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
             CHECK (selling_price_cents >= 0
                    AND selling_price_cents <= {MAX_MONEY_CENTS}),
         sale_date TEXT NOT NULL
-            CHECK (sale_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+            CHECK (sale_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                   AND COALESCE(strftime('%Y-%m-%d',sale_date)=sale_date,0))
     ) STRICT""",
     ("table", "sale_items"): """CREATE TABLE sale_items (
         sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,

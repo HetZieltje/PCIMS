@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
-from pcims.db.connection import Database
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
 from pcims.db.records import EXPENSE_SELECT, expense_from_row
 from pcims.domain import ItemType, SaleKind
@@ -105,33 +104,3 @@ class ReadQueries:
             profit_cents=income_cents - cost_cents,
             inventory_cents=inventory_cents,
         )
-
-
-def list_expenses(*, database: Database) -> tuple[Expense, ...]:
-    with database.transaction() as connection:
-        return ReadQueries(connection).list_expenses()
-
-
-def list_inventory(
-    item_type: ItemType | None = None,
-    available_only: bool = False,
-    *,
-    database: Database,
-) -> tuple[Expense, ...]:
-    with database.transaction() as connection:
-        return ReadQueries(connection).list_inventory(item_type, available_only)
-
-
-def list_pcs(*, database: Database) -> tuple[AssembledPC, ...]:
-    with database.transaction() as connection:
-        return ReadQueries(connection).list_pcs()
-
-
-def list_sales(*, database: Database) -> tuple[Sale, ...]:
-    with database.transaction() as connection:
-        return ReadQueries(connection).list_sales()
-
-
-def get_financial_summary(*, database: Database) -> FinancialSummary:
-    with database.transaction() as connection:
-        return ReadQueries(connection).financial_summary()

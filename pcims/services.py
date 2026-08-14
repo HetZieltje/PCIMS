@@ -24,14 +24,7 @@ from pcims.db.expense_commands import (
     rename_expenses,
 )
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
-from pcims.db.reads import (
-    ReadQueries,
-    get_financial_summary,
-    list_expenses,
-    list_inventory,
-    list_pcs,
-    list_sales,
-)
+from pcims.db.reads import ReadQueries
 from pcims.db.sale_commands import (
     sell_items,
     sell_pc,
@@ -82,12 +75,14 @@ class ApplicationServices:
         return add_expenses(items, database=self.database)
 
     def list_expenses(self) -> tuple[Expense, ...]:
-        return list_expenses(database=self.database)
+        with self.database.transaction() as connection:
+            return ReadQueries(connection).list_expenses()
 
     def list_inventory(
         self, item_type: ItemType | None = None, available_only: bool = False
     ) -> tuple[Expense, ...]:
-        return list_inventory(item_type, available_only, database=self.database)
+        with self.database.transaction() as connection:
+            return ReadQueries(connection).list_inventory(item_type, available_only)
 
     def delete_expenses(self, expense_ids: Iterable[int]) -> None:
         delete_expenses(expense_ids, database=self.database)
@@ -101,7 +96,8 @@ class ApplicationServices:
         return assemble_pc(name, expense_ids, database=self.database)
 
     def list_pcs(self) -> tuple[AssembledPC, ...]:
-        return list_pcs(database=self.database)
+        with self.database.transaction() as connection:
+            return ReadQueries(connection).list_pcs()
 
     def disassemble_pc(self, pc_id: int) -> None:
         disassemble_pc(pc_id, database=self.database)
@@ -124,13 +120,15 @@ class ApplicationServices:
         return sell_pc(pc_id, terms, database=self.database)
 
     def list_sales(self) -> tuple[Sale, ...]:
-        return list_sales(database=self.database)
+        with self.database.transaction() as connection:
+            return ReadQueries(connection).list_sales()
 
     def undo_sale(self, sale_id: int) -> None:
         undo_sale(sale_id, database=self.database)
 
     def financial_summary(self) -> FinancialSummary:
-        return get_financial_summary(database=self.database)
+        with self.database.transaction() as connection:
+            return ReadQueries(connection).financial_summary()
 
     def create_backup(
         self,

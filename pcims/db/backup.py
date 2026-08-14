@@ -17,10 +17,10 @@ from pcims.db.schema import validate_current_data, validate_schema
 
 @dataclass(frozen=True, slots=True)
 class BackupResult(os.PathLike[str]):
-    """A verified backup plus any non-fatal retention cleanup failures."""
+    """A verified backup plus any non-fatal durability or retention warnings."""
 
     path: Path
-    cleanup_errors: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
     def __fspath__(self) -> str:
         return str(self.path)
@@ -29,12 +29,12 @@ class BackupResult(os.PathLike[str]):
         return str(self.path)
 
     @property
-    def has_cleanup_warnings(self) -> bool:
-        return bool(self.cleanup_errors)
+    def has_warnings(self) -> bool:
+        return bool(self.warnings)
 
     @property
-    def cleanup_warning(self) -> str:
-        return "\n".join(self.cleanup_errors)
+    def warning_text(self) -> str:
+        return "\n".join(self.warnings)
 
 
 def _sync_file(path: Path) -> None:
@@ -145,11 +145,11 @@ def _create_backup(
     finally:
         _remove_temporary(temporary_path, primary_error)
 
-    cleanup_errors = publication_errors
+    warnings = publication_errors
     try:
         backups = sorted(destination.glob(f"{prefix}*.db"), reverse=True)
     except OSError as error:
-        cleanup_errors.append(
+        warnings.append(
             f"Unable to inspect old backups in {destination}: {error}"
         )
         backups = []
@@ -157,8 +157,8 @@ def _create_backup(
         try:
             old_backup.unlink()
         except OSError as error:
-            cleanup_errors.append(f"{old_backup}: {error}")
-    return BackupResult(final_path, tuple(cleanup_errors))
+            warnings.append(f"{old_backup}: {error}")
+    return BackupResult(final_path, tuple(warnings))
 
 
 def create_backup(
@@ -203,7 +203,7 @@ def _restore_backup(
             safety_backup = BackupResult(
                 safety_backup.path,
                 (
-                    *safety_backup.cleanup_errors,
+                    *safety_backup.warnings,
                     f"Database was restored, but its directory could not be flushed: {error}",
                 ),
             )

@@ -56,6 +56,8 @@ class ArchitectureTests(unittest.TestCase):
         self.assertFalse((root / "commands.py").exists())
         self.assertIn("class ReadQueries", reads)
         self.assertNotIn("INSERT INTO", reads)
+        self.assertNotIn("def list_expenses(*,", reads)
+        self.assertNotIn("database: Database", reads)
         self.assertIn("def sell_pc", commands)
         self.assertIn("def assemble_pc", commands)
         self.assertIn("def add_expenses", commands)

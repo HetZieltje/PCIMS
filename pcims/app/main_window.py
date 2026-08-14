@@ -112,12 +112,12 @@ class MainWindow(QMainWindow):
 
     def _startup_backup_finished(self, backup: BackupResult) -> None:
         self.statusBar().showMessage("Startup backup complete", 2500)
-        if backup.has_cleanup_warnings:
+        if backup.has_warnings:
             QMessageBox.warning(
                 self,
-                "Backup cleanup warning",
-                f"The startup backup was created at {backup.path}, but old backup "
-                f"cleanup failed:\n\n{backup.cleanup_warning}",
+                "Backup warning",
+                f"The startup backup was created at {backup.path}, with warnings:"
+                f"\n\n{backup.warning_text}",
             )
 
     def _startup_backup_failed(self, error: Exception) -> None:
@@ -225,12 +225,12 @@ class MainWindow(QMainWindow):
 
     def _close_backup_finished(self, backup: BackupResult) -> None:
         self._close_backup_running = False
-        if backup.has_cleanup_warnings:
+        if backup.has_warnings:
             QMessageBox.warning(
                 self,
-                "Backup cleanup warning",
+                "Backup warning",
                 f"The latest changes were backed up to:\n{backup.path}\n\n"
-                f"Some old backups could not be removed:\n{backup.cleanup_warning}",
+                f"Backup warnings:\n{backup.warning_text}",
             )
         self._closing_after_backup = True
         self._close_requested = False

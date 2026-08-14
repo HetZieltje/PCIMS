@@ -104,12 +104,12 @@ class SettingsPage(QWidget):
     def _backup_finished(self, backup: BackupResult) -> None:
         self.backup_button.setEnabled(True)
         self.backup_button.setText("Create backup now")
-        if backup.has_cleanup_warnings:
+        if backup.has_warnings:
             QMessageBox.warning(
                 self,
                 "Backup complete with warning",
                 f"Backup saved to:\n{backup.path}\n\n"
-                f"Some old backups could not be removed:\n{backup.cleanup_warning}",
+                f"Backup warnings:\n{backup.warning_text}",
             )
             return
         QMessageBox.information(
@@ -152,21 +152,21 @@ class SettingsPage(QWidget):
         self.window().setEnabled(True)
         self.restore_button.setText("Restore backup…")
         self.database_restored.emit()
-        cleanup_note = (
-            f"\n\nSome old backups could not be removed:\n{safety.cleanup_warning}"
-            if safety.has_cleanup_warnings
+        warning_note = (
+            f"\n\nRecovery warnings:\n{safety.warning_text}"
+            if safety.has_warnings
             else ""
         )
         message_box = (
             QMessageBox.warning
-            if safety.has_cleanup_warnings
+            if safety.has_warnings
             else QMessageBox.information
         )
         message_box(
             self,
             "Restore complete with warning"
-            if safety.has_cleanup_warnings
+            if safety.has_warnings
             else "Restore complete",
             f"The database was restored. Previous data was saved to:\n{safety}"
-            f"{cleanup_note}",
+            f"{warning_note}",
         )

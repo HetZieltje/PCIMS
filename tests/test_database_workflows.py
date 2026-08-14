@@ -26,7 +26,7 @@ from pcims.db.errors import (
 )
 from pcims.db.expense_commands import add_expenses
 from pcims.db.gate import gate_for
-from pcims.db.reads import ReadQueries, list_pcs, list_sales
+from pcims.db.reads import ReadQueries
 from pcims.db.schema import SCHEMA_DEFINITIONS, SCHEMA_VERSION, initialize_database
 from pcims.domain import NewExpense, SaleTerms
 from pcims.money import MAX_MONEY_CENTS
@@ -307,6 +307,19 @@ class DatabaseWorkflowTests(unittest.TestCase):
                     ("Invalid", "CPU", invalid, TEST_DATE.isoformat()),
                 )
 
+    def test_schema_rejects_impossible_calendar_dates_directly(self):
+        for invalid_date in ("2025-02-29", "2025-02-30", "2025-99-99"):
+            with (
+                self.subTest(date=invalid_date),
+                self.assertRaises(sqlite3.IntegrityError),
+                self.database.transaction(write=True) as database,
+            ):
+                database.execute(
+                    "INSERT INTO expenses "
+                    "(name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
+                    ("Impossible", "CPU", 100, invalid_date),
+                )
+
     def test_membership_indexes_cover_display_order(self):
         with self.database.transaction() as database:
             for table in ("pc_parts", "sale_items"):
@@ -413,15 +426,17 @@ class DatabaseWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(DatabaseIntegrityError, "foreign-key"):
             initialize_database(self.database)
 
-    def test_semantically_invalid_current_data_is_rejected(self):
+    def test_forced_date_corruption_is_rejected(self):
         item_id = self.buy("CPU", "CPU", 10)
-        with self.database.transaction() as database:
+        with closing(self.database.connect()) as database:
+            database.execute("PRAGMA ignore_check_constraints=ON")
             database.execute(
                 "UPDATE expenses SET purchase_date='2025-99-99' WHERE id=?",
                 (item_id,),
             )
+            database.commit()
 
-        with self.assertRaisesRegex(DatabaseIntegrityError, "invalid purchase date"):
+        with self.assertRaisesRegex(DatabaseIntegrityError, "CHECK constraint"):
             initialize_database(self.database)
         with self.assertRaisesRegex(sqlite3.DatabaseError, "invalid purchase date"):
             create_backup(
@@ -494,7 +509,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.services.sell_items([sale_items[0]], SaleTerms.create(10))
         self.services.sell_items([sale_items[1]], SaleTerms.create(10))
 
-        for listing in (list_pcs, list_sales):
+        for listing in (self.services.list_pcs, self.services.list_sales):
             statements = []
             original_connect = Database.connect
 
@@ -508,7 +523,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 return connection
 
             with patch.object(Database, "connect", new=traced_connect):
-                self.assertEqual(len(listing(database=self.database)), 2)
+                self.assertEqual(len(listing()), 2)
             selects = [
                 statement
                 for statement in statements
@@ -724,8 +739,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertTrue(result.path.is_file())
         validate_database(result)
-        self.assertTrue(result.has_cleanup_warnings)
-        self.assertIn("simulated locked backup", result.cleanup_warning)
+        self.assertTrue(result.has_warnings)
+        self.assertIn("simulated locked backup", result.warning_text)
 
     def test_backup_scan_failure_does_not_hide_verified_backup(self):
         self.buy("Keep", "CPU", 10)
@@ -738,8 +753,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertTrue(result.path.is_file())
         validate_database(result)
-        self.assertTrue(result.has_cleanup_warnings)
-        self.assertIn("simulated directory scan failure", result.cleanup_warning)
+        self.assertTrue(result.has_warnings)
+        self.assertIn("simulated directory scan failure", result.warning_text)
 
     def test_backup_retention_never_deletes_another_database_generation(self):
         shared_directory = Path(self.temporary_directory.name) / "shared-backups"
@@ -796,8 +811,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
             result = create_backup(database=self.database)
 
         self.assertTrue(result.path.is_file())
-        self.assertTrue(result.has_cleanup_warnings)
-        self.assertIn("Backup was created", result.cleanup_warning)
+        self.assertTrue(result.has_warnings)
+        self.assertIn("Backup was created", result.warning_text)
         validate_database(result)
 
     def test_temporary_cleanup_failure_preserves_primary_backup_error(self):
@@ -858,8 +873,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
         ):
             safety = restore_backup(source, database=self.database)
 
-        self.assertTrue(safety.has_cleanup_warnings)
-        self.assertIn("Database was restored", safety.cleanup_warning)
+        self.assertTrue(safety.has_warnings)
+        self.assertIn("Database was restored", safety.warning_text)
         self.assertEqual(
             [item.name for item in self.services.list_expenses()], ["Old state"]
         )
