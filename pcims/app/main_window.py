@@ -154,6 +154,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Refreshing dataâ€¦")
 
     def _on_data_changed(self) -> None:
+        for page in self.pages[:-1]:
+            self._refresh_generation[page] = self._refresh_generation.get(page, 0) + 1
         self._dirty_pages.update(self.pages[:-1])
         self.refresh_current()
         self.statusBar().showMessage("Data updated", 2500)

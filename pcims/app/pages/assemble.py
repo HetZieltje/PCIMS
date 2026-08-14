@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pcims.app.common import DATA_OPERATION_ERRORS, show_error
+from pcims.app.async_page import AsyncCommandPage
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import ID_ROLE
 from pcims.db.models import Expense
@@ -22,7 +22,7 @@ from pcims.domain import ITEM_TYPES, ItemType
 from pcims.services import ApplicationServices, AssembleSnapshot, default_services
 
 
-class AssemblePage(QWidget):
+class AssemblePage(AsyncCommandPage):
     data_changed = Signal()
 
     def __init__(
@@ -127,10 +127,13 @@ class AssemblePage(QWidget):
         if not ids:
             QMessageBox.warning(self, "No components", "Select at least one component.")
             return
-        try:
-            self.services.assemble_pc(self.name.text(), ids)
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to assemble PC", error)
-            return
+        name = self.name.text()
+        self.run_command(
+            lambda: self.services.assemble_pc(name, ids),
+            self._assembly_recorded,
+            "Unable to assemble PC",
+        )
+
+    def _assembly_recorded(self) -> None:
         self.name.clear()
         self.data_changed.emit()

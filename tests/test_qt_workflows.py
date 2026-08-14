@@ -83,6 +83,9 @@ class QtWorkflowTests(unittest.TestCase):
     def wait_for_window(self, window):
         self.wait_until(lambda: not window._refresh_tasks)
 
+    def wait_for_page(self, page):
+        self.wait_until(lambda: not page.command_running)
+
     @staticmethod
     def purchase(name, item_type, price):
         return add_expenses(
@@ -237,6 +240,7 @@ class QtWorkflowTests(unittest.TestCase):
         )
         with patch("pcims.app.pages.purchases.QMessageBox.information"):
             page.commit_purchase()
+            self.wait_for_page(page)
 
         self.assertEqual(
             [item.price_cents for item in list_expenses()], [334, 333, 333]
@@ -256,9 +260,10 @@ class QtWorkflowTests(unittest.TestCase):
                 "pcims.services.ApplicationServices.add_expenses",
                 side_effect=sqlite3.OperationalError("simulated disk failure"),
             ),
-            patch("pcims.app.pages.purchases.show_error") as show_error,
+            patch("pcims.app.async_page.show_error") as show_error,
         ):
             page.commit_purchase()
+            self.wait_for_page(page)
 
         self.assertTrue(page.has_staged_items)
         show_error.assert_called_once()
@@ -365,6 +370,7 @@ class QtWorkflowTests(unittest.TestCase):
             self.assertTrue(window.purchases_page.has_staged_items)
             QTimer.singleShot(3000, loop.quit)
             loop.exec()
+            self.wait_for_window(window)
 
         self.assertIn("Unrecorded purchase lines", confirm.call_args.args[2])
         self.assertTrue(window.isEnabled())
@@ -611,6 +617,72 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(apply_snapshot.call_args_list, [call("new snapshot")])
         window.deleteLater()
 
+    def test_data_change_invalidates_an_inflight_hidden_page_refresh(self):
+        window = MainWindow()
+        self.wait_for_window(window)
+        window.tabs.setCurrentWidget(window.purchases_page)
+        self.wait_for_window(window)
+        inventory_started = threading.Event()
+        release_inventory = threading.Event()
+
+        def slow_inventory_snapshot():
+            inventory_started.set()
+            release_inventory.wait(2)
+            return "obsolete inventory"
+
+        window._dirty_pages.add(window.inventory_page)
+        with (
+            patch.object(
+                window.inventory_page,
+                "load_snapshot",
+                side_effect=slow_inventory_snapshot,
+            ),
+            patch.object(window.inventory_page, "apply_snapshot") as apply_snapshot,
+        ):
+            window._start_refresh(window.inventory_page)
+            self.wait_until(inventory_started.is_set)
+            window.purchases_page.data_changed.emit()
+            release_inventory.set()
+            self.wait_for_window(window)
+
+        apply_snapshot.assert_not_called()
+        self.assertIn(window.inventory_page, window._dirty_pages)
+        window.deleteLater()
+
+    def test_database_mutation_keeps_the_qt_event_loop_responsive(self):
+        page = PurchasesPage()
+        page.name.setText("Slow item")
+        page.price.setText("1.00")
+        page.add_line()
+        operation_started = threading.Event()
+        release_operation = threading.Event()
+        gui_ticks = []
+
+        def slow_add(*_args, **_kwargs):
+            operation_started.set()
+            release_operation.wait(2)
+            return [1]
+
+        with (
+            patch(
+                "pcims.services.ApplicationServices.add_expenses",
+                side_effect=slow_add,
+            ),
+            patch("pcims.app.pages.purchases.QMessageBox.information"),
+        ):
+            page.commit_purchase()
+            self.wait_until(operation_started.is_set)
+            self.assertFalse(page.isEnabled())
+            QTimer.singleShot(0, lambda: gui_ticks.append("responsive"))
+            self.wait_until(lambda: bool(gui_ticks))
+            self.assertTrue(page.command_running)
+            release_operation.set()
+            self.wait_for_page(page)
+
+        self.assertEqual(gui_ticks, ["responsive"])
+        self.assertFalse(page.has_staged_items)
+        page.deleteLater()
+
     def test_unexpected_exception_is_logged_and_reported(self):
         log_path = Path(self.temporary_directory.name) / "errors.log"
         previous = install_exception_hook(log_path)
@@ -642,6 +714,7 @@ class QtWorkflowTests(unittest.TestCase):
                 child.setCheckState(0, Qt.CheckState.Checked)
                 checked.append(child.data(0, Qt.ItemDataRole.UserRole))
         page.assemble()
+        self.wait_for_page(page)
 
         self.assertEqual(checked, expected_ids)
         pc = list_pcs()[0]
@@ -659,6 +732,7 @@ class QtWorkflowTests(unittest.TestCase):
             return_value=(Decimal("20.00"), TEST_DATE),
         ):
             inventory.sell_selected_parts()
+        self.wait_for_page(inventory)
 
         sale = list_sales()[0]
         self.assertEqual({item.id for item in sale.items}, set(ids))
@@ -670,6 +744,7 @@ class QtWorkflowTests(unittest.TestCase):
         sales.sale_table.selectRow(0)
         with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):
             sales.undo_selected()
+        self.wait_for_page(sales)
 
         self.assertEqual(list_sales(), ())
         self.assertTrue(all(expense.is_available for expense in list_expenses()))
@@ -688,6 +763,7 @@ class QtWorkflowTests(unittest.TestCase):
             return_value=("Renamed CPU", True),
         ):
             inventory.rename_selected_parts()
+        self.wait_for_page(inventory)
         self.assertEqual(list_expenses()[0].name, "Renamed CPU")
 
         inventory.refresh()
@@ -699,6 +775,7 @@ class QtWorkflowTests(unittest.TestCase):
         inventory.parts_table.selectRow(spare_row)
         with patch("pcims.app.pages.inventory.ask_confirmation", return_value=True):
             inventory.delete_selected_parts()
+        self.wait_for_page(inventory)
         self.assertEqual([item.id for item in list_expenses()], [cpu_id])
 
         assemble = AssemblePage()
@@ -706,6 +783,7 @@ class QtWorkflowTests(unittest.TestCase):
         assemble.name.setText("Test PC")
         assemble.tree.topLevelItem(0).child(0).setCheckState(0, Qt.CheckState.Checked)
         assemble.assemble()
+        self.wait_for_page(assemble)
 
         inventory.refresh()
         inventory.pc_table.selectRow(0)
@@ -714,12 +792,14 @@ class QtWorkflowTests(unittest.TestCase):
             return_value=("Renamed PC", True),
         ):
             inventory.rename_selected_pc()
+        self.wait_for_page(inventory)
         self.assertEqual(list_pcs()[0].name, "Renamed PC")
 
         inventory.refresh()
         inventory.pc_table.selectRow(0)
         with patch("pcims.app.pages.inventory.ask_confirmation", return_value=True):
             inventory.disassemble_selected_pc()
+        self.wait_for_page(inventory)
         self.assertEqual(list_pcs(), ())
         self.assertTrue(list_expenses()[0].is_available)
         assemble.deleteLater()
@@ -735,6 +815,7 @@ class QtWorkflowTests(unittest.TestCase):
             for child_index in range(group.childCount()):
                 group.child(child_index).setCheckState(0, Qt.CheckState.Checked)
         assemble.assemble()
+        self.wait_for_page(assemble)
 
         inventory = InventoryPage()
         inventory.refresh()
@@ -744,6 +825,7 @@ class QtWorkflowTests(unittest.TestCase):
             return_value=(Decimal("200.00"), TEST_DATE),
         ):
             inventory.sell_selected_pc()
+        self.wait_for_page(inventory)
 
         self.assertEqual(list_pcs(), ())
         self.assertEqual({item.id for item in list_sales()[0].items}, set(ids))
@@ -753,6 +835,7 @@ class QtWorkflowTests(unittest.TestCase):
         sales.sale_table.selectRow(0)
         with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):
             sales.undo_selected()
+        self.wait_for_page(sales)
         self.assertEqual([pc.name for pc in list_pcs()], ["PC 1"])
         self.assertEqual(list_sales(), ())
         assemble.deleteLater()

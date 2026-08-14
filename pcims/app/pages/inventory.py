@@ -14,11 +14,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pcims.app.common import (
-    DATA_OPERATION_ERRORS,
-    ask_confirmation,
-    show_error,
-)
+from pcims.app.async_page import AsyncCommandPage
+from pcims.app.common import ask_confirmation
 from pcims.app.dialogs import SaleDialog
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import (
@@ -42,7 +39,7 @@ def _component_summary(pc: AssembledPC) -> str:
     )
 
 
-class InventoryPage(QWidget):
+class InventoryPage(AsyncCommandPage):
     data_changed = Signal()
 
     def __init__(
@@ -225,12 +222,11 @@ class InventoryPage(QWidget):
         values = SaleDialog.get_sale(label, self)
         if values is None:
             return
-        try:
-            self.services.sell_items([part.id for part in parts], *values)
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to sell items", error)
-            return
-        self.data_changed.emit()
+        self.run_command(
+            lambda: self.services.sell_items([part.id for part in parts], *values),
+            self.data_changed.emit,
+            "Unable to sell items",
+        )
 
     def rename_selected_parts(self) -> None:
         parts = self._selected_parts()
@@ -245,12 +241,11 @@ class InventoryPage(QWidget):
         )
         if not accepted:
             return
-        try:
-            self.services.rename_expenses([part.id for part in parts], name)
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to rename items", error)
-            return
-        self.data_changed.emit()
+        self.run_command(
+            lambda: self.services.rename_expenses([part.id for part in parts], name),
+            self.data_changed.emit,
+            "Unable to rename items",
+        )
 
     def delete_selected_parts(self) -> None:
         parts = self._selected_parts()
@@ -265,12 +260,11 @@ class InventoryPage(QWidget):
             f"Permanently delete {len(parts)} selected expense record(s)?",
         ):
             return
-        try:
-            self.services.delete_expenses([part.id for part in parts])
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to delete items", error)
-            return
-        self.data_changed.emit()
+        self.run_command(
+            lambda: self.services.delete_expenses([part.id for part in parts]),
+            self.data_changed.emit,
+            "Unable to delete items",
+        )
 
     def sell_selected_pc(self) -> None:
         pc = self._selected_pc()
@@ -279,12 +273,11 @@ class InventoryPage(QWidget):
         values = SaleDialog.get_sale(pc.name, self)
         if values is None:
             return
-        try:
-            self.services.sell_pc(pc.id, *values)
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to sell PC", error)
-            return
-        self.data_changed.emit()
+        self.run_command(
+            lambda: self.services.sell_pc(pc.id, *values),
+            self.data_changed.emit,
+            "Unable to sell PC",
+        )
 
     def rename_selected_pc(self) -> None:
         pc = self._selected_pc()
@@ -295,12 +288,11 @@ class InventoryPage(QWidget):
         )
         if not accepted:
             return
-        try:
-            self.services.rename_pc(pc.id, name)
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to rename PC", error)
-            return
-        self.data_changed.emit()
+        self.run_command(
+            lambda: self.services.rename_pc(pc.id, name),
+            self.data_changed.emit,
+            "Unable to rename PC",
+        )
 
     def disassemble_selected_pc(self) -> None:
         pc = self._selected_pc()
@@ -310,9 +302,8 @@ class InventoryPage(QWidget):
             f"Disassemble '{pc.name}' and return its components to stock?",
         ):
             return
-        try:
-            self.services.disassemble_pc(pc.id)
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to disassemble PC", error)
-            return
-        self.data_changed.emit()
+        self.run_command(
+            lambda: self.services.disassemble_pc(pc.id),
+            self.data_changed.emit,
+            "Unable to disassemble PC",
+        )

@@ -20,10 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pcims.app.common import (
-    DATA_OPERATION_ERRORS,
-    show_error,
-)
+from pcims.app.async_page import AsyncCommandPage
+from pcims.app.common import show_error
 from pcims.app.formatting import (
     allocate_cents,
     cents_as_decimal,
@@ -48,7 +46,7 @@ class StagedPurchase(TypedDict):
     purchase_date: date
 
 
-class PurchasesPage(QWidget):
+class PurchasesPage(AsyncCommandPage):
     data_changed = Signal()
 
     def __init__(
@@ -211,12 +209,14 @@ class PurchasesPage(QWidget):
             }
             for item in self._staged
         ]
-        try:
-            self.services.add_expenses(items)
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to record purchase", error)
-            return
         count = len(items)
+        self.run_command(
+            lambda: self.services.add_expenses(items),
+            lambda: self._purchase_recorded(count),
+            "Unable to record purchase",
+        )
+
+    def _purchase_recorded(self, count: int) -> None:
         self._staged.clear()
         self._render_staged()
         self.data_changed.emit()

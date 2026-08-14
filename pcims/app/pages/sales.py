@@ -12,11 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pcims.app.common import (
-    DATA_OPERATION_ERRORS,
-    ask_confirmation,
-    show_error,
-)
+from pcims.app.async_page import AsyncCommandPage
+from pcims.app.common import ask_confirmation
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import (
     Column,
@@ -34,7 +31,7 @@ def _expense_status(item: Expense) -> str:
     return item.pc_name or "Available"
 
 
-class SalesPage(QWidget):
+class SalesPage(AsyncCommandPage):
     data_changed = Signal()
 
     def __init__(
@@ -221,9 +218,8 @@ class SalesPage(QWidget):
         sale = self._sales[ids[0]]
         if not ask_confirmation(self, "Undo sale", f"Undo the sale of '{sale.name}'?"):
             return
-        try:
-            self.services.undo_sale(sale.id)
-        except DATA_OPERATION_ERRORS as error:
-            show_error(self, "Unable to undo sale", error)
-            return
-        self.data_changed.emit()
+        self.run_command(
+            lambda: self.services.undo_sale(sale.id),
+            self.data_changed.emit,
+            "Unable to undo sale",
+        )

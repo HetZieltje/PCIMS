@@ -1,10 +1,6 @@
-"""Shared Qt helpers."""
-
-import sqlite3
+"""Shared Qt dialog helpers."""
 
 from PySide6.QtWidgets import QMessageBox, QWidget
-
-DATA_OPERATION_ERRORS = (OSError, ValueError, LookupError, sqlite3.DatabaseError)
 
 
 def show_error(parent: QWidget | None, title: str, error: BaseException) -> None:

@@ -165,6 +165,36 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.assertEqual(restore_future.result(timeout=2), result)
             self.assertTrue(restore_started.is_set())
 
+    def test_restore_waits_for_ordinary_database_operations(self):
+        services = ApplicationServices(get_database())
+        operation_started = threading.Event()
+        release_operation = threading.Event()
+        restore_started = threading.Event()
+        result = BackupResult(self.database_path)
+
+        def slow_add(*_args, **_kwargs):
+            operation_started.set()
+            release_operation.wait(2)
+            return []
+
+        def observed_restore(*_args, **_kwargs):
+            restore_started.set()
+            return result
+
+        with (
+            patch("pcims.services.add_expenses", side_effect=slow_add),
+            patch("pcims.services.restore_backup", side_effect=observed_restore),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            operation = executor.submit(services.add_expenses, [])
+            self.assertTrue(operation_started.wait(1))
+            recovery = executor.submit(services.restore_backup, self.database_path)
+            self.assertFalse(restore_started.wait(0.1))
+            release_operation.set()
+            self.assertEqual(operation.result(timeout=2), [])
+            self.assertEqual(recovery.result(timeout=2), result)
+            self.assertTrue(restore_started.is_set())
+
     def buy(self, name, item_type, price, purchase_date=None):
         return add_expenses(
             [
