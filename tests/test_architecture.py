@@ -187,6 +187,23 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('Exec="@PCIMS_PYTHON@" -m pcims.app.application', desktop)
         self.assertIn("Terminal=false", desktop)
 
+    def test_windows_desktop_installer_is_confined_and_transactional(self):
+        root = Path(__file__).parents[1]
+        installer = (root / "scripts" / "install-windows.ps1").read_text(
+            encoding="utf-8"
+        )
+        installer_test = (root / "tests" / "test-windows-installer.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("PCIMS_WINDOWS_DATA_ROOT", installer)
+        self.assertIn("Assert-ManagedDirectory", installer)
+        self.assertIn("FileShare]::None", installer)
+        self.assertIn("WScript.Shell", installer)
+        self.assertIn("smoke-installed.py", installer)
+        self.assertIn("Installation rollback also failed", installer)
+        self.assertIn("PIP_NO_INDEX", installer_test)
+        self.assertIn("PCIMS_RUN_REAL_INSTALL", installer_test)
+
     def test_dependencies_have_cross_platform_hash_locks(self):
         root = Path(__file__).parents[1]
         runtime_lock = (root / "requirements.lock").read_text(encoding="utf-8")
@@ -221,7 +238,9 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('"compileall", "-q", "pcims", "scripts"', verification)
         self.assertIn('"bandit", "-q", "-r", "pcims", "scripts"', verification)
         self.assertIn("test-linux-installer.sh", verification)
+        self.assertIn("test-windows-installer.ps1", verification)
         self.assertIn("Install the real Linux desktop application", workflow)
+        self.assertIn("Install the real Windows desktop application", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertNotIn("actions/checkout@v", workflow)
         self.assertNotIn("actions/setup-python@v", workflow)

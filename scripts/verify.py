@@ -75,7 +75,30 @@ def verify(output_directory: Path | None) -> None:
     run_python("-m", "mypy", "pcims", "--strict")
     run_python("-m", "bandit", "-q", "-r", "pcims", "scripts")
     run_python("-m", "compileall", "-q", "pcims", "scripts")
-    if os.name != "nt":
+    if os.name == "nt":
+        powershell = (
+            Path(os.environ.get("SystemRoot", r"C:\Windows"))
+            / "System32"
+            / "WindowsPowerShell"
+            / "v1.0"
+            / "powershell.exe"
+        )
+        installer_environment = os.environ.copy()
+        installer_environment["PYTHON"] = sys.executable
+        subprocess.run(  # nosec B603
+            [
+                str(powershell),
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ROOT / "tests" / "test-windows-installer.ps1"),
+            ],
+            cwd=ROOT,
+            env=installer_environment,
+            check=True,
+        )
+    else:
         subprocess.run(  # nosec B603
             ["/bin/sh", str(ROOT / "tests" / "test-linux-installer.sh")],
             cwd=ROOT,

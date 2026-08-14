@@ -25,6 +25,17 @@ python3 -m venv .venv
 .venv/bin/python app.py
 ```
 
+For a user-scoped Windows installation with an isolated environment and a Start
+Menu shortcut, run this from the project directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install-windows.ps1
+```
+
+The Windows installer confines application replacement to
+`%LOCALAPPDATA%\PCIMS\application`, serializes concurrent upgrades, smoke-tests
+the staged build, and restores the prior installation if publication fails.
+
 For a user-scoped Linux installation with an isolated environment and a desktop
 menu entry, run this from the project directory:
 
@@ -81,8 +92,9 @@ generated desktop entry.
 
 The reproducible wheel is the authoritative cross-platform release artifact.
 On Linux, `scripts/install-linux.sh` turns the checked-out release into a
-transactional, user-scoped desktop installation. Both paths are exercised in
-CI.
+transactional, user-scoped desktop installation. Windows has the equivalent
+`scripts/install-windows.ps1` path. Both installers are exercised with real
+locked environments and installed Qt smoke tests in CI.
 
 Ad-hoc `pyside6-deploy` output is not treated as a release artifact because its
 Nuitka toolchain, platform libraries, signing, and installed-program smoke test

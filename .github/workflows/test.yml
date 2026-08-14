@@ -39,6 +39,9 @@ jobs:
           sh tests/test-linux-installer.sh
           sed 's|@PCIMS_PYTHON@|/usr/bin/python3|' packaging/linux/pcims.desktop > /tmp/pcims.desktop
           desktop-file-validate /tmp/pcims.desktop
+      - name: Validate Windows installer rollback
+        if: runner.os == 'Windows' && matrix.python-version != '3.13'
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-windows-installer.ps1
       - run: python -m pip install --require-hashes -r requirements-dev.lock
       - run: python -m pip install --require-hashes -r requirements-build.lock
       - run: python -m pip install --no-build-isolation --no-deps -e .
@@ -64,3 +67,8 @@ jobs:
           XDG_DATA_HOME="$install_data" PYTHON=python sh scripts/install-linux.sh
           desktop-file-validate "$install_data/applications/pcims.desktop"
           test -x "$install_data/pcims/application/bin/python"
+      - name: Install the real Windows desktop application
+        if: runner.os == 'Windows' && matrix.python-version == '3.13'
+        env:
+          PCIMS_RUN_REAL_INSTALL: "1"
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-windows-installer.ps1
