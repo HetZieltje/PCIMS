@@ -442,6 +442,26 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 self.assertIn("USING INDEX", plan)
                 self.assertNotIn("TEMP B-TREE", plan)
 
+    def test_inventory_index_covers_display_order_without_a_temporary_sort(self):
+        with self.database.transaction() as database:
+            plan = " ".join(
+                row[3]
+                for row in database.execute(
+                    """EXPLAIN QUERY PLAN
+                       SELECT e.id,e.name,e.item_type,e.price_cents,e.purchase_date,
+                              p.id AS pc_id,p.name AS pc_name,si.sale_id
+                         FROM expenses e
+                         LEFT JOIN pc_parts pp ON pp.expense_id=e.id
+                         LEFT JOIN assembled_pcs p ON p.id=pp.pc_id
+                         LEFT JOIN sale_items si ON si.expense_id=e.id
+                        WHERE si.sale_id IS NULL
+                        ORDER BY e.item_type,e.name COLLATE PCIMS_NOCASE,e.id"""
+                )
+            )
+
+        self.assertIn("expenses_inventory_order", plan)
+        self.assertNotIn("TEMP B-TREE", plan)
+
     def test_missing_or_changed_schema_objects_are_rejected(self):
         with self.database.transaction() as database:
             database.execute("DROP TRIGGER pc_part_must_not_be_sold")
@@ -568,6 +588,19 @@ class DatabaseWorkflowTests(unittest.TestCase):
             ):
                 self.buy("Invalid", "Extra", invalid_price)
 
+    def test_purchase_name_snapshot_reads_only_distinct_names(self):
+        self.buy("Alpha", "CPU", 10)
+        self.buy("Alpha", "RAM", 20)
+        self.buy("beta", "Extra", 5)
+
+        with patch(
+            "pcims.db.reads.expense_from_row",
+            side_effect=AssertionError("full expense mapping is unnecessary"),
+        ):
+            snapshot = self.services.purchases_snapshot()
+
+        self.assertEqual(snapshot.expense_names, ("Alpha", "beta"))
+
     def test_purchase_bundle_is_atomic(self):
         with self.assertRaises(ValueError):
             self.services.add_expenses(
@@ -665,6 +698,15 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(
             {item.id for item in self.services.list_inventory()}, set(ids)
         )
+
+    def test_sales_snapshot_reuses_purchase_history_records(self):
+        item_id = self.buy("Shared", "Extra", 5)
+        self.services.sell_items([item_id], SaleTerms.create(10))
+
+        snapshot = self.services.sales_snapshot()
+
+        expense = next(item for item in snapshot.expenses if item.id == item_id)
+        self.assertIs(snapshot.sales[0].items[0], expense)
 
     def test_sold_expense_names_are_immutable_historical_data(self):
         item_id = self.buy("Historical CPU", "CPU", 30)

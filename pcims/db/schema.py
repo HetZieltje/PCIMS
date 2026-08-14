@@ -9,7 +9,7 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES, MAX_NAME_LENGTH
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND instr(name,char(0))=0
@@ -55,6 +55,11 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         PRIMARY KEY (sale_id, expense_id),
         UNIQUE (sale_id, position)
     ) STRICT""",
+    (
+        "index",
+        "expenses_inventory_order",
+    ): """CREATE INDEX expenses_inventory_order
+        ON expenses(item_type,name COLLATE PCIMS_NOCASE,id)""",
     ("trigger", "pc_part_must_not_be_sold"): """CREATE TRIGGER pc_part_must_not_be_sold
         BEFORE INSERT ON pc_parts
         WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=NEW.expense_id)

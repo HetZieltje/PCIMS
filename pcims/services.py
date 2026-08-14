@@ -51,10 +51,8 @@ class ApplicationServices:
 
     def purchases_snapshot(self) -> PurchasesSnapshot:
         with self.database.transaction() as connection:
-            names = {
-                expense.name for expense in ReadQueries(connection).list_expenses()
-            }
-        return PurchasesSnapshot(tuple(sorted(names, key=str.casefold)))
+            names = ReadQueries(connection).list_expense_names()
+        return PurchasesSnapshot(names)
 
     def assemble_snapshot(self) -> AssembleSnapshot:
         with self.database.transaction() as connection:
@@ -66,10 +64,11 @@ class ApplicationServices:
     def sales_snapshot(self) -> SalesSnapshot:
         with self.database.transaction() as connection:
             queries = ReadQueries(connection)
+            expenses = queries.list_expenses()
             return SalesSnapshot(
                 queries.financial_summary(),
-                queries.list_expenses(),
-                queries.list_sales(),
+                expenses,
+                queries.list_sales({expense.id: expense for expense in expenses}),
             )
 
     def add_expenses(self, items: Iterable[NewExpense]) -> list[int]:

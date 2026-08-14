@@ -1,6 +1,7 @@
 """Read-only projections over the current PCIMS schema."""
 
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import cast
@@ -20,6 +21,13 @@ class ReadQueries:
         rows = self.connection.execute(EXPENSE_SELECT + " ORDER BY e.id").fetchall()
         return tuple(expense_from_row(row) for row in rows)
 
+    def list_expense_names(self) -> tuple[str, ...]:
+        rows = self.connection.execute(
+            "SELECT DISTINCT name FROM expenses "
+            "ORDER BY name COLLATE PCIMS_NOCASE,name"
+        )
+        return tuple(str(row[0]) for row in rows)
+
     def list_inventory(
         self, item_type: ItemType | None = None, available_only: bool = False
     ) -> tuple[Expense, ...]:
@@ -34,7 +42,7 @@ class ReadQueries:
             EXPENSE_SELECT
             + " WHERE "
             + " AND ".join(clauses)
-            + " ORDER BY e.item_type,e.name,e.id"
+            + " ORDER BY e.item_type,e.name COLLATE PCIMS_NOCASE,e.id"
         )
         rows = self.connection.execute(sql, parameters).fetchall()
         return tuple(expense_from_row(row) for row in rows)
@@ -54,20 +62,32 @@ class ReadQueries:
             for pc in pcs
         )
 
-    def list_sales(self) -> tuple[Sale, ...]:
+    def list_sales(
+        self, expenses_by_id: Mapping[int, Expense] | None = None
+    ) -> tuple[Sale, ...]:
         sales = self.connection.execute(
             "SELECT id,name,kind,selling_price_cents,sale_date "
             "FROM sales ORDER BY id"
         ).fetchall()
-        rows = self.connection.execute(
-            EXPENSE_SELECT
-            + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
-        ).fetchall()
         items_by_sale: dict[int, list[Expense]] = {
             int(sale["id"]): [] for sale in sales
         }
-        for row in rows:
-            items_by_sale[int(row["sale_id"])].append(expense_from_row(row))
+        if expenses_by_id is None:
+            rows = self.connection.execute(
+                EXPENSE_SELECT
+                + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
+            )
+            for row in rows:
+                items_by_sale[int(row["sale_id"])].append(expense_from_row(row))
+        else:
+            memberships = self.connection.execute(
+                "SELECT sale_id,expense_id FROM sale_items "
+                "ORDER BY sale_id,position"
+            )
+            for membership in memberships:
+                items_by_sale[int(membership["sale_id"])].append(
+                    expenses_by_id[int(membership["expense_id"])]
+                )
         return tuple(
             Sale(
                 id=sale["id"],
