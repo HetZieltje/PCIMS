@@ -9,7 +9,7 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
     ("table", "expenses"): f"""CREATE TABLE expenses (
@@ -37,8 +37,6 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL CHECK (length(trim(name)) > 0),
         kind TEXT NOT NULL CHECK (kind IN ('item', 'pc')),
-        cost_cents INTEGER NOT NULL
-            CHECK (cost_cents >= 0 AND cost_cents <= {MAX_MONEY_CENTS}),
         selling_price_cents INTEGER NOT NULL
             CHECK (selling_price_cents >= 0
                    AND selling_price_cents <= {MAX_MONEY_CENTS}),
@@ -137,10 +135,6 @@ def _validate_money(database: sqlite3.Connection) -> None:
         ),
         (
             "sales",
-            "SELECT id FROM sales WHERE cost_cents<0 OR cost_cents>? LIMIT 1",
-        ),
-        (
-            "sales",
             """SELECT id FROM sales
                WHERE selling_price_cents<0 OR selling_price_cents>? LIMIT 1""",
         ),
@@ -188,9 +182,10 @@ def _validate_relationships(database: sqlite3.Connection) -> None:
            LEFT JOIN expenses e ON e.id=si.expense_id
            GROUP BY s.id
            HAVING COUNT(si.expense_id)=0
-               OR s.cost_cents<>COALESCE(SUM(e.price_cents),0)
+               OR COALESCE(SUM(e.price_cents),0)>?
                OR s.sale_date<MAX(e.purchase_date)
-           LIMIT 1"""
+           LIMIT 1""",
+        (MAX_MONEY_CENTS,),
     ).fetchone()
     if invalid_sale:
         raise DatabaseIntegrityError(

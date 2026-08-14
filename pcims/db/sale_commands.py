@@ -41,15 +41,15 @@ def sell_items(
         _validate_sale_date(rows, sale_day)
         names = {row["name"] for row in rows}
         name = rows[0]["name"] if len(names) == 1 else f"{len(rows)} items"
-        cost_cents = bounded_cents_total(
+        bounded_cents_total(
             (row["price_cents"] for row in rows), "Combined item cost"
         )
         sale_id = inserted_id(
             connection.execute(
                 "INSERT INTO sales "
-                "(name,kind,cost_cents,selling_price_cents,sale_date) "
-                "VALUES (?,'item',?,?,?)",
-                (name, cost_cents, terms.selling_price_cents, sale_day),
+                "(name,kind,selling_price_cents,sale_date) "
+                "VALUES (?,'item',?,?)",
+                (name, terms.selling_price_cents, sale_day),
             )
         )
         connection.executemany(
@@ -77,7 +77,7 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
         if not rows:
             raise ValidationError(f"PC '{pc['name']}' has no components.")
         _validate_sale_date(rows, sale_day)
-        cost_cents = bounded_cents_total(
+        bounded_cents_total(
             (row["price_cents"] for row in rows), "Combined PC cost"
         )
         expense_ids = [row["id"] for row in rows]
@@ -85,9 +85,9 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
         sale_id = inserted_id(
             connection.execute(
                 "INSERT INTO sales "
-                "(name,kind,cost_cents,selling_price_cents,sale_date) "
-                "VALUES (?,'pc',?,?,?)",
-                (pc["name"], cost_cents, terms.selling_price_cents, sale_day),
+                "(name,kind,selling_price_cents,sale_date) "
+                "VALUES (?,'pc',?,?)",
+                (pc["name"], terms.selling_price_cents, sale_day),
             )
         )
         connection.executemany(

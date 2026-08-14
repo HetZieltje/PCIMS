@@ -279,7 +279,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(pc_columns, ["id", "name"])
         self.assertEqual(
             sale_columns,
-            ["id", "name", "kind", "cost_cents", "selling_price_cents", "sale_date"],
+            ["id", "name", "kind", "selling_price_cents", "sale_date"],
         )
 
     def test_pc_name_uniqueness_is_enforced_by_unicode_database_collation(self):
@@ -544,6 +544,16 @@ class DatabaseWorkflowTests(unittest.TestCase):
             {item.id for item in self.services.list_inventory()}, set(ids)
         )
 
+    def test_sold_expense_names_are_immutable_historical_data(self):
+        item_id = self.buy("Historical CPU", "CPU", 30)
+        self.services.sell_items([item_id], SaleTerms.create(50))
+
+        with self.assertRaisesRegex(ValidationError, "sale history"):
+            self.services.rename_expenses([item_id], "Rewritten CPU")
+
+        sale = self.services.list_sales()[0]
+        self.assertEqual(sale.items[0].name, "Historical CPU")
+
     def test_pc_sale_and_undo_preserve_duplicate_component_types(self):
         ids = [
             self.buy("CPU", "CPU", 100),
@@ -777,6 +787,19 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(events[-1][1], backup_directory.resolve())
         validate_database(result)
 
+    def test_post_publish_directory_failure_reports_completed_backup_warning(self):
+        self.buy("Durable enough", "CPU", 10)
+        with patch(
+            "pcims.db.backup._sync_directory",
+            side_effect=OSError("simulated directory flush failure"),
+        ):
+            result = create_backup(database=self.database)
+
+        self.assertTrue(result.path.is_file())
+        self.assertTrue(result.has_cleanup_warnings)
+        self.assertIn("Backup was created", result.cleanup_warning)
+        validate_database(result)
+
     def test_temporary_cleanup_failure_preserves_primary_backup_error(self):
         self.buy("Keep", "CPU", 10)
         backup_directory = Path(self.temporary_directory.name) / "backups"
@@ -822,6 +845,23 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(all(not sidecar.exists() for sidecar in sidecars))
         self.assertEqual(
             [item.name for item in self.services.list_expenses()], ["Restored state"]
+        )
+
+    def test_post_replace_directory_failure_reports_completed_restore_warning(self):
+        self.buy("Old state", "CPU", 10)
+        source = create_backup(database=self.database)
+        self.buy("Discarded state", "RAM", 20)
+
+        with patch(
+            "pcims.db.backup._sync_directory",
+            side_effect=OSError("simulated restore directory flush failure"),
+        ):
+            safety = restore_backup(source, database=self.database)
+
+        self.assertTrue(safety.has_cleanup_warnings)
+        self.assertIn("Database was restored", safety.cleanup_warning)
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()], ["Old state"]
         )
 
     def test_backup_rejects_foreign_key_violations(self):

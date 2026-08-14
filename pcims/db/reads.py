@@ -57,7 +57,7 @@ class ReadQueries:
 
     def list_sales(self) -> tuple[Sale, ...]:
         sales = self.connection.execute(
-            "SELECT id,name,kind,cost_cents,selling_price_cents,sale_date "
+            "SELECT id,name,kind,selling_price_cents,sale_date "
             "FROM sales ORDER BY id"
         ).fetchall()
         rows = self.connection.execute(
@@ -74,7 +74,9 @@ class ReadQueries:
                 id=sale["id"],
                 name=sale["name"],
                 kind=cast(SaleKind, sale["kind"]),
-                cost_cents=sale["cost_cents"],
+                cost_cents=sum(
+                    item.price_cents for item in items_by_sale[sale["id"]]
+                ),
                 selling_price_cents=sale["selling_price_cents"],
                 sale_date=date.fromisoformat(sale["sale_date"]),
                 items=tuple(items_by_sale[sale["id"]]),
@@ -87,8 +89,10 @@ class ReadQueries:
             "SELECT COALESCE(SUM(price_cents),0) FROM expenses"
         ).fetchone()[0]
         income_cents, cost_cents = self.connection.execute(
-            "SELECT COALESCE(SUM(selling_price_cents),0),"
-            "COALESCE(SUM(cost_cents),0) FROM sales"
+            """SELECT
+               (SELECT COALESCE(SUM(selling_price_cents),0) FROM sales),
+               (SELECT COALESCE(SUM(e.price_cents),0)
+                  FROM sale_items si JOIN expenses e ON e.id=si.expense_id)"""
         ).fetchone()
         inventory_cents = self.connection.execute(
             """SELECT COALESCE(SUM(e.price_cents),0) FROM expenses e

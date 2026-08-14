@@ -64,13 +64,20 @@ def rename_expenses(
     name = normalized_command_text(new_name, "New item name")
     placeholders = ",".join("?" for _ in ids)
     with database.transaction(write=True) as connection:
-        count = connection.execute(
+        rows = connection.execute(
             # IDs are validated integers; only the number of placeholders varies.
-            f"SELECT COUNT(*) FROM expenses WHERE id IN ({placeholders})",  # nosec B608
+            "SELECT e.id,si.sale_id FROM expenses e "
+            "LEFT JOIN sale_items si ON si.expense_id=e.id "
+            f"WHERE e.id IN ({placeholders})",  # nosec B608
             ids,
-        ).fetchone()[0]
-        if count != len(ids):
+        ).fetchall()
+        if len(rows) != len(ids):
             raise NotFoundError("One or more selected expenses no longer exist.")
+        sold = next((row for row in rows if row["sale_id"] is not None), None)
+        if sold is not None:
+            raise ValidationError(
+                f"Expense {sold['id']} has sale history and cannot be renamed."
+            )
         connection.execute(
             # IDs and name remain bound parameters; no user text enters the SQL.
             f"UPDATE expenses SET name=? WHERE id IN ({placeholders})",  # nosec B608

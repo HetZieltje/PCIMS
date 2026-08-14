@@ -124,6 +124,7 @@ def _create_backup(
     final_path = destination / f"{prefix}{stamp}.db"
     temporary_path = final_path.with_suffix(".tmp")
     primary_error: BaseException | None = None
+    publication_errors: list[str] = []
     try:
         with database.transaction() as source, closing(
             sqlite3.connect(temporary_path)
@@ -132,14 +133,19 @@ def _create_backup(
         validate_database(temporary_path)
         _sync_file(temporary_path)
         os.replace(temporary_path, final_path)
-        _sync_directory(destination)
+        try:
+            _sync_directory(destination)
+        except OSError as error:
+            publication_errors.append(
+                f"Backup was created, but its directory could not be flushed: {error}"
+            )
     except BaseException as error:
         primary_error = error
         raise
     finally:
         _remove_temporary(temporary_path, primary_error)
 
-    cleanup_errors: list[str] = []
+    cleanup_errors = publication_errors
     try:
         backups = sorted(destination.glob(f"{prefix}*.db"), reverse=True)
     except OSError as error:
@@ -191,7 +197,16 @@ def _restore_backup(
         _sync_file(staged_path)
         _remove_live_sidecars(live_path)
         os.replace(staged_path, live_path)
-        _sync_directory(live_path.parent)
+        try:
+            _sync_directory(live_path.parent)
+        except OSError as error:
+            safety_backup = BackupResult(
+                safety_backup.path,
+                (
+                    *safety_backup.cleanup_errors,
+                    f"Database was restored, but its directory could not be flushed: {error}",
+                ),
+            )
     except BaseException as error:
         primary_error = error
         raise
