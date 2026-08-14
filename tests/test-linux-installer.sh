@@ -40,6 +40,32 @@ then
 fi
 test "$(cat "$install_root/version-marker")" = old
 
+mkdir -p "$data_home/applications" "$test_root/fake-bin"
+printf '%s\n' old-desktop > "$data_home/applications/pcims.desktop"
+cat > "$test_root/fake-bin/mv" <<'EOF'
+#!/bin/sh
+set -eu
+destination=
+for argument do
+    destination=$argument
+done
+case "$destination" in
+    */pcims.desktop) exit 31 ;;
+esac
+exec /usr/bin/mv "$@"
+EOF
+chmod +x "$test_root/fake-bin/mv"
+
+if PCIMS_PLATFORM=Linux XDG_DATA_HOME="$data_home" PCIMS_INSTALL_ROOT="$install_root" \
+    PYTHON="$fake_python" PATH="$test_root/fake-bin:$PATH" \
+    sh scripts/install-linux.sh >/dev/null 2>&1
+then
+    printf '%s\n' "Installer unexpectedly accepted a failed desktop commit." >&2
+    exit 1
+fi
+test "$(cat "$install_root/version-marker")" = old
+test "$(cat "$data_home/applications/pcims.desktop")" = old-desktop
+
 PCIMS_PLATFORM=Linux XDG_DATA_HOME="$data_home" PCIMS_INSTALL_ROOT="$install_root" \
     PYTHON="$fake_python" sh scripts/install-linux.sh >/dev/null
 

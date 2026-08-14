@@ -22,8 +22,8 @@ from pcims.app.table_model import (
     selected_ids,
 )
 from pcims.app.tasks import TaskManager
+from pcims.contracts import SalesOperations, SalesSnapshot
 from pcims.db.models import Expense, Sale
-from pcims.services import ApplicationServices, SalesSnapshot
 
 
 def _expense_status(item: Expense) -> str:
@@ -37,7 +37,7 @@ class SalesPage(AsyncCommandPage):
 
     def __init__(
         self,
-        services: ApplicationServices,
+        services: SalesOperations,
         *,
         tasks: TaskManager,
         parent: QWidget | None = None,

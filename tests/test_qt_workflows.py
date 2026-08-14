@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer
+from PySide6.QtCore import QEventLoop, QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox, QTableView
 
@@ -670,6 +670,24 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(outcomes, ["complete"])
         self.assertIsNotNone(task)
         self.assertFalse(manager.active)
+
+    def test_rejected_thread_pool_submission_is_delivered_as_async_failure(self):
+        pool = MagicMock(spec=QThreadPool)
+        pool.start.side_effect = RuntimeError("thread pool unavailable")
+        tasks = TaskManager(pool=pool)
+        failures: list[Exception] = []
+        idle_events: list[bool] = []
+        tasks.became_idle.connect(lambda: idle_events.append(True))
+
+        with patch("pcims.app.tasks.log_exception") as log:
+            tasks.run(lambda: 1, lambda _result: None, failures.append)
+            self.assertTrue(tasks.active)
+            self.wait_until(lambda: bool(failures))
+
+        self.assertFalse(tasks.active)
+        self.assertEqual(str(failures[0]), "thread pool unavailable")
+        self.assertEqual(idle_events, [True])
+        log.assert_called_once()
 
     def test_manual_backup_runs_asynchronously_and_restores_button_state(self):
         window = MainWindow(self.services)

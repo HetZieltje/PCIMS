@@ -5,6 +5,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from pcims.contracts import (
+    AssembleSnapshot,
+    InventorySnapshot,
+    PurchasesSnapshot,
+    SalesSnapshot,
+)
 from pcims.db.assembly_commands import (
     assemble_pc,
     disassemble_pc,
@@ -33,30 +39,6 @@ from pcims.db.sale_commands import (
 )
 from pcims.db.schema import initialize_database
 from pcims.domain import ItemType, NewExpense, SaleTerms
-
-
-@dataclass(frozen=True, slots=True)
-class InventorySnapshot:
-    inventory: tuple[Expense, ...]
-    pcs: tuple[AssembledPC, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class PurchasesSnapshot:
-    expense_names: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class AssembleSnapshot:
-    available_inventory: tuple[Expense, ...]
-    pc_names: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class SalesSnapshot:
-    summary: FinancialSummary
-    expenses: tuple[Expense, ...]
-    sales: tuple[Sale, ...]
 
 
 @dataclass(frozen=True, slots=True)

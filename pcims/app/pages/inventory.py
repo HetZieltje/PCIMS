@@ -25,9 +25,9 @@ from pcims.app.table_model import (
     selected_ids,
 )
 from pcims.app.tasks import TaskManager
+from pcims.contracts import InventoryOperations, InventorySnapshot
 from pcims.db.models import AssembledPC, Expense
 from pcims.domain import ITEM_TYPES
-from pcims.services import ApplicationServices, InventorySnapshot
 
 
 def _component_summary(pc: AssembledPC) -> str:
@@ -45,7 +45,7 @@ class InventoryPage(AsyncCommandPage):
 
     def __init__(
         self,
-        services: ApplicationServices,
+        services: InventoryOperations,
         *,
         tasks: TaskManager,
         parent: QWidget | None = None,

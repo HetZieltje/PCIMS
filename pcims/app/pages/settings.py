@@ -17,8 +17,8 @@ from PySide6.QtWidgets import (
 
 from pcims.app.common import ask_confirmation, show_error
 from pcims.app.tasks import TaskManager
+from pcims.contracts import MaintenanceOperations
 from pcims.db.backup import BackupResult
-from pcims.services import ApplicationServices
 
 
 class SettingsPage(QWidget):
@@ -27,7 +27,7 @@ class SettingsPage(QWidget):
 
     def __init__(
         self,
-        services: ApplicationServices,
+        services: MaintenanceOperations,
         *,
         tasks: TaskManager,
         theme: str = "system",

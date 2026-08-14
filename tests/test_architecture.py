@@ -86,6 +86,9 @@ class ArchitectureTests(unittest.TestCase):
                 self.assertNotIn("from pcims.db.sale_commands", source)
                 self.assertNotIn("from pcims.db.reads", source)
                 self.assertNotIn("from pcims.db.backup import create_backup", source)
+                self.assertNotIn("ApplicationServices", source)
+                if path.name != "__init__.py":
+                    self.assertIn("Operations", source)
 
     def test_service_commands_are_typed_and_normalized_outside_sql_workflows(self):
         root = Path(__file__).parents[1] / "pcims"

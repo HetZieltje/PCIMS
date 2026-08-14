@@ -3,12 +3,17 @@
 from collections.abc import Callable
 from typing import Generic, TypeVar
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
 from pcims.app.errors import log_exception
 from pcims.db.errors import NotFoundError, ValidationError
 
 ResultT = TypeVar("ResultT")
+
+
+def _log_unexpected(error: Exception) -> None:
+    if not isinstance(error, (ValidationError, NotFoundError)):
+        log_exception(type(error), error, error.__traceback__)
 
 
 class TaskSignals(QObject):
@@ -29,8 +34,7 @@ class BackgroundTask(QRunnable, Generic[ResultT]):
         try:
             result = self.operation()
         except Exception as error:  # noqa: BLE001 - task boundary reports failures
-            if not isinstance(error, (ValidationError, NotFoundError)):
-                log_exception(type(error), error, error.__traceback__)
+            _log_unexpected(error)
             self.signals.failed.emit(error)
         else:
             self.signals.succeeded.emit(result)
@@ -86,5 +90,9 @@ class TaskManager(QObject):
         task.signals.succeeded.connect(succeeded)
         task.signals.failed.connect(failed)
         self._active[task_id] = task
-        self._pool.start(task)
+        try:
+            self._pool.start(task)
+        except Exception as error:  # noqa: BLE001 - Qt submission boundary
+            _log_unexpected(error)
+            QTimer.singleShot(0, lambda caught=error: task.signals.failed.emit(caught))
         return task

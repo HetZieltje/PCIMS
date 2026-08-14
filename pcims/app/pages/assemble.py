@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from pcims.app.assembly_model import AssemblyTreeModel
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.tasks import TaskManager
-from pcims.services import ApplicationServices, AssembleSnapshot
+from pcims.contracts import AssembleSnapshot, AssemblyOperations
 
 
 class AssemblePage(AsyncCommandPage):
@@ -23,7 +23,7 @@ class AssemblePage(AsyncCommandPage):
 
     def __init__(
         self,
-        services: ApplicationServices,
+        services: AssemblyOperations,
         *,
         tasks: TaskManager,
         parent: QWidget | None = None,
