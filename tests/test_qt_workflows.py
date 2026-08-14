@@ -229,8 +229,6 @@ class QtWorkflowTests(unittest.TestCase):
             second = MainWindow(self.services)
             self.wait_for_window(second)
         restore.assert_called_once_with(expected_geometry)
-        second.show()
-        self.application.processEvents()
         self.assertEqual(second.tabs.currentIndex(), 3)
         self.assertEqual(
             (

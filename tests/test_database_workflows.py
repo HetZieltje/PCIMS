@@ -1359,7 +1359,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         real_replace = os.replace
 
         def fail_live_replace(source_path, destination_path):
-            if Path(destination_path) == self.database_path:
+            if Path(destination_path).resolve() == self.database.path:
                 raise PermissionError("simulated live database lock")
             real_replace(source_path, destination_path)
 
