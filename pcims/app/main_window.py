@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import TypeVar, cast
 
 from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QColor, QPalette
@@ -20,9 +20,31 @@ from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
 from pcims.app.pages.sales import SalesPage
 from pcims.app.pages.settings import SettingsPage
-from pcims.app.tasks import BackgroundTask, run_in_background
+from pcims.app.tasks import BackgroundTask, TaskManager
 from pcims.db.backup import BackupResult
 from pcims.services import ApplicationServices, default_services
+
+SnapshotT = TypeVar("SnapshotT")
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshBinding:
+    page: QWidget
+    load: Callable[[], object]
+    apply: Callable[[object], None]
+
+
+def bind_refresh(
+    page: QWidget,
+    load: Callable[[], SnapshotT],
+    apply: Callable[[SnapshotT], None],
+) -> RefreshBinding:
+    """Erase one page's snapshot type only at Qt's dynamic signal boundary."""
+
+    def apply_typed(snapshot: object) -> None:
+        apply(cast(SnapshotT, snapshot))
+
+    return RefreshBinding(page, load, apply_typed)
 
 
 @dataclass(slots=True)
@@ -42,37 +64,66 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)
         self.settings = QSettings("PCIMS", "PCIMS")
         self._closing_after_backup = False
+        self._close_requested = False
         self._close_backup_running = False
+        self.tasks = TaskManager(self)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.setCentralWidget(self.tabs)
-        self.inventory_page = InventoryPage(self.services)
-        self.purchases_page = PurchasesPage(self.services)
-        self.assemble_page = AssemblePage(self.services)
-        self.sales_page = SalesPage(self.services)
+        self.inventory_page = InventoryPage(self.services, tasks=self.tasks)
+        self.purchases_page = PurchasesPage(self.services, tasks=self.tasks)
+        self.assemble_page = AssemblePage(self.services, tasks=self.tasks)
+        self.sales_page = SalesPage(self.services, tasks=self.tasks)
         self.settings_page = SettingsPage(
             self.services,
             str(self.settings.value("theme", "system")),
             has_pending_changes=lambda: self.purchases_page.has_staged_items,
+            tasks=self.tasks,
         )
-        self.pages = (
+        self.data_pages = (
             self.inventory_page,
             self.purchases_page,
             self.assemble_page,
             self.sales_page,
+        )
+        self.pages = (
+            *self.data_pages,
             self.settings_page,
         )
-        self._dirty_pages: set[QWidget] = set(self.pages[:-1])
+        bindings = (
+            bind_refresh(
+                self.inventory_page,
+                lambda: self.inventory_page.load_snapshot(),
+                lambda snapshot: self.inventory_page.apply_snapshot(snapshot),
+            ),
+            bind_refresh(
+                self.purchases_page,
+                lambda: self.purchases_page.load_snapshot(),
+                lambda snapshot: self.purchases_page.apply_snapshot(snapshot),
+            ),
+            bind_refresh(
+                self.assemble_page,
+                lambda: self.assemble_page.load_snapshot(),
+                lambda snapshot: self.assemble_page.apply_snapshot(snapshot),
+            ),
+            bind_refresh(
+                self.sales_page,
+                lambda: self.sales_page.load_snapshot(),
+                lambda snapshot: self.sales_page.apply_snapshot(snapshot),
+            ),
+        )
+        self._refresh_bindings = {binding.page: binding for binding in bindings}
+        self._dirty_pages: set[QWidget] = set(self.data_pages)
         self._refresh_states: dict[QWidget, RefreshState] = {
-            page: RefreshState() for page in self.pages[:-1]
+            page: RefreshState() for page in self.data_pages
         }
         for page, title in zip(
             self.pages,
             ("Inventory", "Purchases", "Assemble", "Sales and History", "Settings"),
         ):
             self.tabs.addTab(page, title)
-        for page in self.pages[:-1]:
+        for page in self.data_pages:
             page.data_changed.connect(self._on_data_changed)
         self.settings_page.theme_changed.connect(self.apply_theme)
         self.settings_page.database_restored.connect(self._after_database_restore)
@@ -84,7 +135,7 @@ class MainWindow(QMainWindow):
 
     def create_startup_backup(self) -> None:
         self.statusBar().showMessage("Creating startup backup…")
-        self._startup_backup_task = run_in_background(
+        self._startup_backup_task = self.tasks.run(
             self.services.create_backup,
             self._startup_backup_finished,
             self._startup_backup_failed,
@@ -127,21 +178,16 @@ class MainWindow(QMainWindow):
         self._launch_refresh(page, state)
 
     def _launch_refresh(self, page: QWidget, state: RefreshState) -> None:
-        load_snapshot = getattr(page, "load_snapshot", None)
-        apply_snapshot = getattr(page, "apply_snapshot", None)
-        if not callable(load_snapshot) or not callable(apply_snapshot):
+        binding = self._refresh_bindings.get(page)
+        if binding is None:
             self._dirty_pages.discard(page)
             return
-        loader = cast(Callable[[], object], load_snapshot)
-        applier = cast(Callable[[object], None], apply_snapshot)
         generation = state.requested_generation
         state.running_generation = generation
         state.pending = False
-        state.task = run_in_background(
-            loader,
-            lambda snapshot: self._refresh_succeeded(
-                page, generation, applier, snapshot
-            ),
+        state.task = self.tasks.run(
+            binding.load,
+            lambda snapshot: self._refresh_succeeded(page, generation, snapshot),
             lambda error: self._refresh_failed(page, generation, error),
         )
 
@@ -149,14 +195,13 @@ class MainWindow(QMainWindow):
         self,
         page: QWidget,
         generation: int,
-        apply_snapshot: Callable[[object], None],
         snapshot: object,
     ) -> None:
         state = self._finish_refresh(page, generation)
         if state is None:
             return
         if state.requested_generation == generation:
-            apply_snapshot(snapshot)
+            self._refresh_bindings[page].apply(snapshot)
             self._dirty_pages.discard(page)
             self.statusBar().showMessage("Data refreshed", 2500)
         self._launch_pending_refresh(page, state)
@@ -190,26 +235,21 @@ class MainWindow(QMainWindow):
     def refresh_running(self) -> bool:
         return any(state.task is not None for state in self._refresh_states.values())
 
-    def _data_work_running(self) -> bool:
-        return self.refresh_running or any(
-            bool(getattr(page, "command_running", False)) for page in self.pages[:-1]
-        )
-
     def _cancel_pending_refreshes(self) -> None:
         for state in self._refresh_states.values():
             state.requested_generation += 1
             state.pending = False
 
     def refresh_all(self) -> None:
-        self._dirty_pages.update(self.pages[:-1])
-        for page in self.pages[:-1]:
+        self._dirty_pages.update(self.data_pages)
+        for page in self.data_pages:
             self._start_refresh(page)
         self.statusBar().showMessage("Refreshing dataâ€¦")
 
     def _on_data_changed(self) -> None:
         for state in self._refresh_states.values():
             state.requested_generation += 1
-        self._dirty_pages.update(self.pages[:-1])
+        self._dirty_pages.update(self.data_pages)
         self.refresh_current()
         self.statusBar().showMessage("Data updated", 2500)
 
@@ -306,7 +346,7 @@ class MainWindow(QMainWindow):
             self._save_window_state()
             event.accept()
             return
-        if self._close_backup_running:
+        if self._close_requested:
             event.ignore()
             return
         if self.purchases_page.has_staged_items:
@@ -323,19 +363,26 @@ class MainWindow(QMainWindow):
                 return
         event.ignore()
         self._cancel_pending_refreshes()
-        self._close_backup_running = True
+        self._close_requested = True
         self.setEnabled(False)
+        self._continue_close()
+
+    def _continue_close(self) -> None:
+        if not self._close_requested or self._close_backup_running:
+            return
+        if self.tasks.active:
+            self.statusBar().showMessage("Waiting for background work to finish…")
+            QTimer.singleShot(10, self._continue_close)
+            return
+        self._close_backup_running = True
         self.statusBar().showMessage("Backing up before closing…")
-        self._close_backup_task = run_in_background(
+        self._close_backup_task = self.tasks.run(
             self.services.create_backup,
             self._close_backup_finished,
             self._close_backup_failed,
         )
 
     def _close_backup_finished(self, backup: BackupResult) -> None:
-        if self._data_work_running():
-            QTimer.singleShot(10, lambda: self._close_backup_finished(backup))
-            return
         self._close_backup_running = False
         if backup.has_cleanup_warnings:
             QMessageBox.warning(
@@ -362,5 +409,6 @@ class MainWindow(QMainWindow):
             self.setEnabled(True)
             self.close()
             return
+        self._close_requested = False
         self.setEnabled(True)
         self.statusBar().showMessage("Close cancelled because backup failed", 5000)

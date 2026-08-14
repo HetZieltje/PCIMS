@@ -34,15 +34,45 @@ class BackgroundTask(QRunnable, Generic[ResultT]):
             self.signals.succeeded.emit(result)
 
 
-def run_in_background(
-    operation: Callable[[], ResultT],
-    on_success: Callable[[ResultT], None],
-    on_failure: Callable[[Exception], None],
-    *,
-    pool: QThreadPool | None = None,
-) -> BackgroundTask[ResultT]:
-    task = BackgroundTask(operation)
-    task.signals.succeeded.connect(on_success)
-    task.signals.failed.connect(on_failure)
-    (pool or QThreadPool.globalInstance()).start(task)
-    return task
+class TaskManager(QObject):
+    """Own every background task for one UI lifetime."""
+
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        pool: QThreadPool | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._pool = pool or QThreadPool.globalInstance()
+        self._active: dict[int, object] = {}
+
+    @property
+    def active(self) -> bool:
+        return bool(self._active)
+
+    @property
+    def active_count(self) -> int:
+        return len(self._active)
+
+    def run(
+        self,
+        operation: Callable[[], ResultT],
+        on_success: Callable[[ResultT], None],
+        on_failure: Callable[[Exception], None],
+    ) -> BackgroundTask[ResultT]:
+        task = BackgroundTask(operation)
+        task_id = id(task)
+
+        def succeeded(result: ResultT) -> None:
+            self._active.pop(task_id, None)
+            on_success(result)
+
+        def failed(error: Exception) -> None:
+            self._active.pop(task_id, None)
+            on_failure(error)
+
+        task.signals.succeeded.connect(succeeded)
+        task.signals.failed.connect(failed)
+        self._active[task_id] = task
+        self._pool.start(task)
+        return task

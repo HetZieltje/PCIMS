@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from pcims.app.common import ask_confirmation, show_error
-from pcims.app.tasks import run_in_background
+from pcims.app.tasks import TaskManager
 from pcims.db.backup import BackupResult
 from pcims.services import ApplicationServices, default_services
 
@@ -31,8 +31,10 @@ class SettingsPage(QWidget):
         theme: str = "system",
         has_pending_changes: Callable[[], bool] | None = None,
         parent: QWidget | None = None,
+        tasks: TaskManager | None = None,
     ) -> None:
         super().__init__(parent)
+        self.tasks = tasks or TaskManager(self)
         self.services = services or default_services()
         self._has_pending_changes = has_pending_changes or (lambda: False)
         database_path = self.services.database_path
@@ -92,7 +94,7 @@ class SettingsPage(QWidget):
     def create_backup(self) -> None:
         self.backup_button.setEnabled(False)
         self.backup_button.setText("Creating backup…")
-        self._backup_task = run_in_background(
+        self._backup_task = self.tasks.run(
             self.services.create_backup,
             self._backup_finished,
             self._backup_failed,
@@ -134,7 +136,7 @@ class SettingsPage(QWidget):
             return
         self.window().setEnabled(False)
         self.restore_button.setText("Restoring backup…")
-        self._restore_task = run_in_background(
+        self._restore_task = self.tasks.run(
             lambda: self.services.restore_backup(path),
             self._restore_finished,
             self._restore_failed,

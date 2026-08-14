@@ -33,6 +33,7 @@ from pcims.app.table_model import (
     configure_table_view,
     selected_ids,
 )
+from pcims.app.tasks import TaskManager
 from pcims.domain import ITEM_TYPES, ItemType, NewExpense
 from pcims.services import ApplicationServices, PurchasesSnapshot, default_services
 
@@ -52,8 +53,9 @@ class PurchasesPage(AsyncCommandPage):
         self,
         services: ApplicationServices | None = None,
         parent: QWidget | None = None,
+        tasks: TaskManager | None = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__(parent, tasks)
         self.services = services or default_services()
         self._staged: list[StagedPurchase] = []
         self._next_staged_id = 1

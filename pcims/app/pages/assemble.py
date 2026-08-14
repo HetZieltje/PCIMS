@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import ID_ROLE
+from pcims.app.tasks import TaskManager
 from pcims.db.models import Expense
 from pcims.domain import ITEM_TYPES, ItemType
 from pcims.services import ApplicationServices, AssembleSnapshot, default_services
@@ -29,8 +30,9 @@ class AssemblePage(AsyncCommandPage):
         self,
         services: ApplicationServices | None = None,
         parent: QWidget | None = None,
+        tasks: TaskManager | None = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__(parent, tasks)
         self.services = services or default_services()
         self.name = QLineEdit()
         self.name.setMaximumWidth(360)

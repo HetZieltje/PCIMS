@@ -21,6 +21,7 @@ from pcims.app.table_model import (
     configure_table_view,
     selected_ids,
 )
+from pcims.app.tasks import TaskManager
 from pcims.db.models import Expense, Sale
 from pcims.services import ApplicationServices, SalesSnapshot, default_services
 
@@ -38,8 +39,9 @@ class SalesPage(AsyncCommandPage):
         self,
         services: ApplicationServices | None = None,
         parent: QWidget | None = None,
+        tasks: TaskManager | None = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__(parent, tasks)
         self.services = services or default_services()
         self._sales: dict[int, Sale] = {}
         self.summary_labels: dict[str, QLabel] = {}

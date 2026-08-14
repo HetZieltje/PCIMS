@@ -105,6 +105,18 @@ class ArchitectureTests(unittest.TestCase):
                 self.assertNotIn("QTableWidget", source)
                 self.assertNotIn("QTableWidgetItem", source)
 
+    def test_background_work_has_one_owned_lifecycle_and_explicit_refresh_contracts(self):
+        app = Path(__file__).parents[1] / "pcims" / "app"
+        source = "\n".join(
+            path.read_text(encoding="utf-8") for path in app.rglob("*.py")
+        )
+        main_window = (app / "main_window.py").read_text(encoding="utf-8")
+        self.assertNotIn("run_in_background", source)
+        self.assertIn("class TaskManager", source)
+        self.assertIn("bind_refresh(", main_window)
+        self.assertNotIn('getattr(page, "load_snapshot"', main_window)
+        self.assertNotIn('getattr(page, "command_running"', main_window)
+
     def test_linux_desktop_install_assets_are_present_and_user_scoped(self):
         root = Path(__file__).parents[1]
         installer = (root / "scripts" / "install-linux.sh").read_text(encoding="utf-8")

@@ -28,7 +28,7 @@ from pcims.app.table_model import (
     configure_table_view,
     selected_ids,
 )
-from pcims.app.tasks import run_in_background
+from pcims.app.tasks import TaskManager
 from pcims.db.backup import BackupResult
 from pcims.db.connection import Database
 from pcims.domain import NewExpense, SaleTerms
@@ -99,6 +99,7 @@ class QtWorkflowTests(unittest.TestCase):
 
         self.assertEqual(window.tabs.count(), 5)
         self.assertGreaterEqual(window.width(), 900)
+        self.assertTrue(all(page.tasks is window.tasks for page in window.pages))
         for index in range(window.tabs.count()):
             window.tabs.setCurrentIndex(index)
             window.refresh_current(index)
@@ -365,25 +366,76 @@ class QtWorkflowTests(unittest.TestCase):
             patch(
                 "pcims.services.ApplicationServices.create_backup",
                 return_value=outcome,
-            ),
-            patch.object(
-                window,
-                "_close_backup_finished",
-                wraps=window._close_backup_finished,
-            ) as backup_finished,
+            ) as create_backup,
             patch.object(window, "close") as close,
         ):
             window.refresh_current()
             self.wait_until(refresh_started.is_set)
             event = QCloseEvent()
             window.closeEvent(event)
-            self.wait_until(lambda: backup_finished.call_count > 0)
+            self.application.processEvents()
+            create_backup.assert_not_called()
             self.assertFalse(close.called)
             release_refresh.set()
             self.wait_until(lambda: close.called)
 
         apply_snapshot.assert_not_called()
+        create_backup.assert_called_once()
         self.assertTrue(window._closing_after_backup)
+        window.deleteLater()
+
+    def test_close_backup_includes_an_inflight_committed_mutation(self):
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        page = window.purchases_page
+        page.name.setText("Late GPU")
+        page.type.setCurrentText("GPU")
+        page.price.setText("100.00")
+        page.add_line()
+        mutation_started = threading.Event()
+        release_mutation = threading.Event()
+        backed_up_names = []
+        outcome = BackupResult(Path(self.temporary_directory.name) / "verified.db")
+        original_add = ApplicationServices.add_expenses
+
+        def slow_add(services, items):
+            mutation_started.set()
+            release_mutation.wait(2)
+            return original_add(services, items)
+
+        def observed_backup(services, *_args, **_kwargs):
+            backed_up_names.extend(item.name for item in services.list_expenses())
+            return outcome
+
+        with (
+            patch.object(
+                ApplicationServices,
+                "add_expenses",
+                autospec=True,
+                side_effect=slow_add,
+            ),
+            patch.object(
+                ApplicationServices,
+                "create_backup",
+                autospec=True,
+                side_effect=observed_backup,
+            ) as create_backup,
+            patch("pcims.app.pages.purchases.QMessageBox.information"),
+            patch(
+                "pcims.app.main_window.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ),
+            patch.object(window, "close") as close,
+        ):
+            page.commit_purchase()
+            self.wait_until(mutation_started.is_set)
+            window.closeEvent(QCloseEvent())
+            self.application.processEvents()
+            create_backup.assert_not_called()
+            release_mutation.set()
+            self.wait_until(lambda: close.called)
+
+        self.assertEqual(backed_up_names, ["Late GPU"])
         window.deleteLater()
 
     def test_restore_discards_staged_purchase_only_after_success(self):
@@ -529,7 +581,8 @@ class QtWorkflowTests(unittest.TestCase):
             release_worker.wait(2)
             return "complete"
 
-        task = run_in_background(
+        manager = TaskManager()
+        task = manager.run(
             blocking_operation,
             lambda result: (outcomes.append(result), loop.quit()),
             lambda error: (outcomes.append(error), loop.quit()),
@@ -544,6 +597,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(gui_ticks, ["responsive"])
         self.assertEqual(outcomes, ["complete"])
         self.assertIsNotNone(task)
+        self.assertFalse(manager.active)
 
     def test_manual_backup_runs_asynchronously_and_restores_button_state(self):
         window = MainWindow(self.services)

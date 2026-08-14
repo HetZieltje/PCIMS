@@ -5,14 +5,19 @@ from collections.abc import Callable
 from PySide6.QtWidgets import QWidget
 
 from pcims.app.common import show_error
-from pcims.app.tasks import BackgroundTask, run_in_background
+from pcims.app.tasks import BackgroundTask, TaskManager
 
 
 class AsyncCommandPage(QWidget):
     """A page that runs at most one blocking mutation outside the GUI thread."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        tasks: TaskManager | None = None,
+    ) -> None:
         super().__init__(parent)
+        self.tasks = tasks or TaskManager(self)
         self._command_task: BackgroundTask[object] | None = None
 
     @property
@@ -28,7 +33,7 @@ class AsyncCommandPage(QWidget):
         if self._command_task is not None:
             return False
         self.setEnabled(False)
-        self._command_task = run_in_background(
+        self._command_task = self.tasks.run(
             operation,
             lambda _result: self._command_succeeded(on_success),
             lambda error: self._command_failed(error_title, error),
