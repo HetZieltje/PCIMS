@@ -24,7 +24,6 @@ from pcims.app.async_page import AsyncCommandPage
 from pcims.app.common import show_error
 from pcims.app.formatting import (
     allocate_cents,
-    cents_as_decimal,
     format_cents,
     parse_money_cents,
 )
@@ -34,7 +33,7 @@ from pcims.app.table_model import (
     configure_table_view,
     selected_ids,
 )
-from pcims.domain import ITEM_TYPES, ItemType, PurchaseInput
+from pcims.domain import ITEM_TYPES, ItemType, NewExpense
 from pcims.services import ApplicationServices, PurchasesSnapshot, default_services
 
 
@@ -200,13 +199,13 @@ class PurchasesPage(AsyncCommandPage):
                 self, "Nothing to record", "Add at least one item first."
             )
             return
-        items: list[PurchaseInput] = [
-            {
-                "name": item["name"],
-                "item_type": item["item_type"],
-                "price": cents_as_decimal(item["price_cents"]),
-                "purchase_date": item["purchase_date"],
-            }
+        items = [
+            NewExpense(
+                item["name"],
+                item["item_type"],
+                item["price_cents"],
+                item["purchase_date"],
+            )
             for item in self._staged
         ]
         count = len(items)

@@ -223,7 +223,7 @@ class InventoryPage(AsyncCommandPage):
         if values is None:
             return
         self.run_command(
-            lambda: self.services.sell_items([part.id for part in parts], *values),
+            lambda: self.services.sell_items([part.id for part in parts], values),
             self.data_changed.emit,
             "Unable to sell items",
         )
@@ -274,7 +274,7 @@ class InventoryPage(AsyncCommandPage):
         if values is None:
             return
         self.run_command(
-            lambda: self.services.sell_pc(pc.id, *values),
+            lambda: self.services.sell_pc(pc.id, values),
             self.data_changed.emit,
             "Unable to sell PC",
         )

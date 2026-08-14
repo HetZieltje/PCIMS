@@ -65,6 +65,16 @@ class ArchitectureTests(unittest.TestCase):
                 self.assertNotIn("from pcims.db.queries import", source)
                 self.assertNotIn("from pcims.db.backup import create_backup", source)
 
+    def test_service_commands_are_typed_and_normalized_outside_sql_workflows(self):
+        root = Path(__file__).parents[1] / "pcims"
+        services = (root / "services.py").read_text(encoding="utf-8")
+        queries = (root / "db" / "queries.py").read_text(encoding="utf-8")
+        self.assertNotIn("PurchaseInput", services)
+        self.assertNotIn("Iterable[object]", services)
+        self.assertNotIn("selling_price: object", services)
+        self.assertNotIn("def _money_cents", queries)
+        self.assertNotIn("def _iso_date", queries)
+
     def test_flat_application_grids_use_model_view_not_cell_widgets(self):
         pages = Path(__file__).parents[1] / "pcims" / "app" / "pages"
         for path in pages.glob("*.py"):

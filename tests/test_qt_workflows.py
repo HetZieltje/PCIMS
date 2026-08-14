@@ -6,7 +6,6 @@ import threading
 import time
 import unittest
 from datetime import date
-from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -32,6 +31,7 @@ from pcims.app.table_model import (
 from pcims.app.tasks import run_in_background
 from pcims.db.backup import BackupResult
 from pcims.db.connection import Database
+from pcims.domain import NewExpense, SaleTerms
 from pcims.services import ApplicationServices
 
 TEST_DATE = date(2026, 8, 14)
@@ -89,14 +89,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def purchase(self, name, item_type, price):
         return self.services.add_expenses(
-            [
-                {
-                    "name": name,
-                    "item_type": item_type,
-                    "price": price,
-                    "purchase_date": TEST_DATE,
-                }
-            ]
+            [NewExpense.create(name, item_type, price, TEST_DATE)]
         )[0]
 
     def test_main_window_constructs_and_refreshes_every_page(self):
@@ -583,14 +576,7 @@ class QtWorkflowTests(unittest.TestCase):
         services = ApplicationServices(Database.at(isolated_database))
         services.initialize()
         services.add_expenses(
-            [
-                {
-                    "name": "Injected item",
-                    "item_type": "Extra",
-                    "price": 1,
-                    "purchase_date": TEST_DATE,
-                }
-            ]
+            [NewExpense.create("Injected item", "Extra", 1, TEST_DATE)]
         )
         other_database = Path(self.temporary_directory.name) / "other.db"
         other_services = ApplicationServices(Database.at(other_database))
@@ -806,7 +792,7 @@ class QtWorkflowTests(unittest.TestCase):
         inventory.parts_table.selectAll()
         with patch(
             "pcims.app.pages.inventory.SaleDialog.get_sale",
-            return_value=(Decimal("20.00"), TEST_DATE),
+            return_value=SaleTerms.create("20.00", TEST_DATE),
         ):
             inventory.sell_selected_parts()
         self.wait_for_page(inventory)
@@ -903,7 +889,7 @@ class QtWorkflowTests(unittest.TestCase):
         inventory.pc_table.selectRow(0)
         with patch(
             "pcims.app.pages.inventory.SaleDialog.get_sale",
-            return_value=(Decimal("200.00"), TEST_DATE),
+            return_value=SaleTerms.create("200.00", TEST_DATE),
         ):
             inventory.sell_selected_pc()
         self.wait_for_page(inventory)

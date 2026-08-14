@@ -27,7 +27,7 @@ from pcims.db.queries import (
     undo_sale,
 )
 from pcims.db.schema import initialize_database
-from pcims.domain import PurchaseInput
+from pcims.domain import ItemType, NewExpense, SaleTerms
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +94,7 @@ class ApplicationServices:
                 queries.list_sales(),
             )
 
-    def add_expenses(self, items: Iterable[PurchaseInput]) -> list[int]:
+    def add_expenses(self, items: Iterable[NewExpense]) -> list[int]:
         with self.database.gate.shared():
             return add_expenses(items, database=self.database)
 
@@ -103,22 +103,22 @@ class ApplicationServices:
             return list_expenses(database=self.database)
 
     def list_inventory(
-        self, item_type: object | None = None, available_only: bool = False
+        self, item_type: ItemType | None = None, available_only: bool = False
     ) -> tuple[Expense, ...]:
         with self.database.gate.shared():
             return list_inventory(item_type, available_only, database=self.database)
 
-    def delete_expenses(self, expense_ids: Iterable[object]) -> None:
+    def delete_expenses(self, expense_ids: Iterable[int]) -> None:
         with self.database.gate.shared():
             delete_expenses(expense_ids, database=self.database)
 
     def rename_expenses(
-        self, expense_ids: Iterable[object], new_name: object
+        self, expense_ids: Iterable[int], new_name: str
     ) -> None:
         with self.database.gate.shared():
             rename_expenses(expense_ids, new_name, database=self.database)
 
-    def assemble_pc(self, name: object, expense_ids: Iterable[object]) -> int:
+    def assemble_pc(self, name: str, expense_ids: Iterable[int]) -> int:
         with self.database.gate.shared():
             return assemble_pc(name, expense_ids, database=self.database)
 
@@ -126,39 +126,35 @@ class ApplicationServices:
         with self.database.gate.shared():
             return list_pcs(database=self.database)
 
-    def disassemble_pc(self, pc_id: object) -> None:
+    def disassemble_pc(self, pc_id: int) -> None:
         with self.database.gate.shared():
             disassemble_pc(pc_id, database=self.database)
 
-    def rename_pc(self, pc_id: object, new_name: object) -> None:
+    def rename_pc(self, pc_id: int, new_name: str) -> None:
         with self.database.gate.shared():
             rename_pc(pc_id, new_name, database=self.database)
 
     def sell_items(
         self,
-        expense_ids: Iterable[object],
-        selling_price: object,
-        sale_date: object | None = None,
+        expense_ids: Iterable[int],
+        terms: SaleTerms,
     ) -> int:
         with self.database.gate.shared():
-            return sell_items(
-                expense_ids, selling_price, sale_date, database=self.database
-            )
+            return sell_items(expense_ids, terms, database=self.database)
 
     def sell_pc(
         self,
-        pc_id: object,
-        selling_price: object,
-        sale_date: object | None = None,
+        pc_id: int,
+        terms: SaleTerms,
     ) -> int:
         with self.database.gate.shared():
-            return sell_pc(pc_id, selling_price, sale_date, database=self.database)
+            return sell_pc(pc_id, terms, database=self.database)
 
     def list_sales(self) -> tuple[Sale, ...]:
         with self.database.gate.shared():
             return list_sales(database=self.database)
 
-    def undo_sale(self, sale_id: object) -> None:
+    def undo_sale(self, sale_id: int) -> None:
         with self.database.gate.shared():
             undo_sale(sale_id, database=self.database)
 

@@ -28,6 +28,7 @@ from pcims.db.queries import (
     list_sales,
 )
 from pcims.db.schema import SCHEMA_DEFINITIONS, SCHEMA_VERSION, initialize_database
+from pcims.domain import NewExpense, SaleTerms
 from pcims.money import MAX_MONEY_CENTS
 from pcims.services import ApplicationServices
 
@@ -72,14 +73,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
                     add_expenses,
-                    [
-                        {
-                            "name": "Concurrent",
-                            "item_type": "Extra",
-                            "price": 1,
-                            "purchase_date": TEST_DATE,
-                        }
-                    ],
+                    [NewExpense.create("Concurrent", "Extra", 1, TEST_DATE)],
                     database=active_database,
                 )
                 future.result(timeout=2)
@@ -190,14 +184,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def buy(self, name, item_type, price, purchase_date=None):
         return self.services.add_expenses(
-            [
-                {
-                    "name": name,
-                    "item_type": item_type,
-                    "price": price,
-                    "purchase_date": purchase_date,
-                }
-            ]
+            [NewExpense.create(name, item_type, price, purchase_date)]
         )[0]
 
     def test_schema_contains_only_authoritative_current_tables_and_columns(self):
@@ -368,16 +355,16 @@ class DatabaseWorkflowTests(unittest.TestCase):
         for invalid_price in ("1.9999", "1000000000"):
             with (
                 self.subTest(invalid_price=invalid_price),
-                self.assertRaises(ValidationError),
+                self.assertRaises(ValueError),
             ):
                 self.buy("Invalid", "Extra", invalid_price)
 
     def test_purchase_bundle_is_atomic(self):
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(ValueError):
             self.services.add_expenses(
                 [
-                    {"name": "CPU", "item_type": "CPU", "price": 10},
-                    {"name": "Bad", "item_type": "Not a component", "price": 5},
+                    NewExpense.create("CPU", "CPU", 10),
+                    NewExpense.create("Bad", "Not a component", 5),
                 ]
             )
         self.assertEqual(self.services.list_expenses(), ())
@@ -417,8 +404,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.services.assemble_pc("PC 1", pc_parts[:2])
         self.services.assemble_pc("PC 2", pc_parts[2:])
         sale_items = [self.buy(f"Sale item {index}", "Extra", 5) for index in range(2)]
-        self.services.sell_items([sale_items[0]], 10)
-        self.services.sell_items([sale_items[1]], 10)
+        self.services.sell_items([sale_items[0]], SaleTerms.create(10))
+        self.services.sell_items([sale_items[1]], SaleTerms.create(10))
 
         for listing in (list_pcs, list_sales):
             statements = []
@@ -447,7 +434,9 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def test_standalone_group_sale_is_one_record_and_undo_restores_all(self):
         ids = [self.buy("Fan", "Fan", 10) for _ in range(3)]
-        sale_id = self.services.sell_items(ids, "100.00", TEST_DATE)
+        sale_id = self.services.sell_items(
+            ids, SaleTerms.create("100.00", TEST_DATE)
+        )
 
         sale = self.services.list_sales()[0]
         self.assertEqual(sale.id, sale_id)
@@ -471,7 +460,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.buy("RAM", "RAM", 45),
         ]
         pc_id = self.services.assemble_pc("PC 1", ids)
-        sale_id = self.services.sell_pc(pc_id, 250, TEST_DATE)
+        sale_id = self.services.sell_pc(pc_id, SaleTerms.create(250, TEST_DATE))
 
         self.assertEqual(self.services.list_pcs(), ())
         self.assertEqual(
@@ -488,7 +477,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         ids = [self.buy("Expensive", "Extra", price) for _ in range(2)]
 
         with self.assertRaisesRegex(ValidationError, "Combined item cost"):
-            self.services.sell_items(ids, 1)
+            self.services.sell_items(ids, SaleTerms.create(1))
 
         self.assertEqual(self.services.list_sales(), ())
         self.assertTrue(
@@ -497,7 +486,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         pc_id = self.services.assemble_pc("Expensive PC", ids)
         with self.assertRaisesRegex(ValidationError, "Combined PC cost"):
-            self.services.sell_pc(pc_id, 1)
+            self.services.sell_pc(pc_id, SaleTerms.create(1))
         self.assertEqual([pc.id for pc in self.services.list_pcs()], [pc_id])
         self.assertEqual(self.services.list_sales(), ())
         validate_database(self.database_path)
@@ -510,7 +499,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "already exists"):
             self.services.assemble_pc(" gaming pc ", [spare_id])
 
-        sale_id = self.services.sell_pc(pc_id, 120)
+        sale_id = self.services.sell_pc(pc_id, SaleTerms.create(120))
         self.services.assemble_pc("GAMING PC", [spare_id])
         with self.assertRaisesRegex(ValidationError, "Cannot undo"):
             self.services.undo_sale(sale_id)
@@ -522,7 +511,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
     def test_pc_undo_name_collision_has_no_partial_effect(self):
         old_id = self.buy("Old CPU", "CPU", 100)
         sale_id = self.services.sell_pc(
-            self.services.assemble_pc("PC 1", [old_id]), 125
+            self.services.assemble_pc("PC 1", [old_id]), SaleTerms.create(125)
         )
         new_id = self.buy("New CPU", "CPU", 80)
         self.services.assemble_pc("PC 1", [new_id])
@@ -538,7 +527,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         ids = [self.buy("CPU", "CPU", 100, tomorrow), self.buy("RAM", "RAM", 50)]
 
         with self.assertRaisesRegex(ValidationError, "purchase date"):
-            self.services.sell_items(ids, 200, TEST_DATE)
+            self.services.sell_items(ids, SaleTerms.create(200, TEST_DATE))
 
         self.assertEqual(self.services.list_sales(), ())
         self.assertEqual(
@@ -571,7 +560,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
     def test_financial_summary_uses_current_inventory_and_realized_sales(self):
         sold_id = self.buy("Sold", "Extra", 25)
         self.buy("Stock", "Extra", 40)
-        self.services.sell_items([sold_id], 50)
+        self.services.sell_items([sold_id], SaleTerms.create(50))
 
         summary = self.services.financial_summary()
         self.assertEqual(summary.expense_cents, 6500)
@@ -603,27 +592,13 @@ class DatabaseWorkflowTests(unittest.TestCase):
         services = ApplicationServices(database)
         services.initialize()
         old_id = services.add_expenses(
-            [
-                {
-                    "name": "Old state",
-                    "item_type": "CPU",
-                    "price": 10,
-                    "purchase_date": TEST_DATE,
-                }
-            ]
+            [NewExpense.create("Old state", "CPU", 10, TEST_DATE)]
         )[0]
         backup = create_backup(
             special_directory / "backups #1%", database=database
         )
         services.add_expenses(
-            [
-                {
-                    "name": "New state",
-                    "item_type": "RAM",
-                    "price": 20,
-                    "purchase_date": TEST_DATE,
-                }
-            ]
+            [NewExpense.create("New state", "RAM", 20, TEST_DATE)]
         )
 
         restore_backup(backup, database=database)

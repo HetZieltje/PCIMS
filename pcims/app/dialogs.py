@@ -1,7 +1,6 @@
 """Reusable Qt dialogs for PCIMS workflows."""
 
 from datetime import date
-from decimal import Decimal
 from typing import cast
 
 from PySide6.QtCore import QDate
@@ -16,7 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pcims.app.formatting import cents_as_decimal, parse_money_cents
+from pcims.app.formatting import parse_money_cents
+from pcims.domain import SaleTerms
 
 
 class SaleDialog(QDialog):
@@ -60,10 +60,11 @@ class SaleDialog(QDialog):
     @classmethod
     def get_sale(
         cls, item_name: str, parent: QWidget | None = None
-    ) -> tuple[Decimal, date] | None:
+    ) -> SaleTerms | None:
         dialog = cls(item_name, parent)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
-        return cents_as_decimal(dialog._amount_cents), cast(
-            date, dialog.sale_date.date().toPython()
+        return SaleTerms(
+            dialog._amount_cents,
+            cast(date, dialog.sale_date.date().toPython()),
         )

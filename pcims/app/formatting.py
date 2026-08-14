@@ -6,14 +6,9 @@ from pcims.money import parse_money_cents
 
 __all__ = (
     "allocate_cents",
-    "cents_as_decimal",
     "format_cents",
     "parse_money_cents",
 )
-
-
-def cents_as_decimal(cents: int) -> Decimal:
-    return Decimal(int(cents)) / 100
 
 
 def format_cents(cents: int) -> str:

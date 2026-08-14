@@ -4,14 +4,22 @@ import sqlite3
 from collections.abc import Iterable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import cast
 
 from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
-from pcims.domain import ITEM_TYPES, ItemType, PurchaseInput, SaleKind
-from pcims.money import MAX_MONEY_CENTS, parse_money_cents
+from pcims.domain import (
+    ItemType,
+    NewExpense,
+    SaleKind,
+    SaleTerms,
+    normalized_id,
+    normalized_ids,
+    normalized_text,
+)
+from pcims.money import MAX_MONEY_CENTS
 
 
 def _transaction(
@@ -21,44 +29,24 @@ def _transaction(
 
 
 def _text(value: object, label: str) -> str:
-    normalized = str(value).strip() if value is not None else ""
-    if not normalized:
-        raise ValidationError(f"{label} cannot be blank.")
-    return normalized
-
-
-def _item_type(value: object) -> ItemType:
-    normalized = _text(value, "Item type").casefold()
-    for item_type in ITEM_TYPES:
-        if item_type.casefold() == normalized:
-            return item_type
-    raise ValidationError(f"Item type must be one of: {', '.join(ITEM_TYPES)}.")
-
-
-def _money_cents(value: object, label: str = "Price") -> int:
     try:
-        return parse_money_cents(value, label)
-    except ValueError as exc:
-        raise ValidationError(str(exc)) from exc
+        return normalized_text(value, label)
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
 
 
 def _positive_id(value: object, label: str = "ID") -> int:
     try:
-        parsed = int(str(value).strip())
-    except (TypeError, ValueError) as exc:
-        raise ValidationError(f"{label} must be a positive integer.") from exc
-    if parsed <= 0:
-        raise ValidationError(f"{label} must be a positive integer.")
-    return parsed
+        return normalized_id(value, label)
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
 
 
 def _unique_ids(values: Iterable[object], label: str) -> list[int]:
-    ids = [_positive_id(value, label) for value in values]
-    if not ids:
-        raise ValidationError(f"At least one {label.lower()} is required.")
-    if len(ids) != len(set(ids)):
-        raise ValidationError(f"Duplicate {label.lower()} values are not allowed.")
-    return ids
+    try:
+        return list(normalized_ids(values, label))
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
 
 
 def _bounded_cents_total(values: Iterable[int], label: str) -> int:
@@ -80,19 +68,6 @@ def _find_pc_name_collision(
         ),
         None,
     )
-
-
-def _iso_date(value: object | None) -> str:
-    if value is None:
-        return datetime.now(UTC).astimezone().date().isoformat()
-    if isinstance(value, datetime):
-        value = value.date()
-    if isinstance(value, date):
-        return value.isoformat()
-    try:
-        return date.fromisoformat(str(value).strip()).isoformat()
-    except (TypeError, ValueError) as exc:
-        raise ValidationError("Date must use the YYYY-MM-DD format.") from exc
 
 
 def _expense_from_row(row: sqlite3.Row) -> Expense:
@@ -136,13 +111,13 @@ class ReadQueries:
         return tuple(_expense_from_row(row) for row in rows)
 
     def list_inventory(
-        self, item_type: object | None = None, available_only: bool = False
+        self, item_type: ItemType | None = None, available_only: bool = False
     ) -> tuple[Expense, ...]:
         clauses = ["si.sale_id IS NULL"]
         parameters: list[object] = []
         if item_type is not None:
             clauses.append("e.item_type=?")
-            parameters.append(_item_type(item_type))
+            parameters.append(item_type)
         if available_only:
             clauses.append("p.id IS NULL")
         sql = (
@@ -218,29 +193,26 @@ class ReadQueries:
 
 
 def add_expenses(
-    items: Iterable[PurchaseInput], *, database: Database
+    items: Iterable[NewExpense], *, database: Database
 ) -> list[int]:
     """Record one or more purchased items atomically."""
-    normalized = [
-        (
-            _text(item["name"], "Item name"),
-            _item_type(item["item_type"]),
-            _money_cents(item["price"], "Price"),
-            _iso_date(item.get("purchase_date")),
-        )
-        for item in items
-    ]
-    if not normalized:
+    expenses = tuple(items)
+    if not expenses:
         raise ValidationError("At least one purchase item is required.")
     with _transaction(database, write=True) as connection:
         return [
             _insert_id(
                 connection.execute(
                     "INSERT INTO expenses (name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
-                    item,
+                    (
+                        expense.name,
+                        expense.item_type,
+                        expense.price_cents,
+                        expense.purchase_date.isoformat(),
+                    ),
                 )
             )
-            for item in normalized
+            for expense in expenses
         ]
 
 
@@ -250,7 +222,7 @@ def list_expenses(*, database: Database) -> tuple[Expense, ...]:
 
 
 def list_inventory(
-    item_type: object | None = None,
+    item_type: ItemType | None = None,
     available_only: bool = False,
     *,
     database: Database,
@@ -260,7 +232,7 @@ def list_inventory(
 
 
 def delete_expenses(
-    expense_ids: Iterable[object], *, database: Database
+    expense_ids: Iterable[int], *, database: Database
 ) -> None:
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
@@ -287,8 +259,8 @@ def delete_expenses(
 
 
 def rename_expenses(
-    expense_ids: Iterable[object],
-    new_name: object,
+    expense_ids: Iterable[int],
+    new_name: str,
     *,
     database: Database,
 ) -> None:
@@ -311,8 +283,8 @@ def rename_expenses(
 
 
 def assemble_pc(
-    name: object,
-    expense_ids: Iterable[object],
+    name: str,
+    expense_ids: Iterable[int],
     *,
     database: Database,
 ) -> int:
@@ -346,7 +318,7 @@ def list_pcs(*, database: Database) -> tuple[AssembledPC, ...]:
         return ReadQueries(connection).list_pcs()
 
 
-def disassemble_pc(pc_id: object, *, database: Database) -> None:
+def disassemble_pc(pc_id: int, *, database: Database) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
     with _transaction(database, write=True) as connection:
         result = connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
@@ -355,7 +327,7 @@ def disassemble_pc(pc_id: object, *, database: Database) -> None:
 
 
 def rename_pc(
-    pc_id: object, new_name: object, *, database: Database
+    pc_id: int, new_name: str, *, database: Database
 ) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
     new_name = _text(new_name, "New PC name")
@@ -379,15 +351,13 @@ def _validate_sale_date(rows: Iterable[sqlite3.Row], sale_day: str) -> None:
 
 
 def sell_items(
-    expense_ids: Iterable[object],
-    selling_price: object,
-    sale_date: object | None = None,
+    expense_ids: Iterable[int],
+    terms: SaleTerms,
     *,
     database: Database,
 ) -> int:
     ids = _unique_ids(expense_ids, "Expense ID")
-    selling_cents = _money_cents(selling_price, "Selling price")
-    sale_day = _iso_date(sale_date)
+    sale_day = terms.sale_date.isoformat()
     placeholders = ",".join("?" for _ in ids)
     with _transaction(database, write=True) as connection:
         rows = connection.execute(
@@ -407,7 +377,7 @@ def sell_items(
         sale_id = _insert_id(
             connection.execute(
                 "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'item',?,?,?)",
-                (name, cost_cents, selling_cents, sale_day),
+                (name, cost_cents, terms.selling_price_cents, sale_day),
             )
         )
         connection.executemany(
@@ -421,15 +391,13 @@ def sell_items(
 
 
 def sell_pc(
-    pc_id: object,
-    selling_price: object,
-    sale_date: object | None = None,
+    pc_id: int,
+    terms: SaleTerms,
     *,
     database: Database,
 ) -> int:
     pc_id = _positive_id(pc_id, "PC ID")
-    selling_cents = _money_cents(selling_price, "Selling price")
-    sale_day = _iso_date(sale_date)
+    sale_day = terms.sale_date.isoformat()
     with _transaction(database, write=True) as connection:
         pc = connection.execute(
             "SELECT id,name FROM assembled_pcs WHERE id=?", (pc_id,)
@@ -450,7 +418,7 @@ def sell_pc(
         sale_id = _insert_id(
             connection.execute(
                 "INSERT INTO sales (name,kind,cost_cents,selling_price_cents,sale_date) VALUES (?,'pc',?,?,?)",
-                (pc["name"], cost_cents, selling_cents, sale_day),
+                (pc["name"], cost_cents, terms.selling_price_cents, sale_day),
             )
         )
         connection.executemany(
@@ -468,7 +436,7 @@ def list_sales(*, database: Database) -> tuple[Sale, ...]:
         return ReadQueries(connection).list_sales()
 
 
-def undo_sale(sale_id: object, *, database: Database) -> None:
+def undo_sale(sale_id: int, *, database: Database) -> None:
     sale_id = _positive_id(sale_id, "Sale ID")
     with _transaction(database, write=True) as connection:
         sale = connection.execute(
