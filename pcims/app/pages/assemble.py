@@ -24,10 +24,11 @@ class AssemblePage(AsyncCommandPage):
     def __init__(
         self,
         services: ApplicationServices,
+        *,
+        tasks: TaskManager,
         parent: QWidget | None = None,
-        tasks: TaskManager | None = None,
     ) -> None:
-        super().__init__(parent, tasks)
+        super().__init__(tasks, parent)
         self.services = services
         self.name = QLineEdit()
         self.name.setMaximumWidth(360)

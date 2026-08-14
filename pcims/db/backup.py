@@ -1,5 +1,6 @@
 """Verified backup and atomic restore for the current PCIMS schema."""
 
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -53,6 +54,13 @@ def _sync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _backup_prefix(database: Database) -> str:
+    """Return a stable, non-identifying retention namespace for one database."""
+    identity = os.path.normcase(str(database.path)).encode("utf-8")
+    digest = hashlib.sha256(identity).hexdigest()[:12]
+    return f"pcims_{digest}_"
+
+
 def _remove_temporary(path: Path, primary_error: BaseException | None) -> None:
     if not path.exists():
         return
@@ -102,7 +110,8 @@ def _create_backup(
     )
     destination.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
-    final_path = destination / f"pcims_{stamp}.db"
+    prefix = _backup_prefix(database)
+    final_path = destination / f"{prefix}{stamp}.db"
     temporary_path = final_path.with_suffix(".tmp")
     primary_error: BaseException | None = None
     try:
@@ -122,7 +131,7 @@ def _create_backup(
 
     cleanup_errors: list[str] = []
     try:
-        backups = sorted(destination.glob("pcims_*.db"), reverse=True)
+        backups = sorted(destination.glob(f"{prefix}*.db"), reverse=True)
     except OSError as error:
         cleanup_errors.append(
             f"Unable to inspect old backups in {destination}: {error}"

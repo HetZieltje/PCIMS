@@ -28,13 +28,14 @@ class SettingsPage(QWidget):
     def __init__(
         self,
         services: ApplicationServices,
+        *,
+        tasks: TaskManager,
         theme: str = "system",
         has_pending_changes: Callable[[], bool] | None = None,
         parent: QWidget | None = None,
-        tasks: TaskManager | None = None,
     ) -> None:
         super().__init__(parent)
-        self.tasks = tasks or TaskManager(self)
+        self.tasks = tasks
         self.services = services
         self._has_pending_changes = has_pending_changes or (lambda: False)
         database_path = self.services.database_path

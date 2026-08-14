@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
         self.sales_page = SalesPage(self.services, tasks=self.tasks)
         self.settings_page = SettingsPage(
             self.services,
-            self.window_state.theme,
+            theme=self.window_state.theme,
             has_pending_changes=lambda: self.purchases_page.has_staged_items,
             tasks=self.tasks,
         )

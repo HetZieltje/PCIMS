@@ -13,11 +13,11 @@ class AsyncCommandPage(QWidget):
 
     def __init__(
         self,
+        tasks: TaskManager,
         parent: QWidget | None = None,
-        tasks: TaskManager | None = None,
     ) -> None:
         super().__init__(parent)
-        self.tasks = tasks or TaskManager(self)
+        self.tasks = tasks
         self._command_task: BackgroundTask[object] | None = None
 
     @property

@@ -46,10 +46,11 @@ class InventoryPage(AsyncCommandPage):
     def __init__(
         self,
         services: ApplicationServices,
+        *,
+        tasks: TaskManager,
         parent: QWidget | None = None,
-        tasks: TaskManager | None = None,
     ) -> None:
-        super().__init__(parent, tasks)
+        super().__init__(tasks, parent)
         self.services = services
         self._all_parts: tuple[Expense, ...] = ()
         self._parts: dict[int, Expense] = {}

@@ -130,6 +130,8 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("run_in_background", source)
         self.assertIn("class TaskManager", source)
         self.assertIn("became_idle = Signal()", source)
+        self.assertNotIn("tasks: TaskManager | None", source)
+        self.assertNotIn("tasks or TaskManager", source)
         self.assertIn("bind_refresh(", main_window)
         self.assertIn("class RefreshCoordinator", refresh)
         self.assertNotIn("class RefreshState", main_window)
@@ -178,6 +180,9 @@ class ArchitectureTests(unittest.TestCase):
             self.assertIn("pyside6==", lock)
         self.assertIn("--require-hashes -r requirements-dev.lock", workflow)
         self.assertIn("python -m pip check", workflow)
+        self.assertIn("permissions:\n  contents: read", workflow)
+        self.assertNotIn("actions/checkout@v", workflow)
+        self.assertNotIn("actions/setup-python@v", workflow)
 
     def test_purchase_staging_uses_immutable_domain_records(self):
         purchases = (

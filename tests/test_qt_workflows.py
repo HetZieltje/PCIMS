@@ -72,6 +72,7 @@ class QtWorkflowTests(unittest.TestCase):
         )
         self.services = ApplicationServices(self.database)
         self.services.initialize()
+        self.tasks = TaskManager()
 
     def tearDown(self):
         self.application.processEvents()
@@ -135,10 +136,10 @@ class QtWorkflowTests(unittest.TestCase):
     def test_page_construction_performs_no_database_io(self):
         services = MagicMock(spec=ApplicationServices)
         pages = (
-            InventoryPage(services),
-            PurchasesPage(services),
-            AssemblePage(services),
-            SalesPage(services),
+            InventoryPage(services, tasks=self.tasks),
+            PurchasesPage(services, tasks=self.tasks),
+            AssemblePage(services, tasks=self.tasks),
+            SalesPage(services, tasks=self.tasks),
         )
 
         self.assertEqual(services.mock_calls, [])
@@ -187,7 +188,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_inventory_filters_use_loaded_data_without_database_queries(self):
         self.purchase("Case fan", "Fan", 10)
-        page = InventoryPage(self.services)
+        page = InventoryPage(self.services, tasks=self.tasks)
         page.refresh()
         with (
             patch("pcims.services.ApplicationServices.list_inventory") as inventory_query,
@@ -241,7 +242,7 @@ class QtWorkflowTests(unittest.TestCase):
         second.deleteLater()
 
     def test_purchase_page_allocates_quantity_total_and_commits(self):
-        page = PurchasesPage(self.services)
+        page = PurchasesPage(self.services, tasks=self.tasks)
         page.refresh()
         page.name.setText("Case fan")
         page.type.setCurrentText("Fan")
@@ -265,7 +266,7 @@ class QtWorkflowTests(unittest.TestCase):
         page.deleteLater()
 
     def test_purchase_page_reports_database_failure_without_losing_staged_work(self):
-        page = PurchasesPage(self.services)
+        page = PurchasesPage(self.services, tasks=self.tasks)
         page.refresh()
         page.name.setText("Case fan")
         page.type.setCurrentText("Fan")
@@ -290,7 +291,7 @@ class QtWorkflowTests(unittest.TestCase):
         page.deleteLater()
 
     def test_expected_domain_conflict_is_reported_without_crash_traceback(self):
-        page = PurchasesPage(self.services)
+        page = PurchasesPage(self.services, tasks=self.tasks)
         page.name.setText("Conflicting item")
         page.price.setText("1.00")
         page.add_line()
@@ -707,7 +708,7 @@ class QtWorkflowTests(unittest.TestCase):
         other_services = ApplicationServices(Database.at(other_database))
         other_services.initialize()
 
-        page = InventoryPage(services)
+        page = InventoryPage(services, tasks=self.tasks)
         page.refresh()
         self.assertEqual(page.parts_model.rowCount(), 1)
         self.assertEqual(page.parts_model.index(0, 1).data(), "Injected item")
@@ -819,7 +820,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.deleteLater()
 
     def test_database_mutation_keeps_the_qt_event_loop_responsive(self):
-        page = PurchasesPage(self.services)
+        page = PurchasesPage(self.services, tasks=self.tasks)
         page.name.setText("Slow item")
         page.price.setText("1.00")
         page.add_line()
@@ -891,7 +892,7 @@ class QtWorkflowTests(unittest.TestCase):
             self.purchase("RAM", "RAM", 40),
             self.purchase("RAM", "RAM", 45),
         ]
-        page = AssemblePage(self.services)
+        page = AssemblePage(self.services, tasks=self.tasks)
         page.refresh()
         page.name.setText("Linux workstation")
         checked = self.check_all_assembly_parts(page)
@@ -906,7 +907,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_inventory_sale_and_sales_page_undo_workflow(self):
         ids = [self.purchase("Cable", "Extra", 5), self.purchase("Cable", "Extra", 6)]
-        inventory = InventoryPage(self.services)
+        inventory = InventoryPage(self.services, tasks=self.tasks)
         inventory.refresh()
         inventory.parts_table.selectAll()
         with patch(
@@ -919,7 +920,7 @@ class QtWorkflowTests(unittest.TestCase):
         sale = self.services.list_sales()[0]
         self.assertEqual({item.id for item in sale.items}, set(ids))
 
-        sales = SalesPage(self.services)
+        sales = SalesPage(self.services, tasks=self.tasks)
         sales.refresh()
         self.assertEqual(sales.summary_labels["cash"].text(), "€9.00")
         self.assertNotIn("assets", sales.summary_labels)
@@ -939,7 +940,7 @@ class QtWorkflowTests(unittest.TestCase):
         cpu_id = self.purchase("CPU", "CPU", 100)
         spare_id = self.purchase("Spare cable", "Extra", 5)
 
-        inventory = InventoryPage(self.services)
+        inventory = InventoryPage(self.services, tasks=self.tasks)
         inventory.refresh()
         inventory.parts_table.selectRow(0)
         with patch(
@@ -964,7 +965,7 @@ class QtWorkflowTests(unittest.TestCase):
             [item.id for item in self.services.list_expenses()], [cpu_id]
         )
 
-        assemble = AssemblePage(self.services)
+        assemble = AssemblePage(self.services, tasks=self.tasks)
         assemble.refresh()
         assemble.name.setText("Test PC")
         self.check_all_assembly_parts(assemble)
@@ -993,14 +994,14 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_pc_sale_and_undo_through_qt_pages(self):
         ids = [self.purchase("CPU", "CPU", 100), self.purchase("RAM", "RAM", 50)]
-        assemble = AssemblePage(self.services)
+        assemble = AssemblePage(self.services, tasks=self.tasks)
         assemble.refresh()
         assemble.name.setText("PC 1")
         self.check_all_assembly_parts(assemble)
         assemble.assemble()
         self.wait_for_page(assemble)
 
-        inventory = InventoryPage(self.services)
+        inventory = InventoryPage(self.services, tasks=self.tasks)
         inventory.refresh()
         inventory.pc_table.selectRow(0)
         with patch(
@@ -1015,7 +1016,7 @@ class QtWorkflowTests(unittest.TestCase):
             {item.id for item in self.services.list_sales()[0].items}, set(ids)
         )
 
-        sales = SalesPage(self.services)
+        sales = SalesPage(self.services, tasks=self.tasks)
         sales.refresh()
         sales.sale_table.selectRow(0)
         with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):

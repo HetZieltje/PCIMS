@@ -717,6 +717,23 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(result.has_cleanup_warnings)
         self.assertIn("simulated directory scan failure", result.cleanup_warning)
 
+    def test_backup_retention_never_deletes_another_database_generation(self):
+        shared_directory = Path(self.temporary_directory.name) / "shared-backups"
+        first = create_backup(shared_directory, keep=1, database=self.database)
+        other_database = Database.at(
+            Path(self.temporary_directory.name) / "other-inventory.db"
+        )
+        initialize_database(other_database)
+        other_first = create_backup(shared_directory, keep=1, database=other_database)
+
+        create_backup(shared_directory, keep=1, database=self.database)
+
+        self.assertFalse(first.path.exists())
+        self.assertTrue(other_first.path.exists())
+        self.assertNotEqual(
+            first.path.name.split("_")[1], other_first.path.name.split("_")[1]
+        )
+
     def test_backup_flushes_file_and_directory_around_atomic_publish(self):
         self.buy("Keep", "CPU", 10)
         backup_directory = Path(self.temporary_directory.name) / "durable-backups"

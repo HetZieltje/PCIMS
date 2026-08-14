@@ -38,10 +38,11 @@ class SalesPage(AsyncCommandPage):
     def __init__(
         self,
         services: ApplicationServices,
+        *,
+        tasks: TaskManager,
         parent: QWidget | None = None,
-        tasks: TaskManager | None = None,
     ) -> None:
-        super().__init__(parent, tasks)
+        super().__init__(tasks, parent)
         self.services = services
         self._sales: dict[int, Sale] = {}
         self.summary_labels: dict[str, QLabel] = {}
