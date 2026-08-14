@@ -21,12 +21,19 @@ class DatabaseGate:
 
     def __init__(self) -> None:
         self._condition = threading.Condition(threading.Lock())
+        self._maintenance_lock = threading.RLock()
         self._readers = 0
         self._reader_depth: dict[int, int] = {}
         self._writer_active = False
         self._writer_thread_id: int | None = None
         self._writer_depth = 0
         self._writers_waiting = 0
+
+    @contextmanager
+    def maintenance(self) -> Iterator[None]:
+        """Serialize backup-directory work while permitting ordinary concurrency."""
+        with self._maintenance_lock:
+            yield
 
     @contextmanager
     def shared(self) -> Iterator[None]:

@@ -164,6 +164,40 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.assertEqual(second.result(timeout=2), result)
             self.assertTrue(restore_started.is_set())
 
+    def test_two_direct_backups_are_serialized_through_retention_cleanup(self):
+        first_started = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
+        result = BackupResult(self.database_path)
+        call_count = 0
+        call_lock = threading.Lock()
+
+        def observed_backup(*_args, **_kwargs):
+            nonlocal call_count
+            with call_lock:
+                call_count += 1
+                current_call = call_count
+            if current_call == 1:
+                first_started.set()
+                release_first.wait(2)
+            else:
+                second_started.set()
+            return result
+
+        with (
+            patch("pcims.db.backup._create_backup", side_effect=observed_backup),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first = executor.submit(create_backup, database=self.database)
+            self.assertTrue(first_started.wait(1))
+            second = executor.submit(create_backup, database=self.database)
+            self.assertFalse(second_started.wait(0.1))
+            release_first.set()
+            self.assertEqual(first.result(timeout=2), result)
+            self.assertEqual(second.result(timeout=2), result)
+
+        self.assertTrue(second_started.is_set())
+
     def test_direct_restore_waits_for_direct_database_transaction(self):
         operation_database = Database.at(self.database_path)
         recovery_database = Database.at(self.database_path)

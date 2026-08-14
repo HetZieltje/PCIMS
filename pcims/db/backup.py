@@ -69,7 +69,7 @@ def validate_database(path: str | os.PathLike[str]) -> None:
             raise sqlite3.DatabaseError(str(error)) from error
 
 
-def create_backup(
+def _create_backup(
     destination_directory: str | os.PathLike[str] | None = None,
     keep: int = 14,
     *,
@@ -116,6 +116,17 @@ def create_backup(
     return BackupResult(final_path, tuple(cleanup_errors))
 
 
+def create_backup(
+    destination_directory: str | os.PathLike[str] | None = None,
+    keep: int = 14,
+    *,
+    database: Database,
+) -> BackupResult:
+    """Create and retain one backup without racing other maintenance."""
+    with database.gate.maintenance():
+        return _create_backup(destination_directory, keep, database=database)
+
+
 def _restore_backup(
     backup_path: str | os.PathLike[str],
     pre_restore_directory: str | os.PathLike[str] | None = None,
@@ -154,5 +165,5 @@ def restore_backup(
     database: Database,
 ) -> BackupResult:
     """Atomically replace the live database after all operations have drained."""
-    with database.gate.exclusive():
+    with database.gate.maintenance(), database.gate.exclusive():
         return _restore_backup(backup_path, pre_restore_directory, database=database)

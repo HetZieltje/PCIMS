@@ -94,7 +94,8 @@ class ArchitectureTests(unittest.TestCase):
         backup = (root / "db" / "backup.py").read_text(encoding="utf-8")
         services = (root / "services.py").read_text(encoding="utf-8")
         self.assertIn("with self.gate.shared():", connection)
-        self.assertIn("with database.gate.exclusive():", backup)
+        self.assertIn("database.gate.exclusive():", backup)
+        self.assertIn("database.gate.maintenance()", backup)
         self.assertNotIn("database.gate", services)
 
     def test_flat_application_grids_use_model_view_not_cell_widgets(self):
@@ -149,6 +150,7 @@ class ArchitectureTests(unittest.TestCase):
             self.assertIn("--hash=sha256:", lock)
             self.assertIn("pyside6==", lock)
         self.assertIn("--require-hashes -r requirements-dev.lock", workflow)
+        self.assertIn("python -m pip check", workflow)
 
     def test_purchase_staging_uses_immutable_domain_records(self):
         purchases = (

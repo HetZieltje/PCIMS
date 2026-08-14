@@ -1,9 +1,15 @@
 """Smoke the installed wheel from outside the source checkout."""
 
+import os
+import time
 from importlib.metadata import distribution
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from pcims.app.application import create_application
+from pcims.app.main_window import MainWindow
 from pcims.db.connection import Database
 from pcims.domain import NewExpense, SaleTerms
 from pcims.services import ApplicationServices
@@ -17,6 +23,7 @@ def main() -> None:
         raise RuntimeError(f"Unexpected GUI entry point: {gui_entry.value}")
     if application_version() != distribution("pcims").version:
         raise RuntimeError("Runtime and installed distribution versions differ.")
+    application = create_application([])
 
     with TemporaryDirectory() as temporary_directory:
         services = ApplicationServices(
@@ -31,8 +38,17 @@ def main() -> None:
         )
         if services.financial_summary().profit_cents != 2_500:
             raise RuntimeError("Installed wheel produced an invalid financial result.")
+        window = MainWindow(services)
+        deadline = time.monotonic() + 5
+        while window.tasks.active and time.monotonic() < deadline:
+            application.processEvents()
+            time.sleep(0.005)
+        if window.tasks.active or window.tabs.count() != 5:
+            raise RuntimeError("Installed Qt frontend did not initialize completely.")
+        window.deleteLater()
+        application.processEvents()
 
-    print("installed wheel smoke: OK")
+    print("installed wheel backend and Qt smoke: OK")
 
 
 if __name__ == "__main__":

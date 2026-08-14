@@ -51,6 +51,7 @@ mkdir -p "$install_parent"
 "$staging_root/bin/python" -m pip install \
     --require-hashes -r "$project_directory/requirements.lock"
 "$staging_root/bin/python" -m pip install --no-deps "$project_directory"
+"$staging_root/bin/python" -m pip check
 (
     cd "${TMPDIR:-/tmp}"
     "$staging_root/bin/python" "$project_directory/scripts/smoke-installed.py"

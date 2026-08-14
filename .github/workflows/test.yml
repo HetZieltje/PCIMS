@@ -10,7 +10,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
@@ -33,6 +33,7 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install --require-hashes -r requirements-dev.lock
       - run: python -m pip install --no-deps -e .
+      - run: python -m pip check
       - run: python -X dev -W error -m unittest discover -s tests -v
       - run: ruff check .
       - run: mypy pcims --strict --no-error-summary
@@ -46,6 +47,7 @@ jobs:
           smoke_script="$(pwd)/scripts/smoke-installed.py"
           python -m pip uninstall -y pcims
           python -m pip install --no-deps "$wheel"
+          python -m pip check
           smoke_directory="$(mktemp -d)"
           cd "$smoke_directory"
           python "$smoke_script"
