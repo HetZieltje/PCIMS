@@ -4,10 +4,12 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Generic, Protocol, TypeVar
 
 from pcims.domain import NewExpense, SaleTerms
 from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
+
+RecordT = TypeVar("RecordT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,22 @@ class RestoreResult:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoryPage(Generic[RecordT]):
+    records: tuple[RecordT, ...]
+    offset: int
+    total: int
+    limit: int
+
+    @property
+    def has_previous(self) -> bool:
+        return self.offset > 0
+
+    @property
+    def has_next(self) -> bool:
+        return self.offset + len(self.records) < self.total
+
+
+@dataclass(frozen=True, slots=True)
 class InventorySnapshot:
     inventory: tuple[Expense, ...]
     pcs: tuple[AssembledPC, ...]
@@ -75,8 +93,8 @@ class AssembleSnapshot:
 @dataclass(frozen=True, slots=True)
 class SalesSnapshot:
     summary: FinancialSummary
-    expenses: tuple[Expense, ...]
-    sales: tuple[Sale, ...]
+    expenses: HistoryPage[Expense]
+    sales: HistoryPage[Sale]
 
 
 class InventoryOperations(Protocol):
@@ -100,7 +118,12 @@ class AssemblyOperations(Protocol):
 
 
 class SalesOperations(Protocol):
-    def sales_snapshot(self) -> SalesSnapshot: ...
+    def sales_snapshot(
+        self,
+        expense_offset: int = 0,
+        sale_offset: int = 0,
+        page_size: int = 500,
+    ) -> SalesSnapshot: ...
     def undo_sale(self, sale_id: int) -> None: ...
 
 

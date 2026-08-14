@@ -22,7 +22,7 @@ from pcims.app.table_model import (
     selected_ids,
 )
 from pcims.app.tasks import TaskManager
-from pcims.contracts import SalesOperations, SalesSnapshot
+from pcims.contracts import HistoryPage, SalesOperations, SalesSnapshot
 from pcims.models import Expense, Sale
 
 
@@ -45,6 +45,8 @@ class SalesPage(AsyncCommandPage):
         super().__init__(tasks, parent)
         self.services = services
         self._sales: dict[int, Sale] = {}
+        self._expense_page = HistoryPage[Expense]((), 0, 0, 500)
+        self._sale_page = HistoryPage[Sale]((), 0, 0, 500)
         self.summary_labels: dict[str, QLabel] = {}
         summary_box = QGroupBox("Financial summary")
         summary_layout = QGridLayout(summary_box)
@@ -87,9 +89,21 @@ class SalesPage(AsyncCommandPage):
         )
         self.expense_table = QTableView()
         configure_table_view(self.expense_table, self.expense_model)
+        self.expense_table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
+        self.expense_newer = QPushButton("Newer")
+        self.expense_newer.clicked.connect(lambda: self._change_expense_page(-1))
+        self.expense_page_label = QLabel("0 records")
+        self.expense_older = QPushButton("Older")
+        self.expense_older.clicked.connect(lambda: self._change_expense_page(1))
+        expense_navigation = QHBoxLayout()
+        expense_navigation.addWidget(self.expense_newer)
+        expense_navigation.addWidget(self.expense_page_label)
+        expense_navigation.addWidget(self.expense_older)
+        expense_navigation.addStretch()
         expense_box = QGroupBox("Purchase history")
         expense_layout = QVBoxLayout(expense_box)
         expense_layout.addWidget(self.expense_table)
+        expense_layout.addLayout(expense_navigation)
 
         self.sale_model = RecordTableModel[Sale](
             (
@@ -126,12 +140,21 @@ class SalesPage(AsyncCommandPage):
             self.sale_model,
             stretch_column=3,
         )
+        self.sale_table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
         self.sale_table.selectionModel().selectionChanged.connect(
             self._sale_selection_changed
         )
         undo_button = QPushButton("Undo selected sale")
         undo_button.clicked.connect(self.undo_selected)
+        self.sale_newer = QPushButton("Newer")
+        self.sale_newer.clicked.connect(lambda: self._change_sale_page(-1))
+        self.sale_page_label = QLabel("0 records")
+        self.sale_older = QPushButton("Older")
+        self.sale_older.clicked.connect(lambda: self._change_sale_page(1))
         sale_actions = QHBoxLayout()
+        sale_actions.addWidget(self.sale_newer)
+        sale_actions.addWidget(self.sale_page_label)
+        sale_actions.addWidget(self.sale_older)
         sale_actions.addStretch()
         sale_actions.addWidget(undo_button)
         sale_box = QGroupBox("Sales")
@@ -181,7 +204,11 @@ class SalesPage(AsyncCommandPage):
         self.apply_snapshot(self.load_snapshot())
 
     def load_snapshot(self) -> SalesSnapshot:
-        return self.services.sales_snapshot()
+        return self.services.sales_snapshot(
+            self._expense_page.offset,
+            self._sale_page.offset,
+            self._expense_page.limit,
+        )
 
     def apply_snapshot(self, snapshot: SalesSnapshot) -> None:
         summary = snapshot.summary
@@ -194,12 +221,48 @@ class SalesPage(AsyncCommandPage):
         ):
             self.summary_labels[key].setText(format_cents(cents))
 
-        self.expense_model.set_records(snapshot.expenses)
+        self._expense_page = snapshot.expenses
+        self.expense_model.set_records(snapshot.expenses.records)
+        self.expense_page_label.setText(self._page_label(snapshot.expenses))
+        self.expense_newer.setEnabled(snapshot.expenses.has_previous)
+        self.expense_older.setEnabled(snapshot.expenses.has_next)
 
-        sales = snapshot.sales
+        self._sale_page = snapshot.sales
+        sales = snapshot.sales.records
         self._sales = {sale.id: sale for sale in sales}
         self.sale_model.set_records(sales)
+        self.sale_page_label.setText(self._page_label(snapshot.sales))
+        self.sale_newer.setEnabled(snapshot.sales.has_previous)
+        self.sale_older.setEnabled(snapshot.sales.has_next)
         self._render_details()
+
+    @staticmethod
+    def _page_label(page: HistoryPage[Expense] | HistoryPage[Sale]) -> str:
+        if page.total == 0:
+            return "0 records"
+        return (
+            f"{page.offset + 1}–{page.offset + len(page.records)} "
+            f"of {page.total} (newest first)"
+        )
+
+    def _change_expense_page(self, direction: int) -> None:
+        offset = max(0, self._expense_page.offset + direction * self._expense_page.limit)
+        self._load_page(offset, self._sale_page.offset)
+
+    def _change_sale_page(self, direction: int) -> None:
+        offset = max(0, self._sale_page.offset + direction * self._sale_page.limit)
+        self._load_page(self._expense_page.offset, offset)
+
+    def _load_page(self, expense_offset: int, sale_offset: int) -> None:
+        self.run_operation(
+            lambda: self.services.sales_snapshot(
+                expense_offset,
+                sale_offset,
+                self._expense_page.limit,
+            ),
+            self.apply_snapshot,
+            "Unable to load history",
+        )
 
     def _sale_selection_changed(self, *_: object) -> None:
         self._render_details()

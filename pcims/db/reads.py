@@ -21,6 +21,16 @@ class ReadQueries:
         rows = self.connection.execute(EXPENSE_SELECT + " ORDER BY e.id").fetchall()
         return tuple(expense_from_row(row) for row in rows)
 
+    def count_expenses(self) -> int:
+        return int(self.connection.execute("SELECT COUNT(*) FROM expenses").fetchone()[0])
+
+    def list_expense_page(self, offset: int, limit: int) -> tuple[Expense, ...]:
+        rows = self.connection.execute(
+            EXPENSE_SELECT + " ORDER BY e.id DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        return tuple(expense_from_row(row) for row in rows)
+
     def list_expense_names(self) -> tuple[str, ...]:
         rows = self.connection.execute(
             "SELECT DISTINCT name FROM expenses "
@@ -103,21 +113,71 @@ class ReadQueries:
             for sale in sales
         )
 
+    def count_sales(self) -> int:
+        return int(self.connection.execute("SELECT COUNT(*) FROM sales").fetchone()[0])
+
+    def list_sale_page(
+        self,
+        offset: int,
+        limit: int,
+        expenses_by_id: Mapping[int, Expense] | None = None,
+    ) -> tuple[Sale, ...]:
+        sales = self.connection.execute(
+            "SELECT id,name,kind,selling_price_cents,sale_date "
+            "FROM sales ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        if not sales:
+            return ()
+        sale_ids = [int(sale["id"]) for sale in sales]
+        placeholders = ",".join("?" for _ in sale_ids)
+        rows = self.connection.execute(
+            EXPENSE_SELECT
+            + f" WHERE si.sale_id IN ({placeholders}) "  # nosec B608
+            "ORDER BY si.sale_id,si.position",
+            sale_ids,
+        )
+        items_by_sale: dict[int, list[Expense]] = {
+            int(sale["id"]): [] for sale in sales
+        }
+        for row in rows:
+            expense_id = int(row["id"])
+            expense = (
+                expenses_by_id.get(expense_id)
+                if expenses_by_id is not None
+                else None
+            )
+            items_by_sale[int(row["sale_id"])].append(
+                expense if expense is not None else expense_from_row(row)
+            )
+        return tuple(
+            Sale(
+                id=sale["id"],
+                name=sale["name"],
+                kind=cast(SaleKind, sale["kind"]),
+                cost_cents=sum(
+                    item.price_cents for item in items_by_sale[sale["id"]]
+                ),
+                selling_price_cents=sale["selling_price_cents"],
+                sale_date=date.fromisoformat(sale["sale_date"]),
+                items=tuple(items_by_sale[sale["id"]]),
+            )
+            for sale in sales
+        )
+
     def financial_summary(self) -> FinancialSummary:
-        expense_cents = self.connection.execute(
-            "SELECT COALESCE(SUM(price_cents),0) FROM expenses"
-        ).fetchone()[0]
-        income_cents, cost_cents = self.connection.execute(
-            """SELECT
-               (SELECT COALESCE(SUM(selling_price_cents),0) FROM sales),
-               (SELECT COALESCE(SUM(e.price_cents),0)
-                  FROM sale_items si JOIN expenses e ON e.id=si.expense_id)"""
-        ).fetchone()
-        inventory_cents = self.connection.execute(
-            """SELECT COALESCE(SUM(e.price_cents),0) FROM expenses e
-               LEFT JOIN sale_items si ON si.expense_id=e.id
-               WHERE si.sale_id IS NULL"""
-        ).fetchone()[0]
+        expense_cents, income_cents, cost_cents, inventory_cents = (
+            self.connection.execute(
+                """SELECT
+                   (SELECT COALESCE(SUM(price_cents),0) FROM expenses),
+                   (SELECT COALESCE(SUM(selling_price_cents),0) FROM sales),
+                   (SELECT COALESCE(SUM(e.price_cents),0)
+                      FROM sale_items si JOIN expenses e ON e.id=si.expense_id),
+                   (SELECT COALESCE(SUM(e.price_cents),0) FROM expenses e
+                      LEFT JOIN sale_items si ON si.expense_id=e.id
+                     WHERE si.sale_id IS NULL)"""
+            ).fetchone()
+        )
         return FinancialSummary(
             expense_cents=expense_cents,
             income_cents=income_cents,

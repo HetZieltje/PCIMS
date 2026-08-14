@@ -719,8 +719,54 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         snapshot = self.services.sales_snapshot()
 
-        expense = next(item for item in snapshot.expenses if item.id == item_id)
-        self.assertIs(snapshot.sales[0].items[0], expense)
+        expense = next(
+            item for item in snapshot.expenses.records if item.id == item_id
+        )
+        self.assertIs(snapshot.sales.records[0].items[0], expense)
+
+    def test_sales_history_is_bounded_navigable_and_clamped(self):
+        ids = [self.buy(f"History {index}", "Extra", 1) for index in range(7)]
+        for item_id in ids:
+            self.services.sell_items([item_id], SaleTerms.create(2))
+
+        newest = self.services.sales_snapshot(page_size=3)
+        older = self.services.sales_snapshot(3, 3, 3)
+        clamped = self.services.sales_snapshot(999, 999, 3)
+
+        self.assertEqual(newest.expenses.total, 7)
+        self.assertEqual([item.id for item in newest.expenses.records], [7, 6, 5])
+        self.assertEqual([sale.id for sale in newest.sales.records], [7, 6, 5])
+        self.assertFalse(newest.expenses.has_previous)
+        self.assertTrue(newest.expenses.has_next)
+        self.assertEqual([item.id for item in older.expenses.records], [4, 3, 2])
+        self.assertTrue(older.sales.has_previous)
+        self.assertTrue(older.sales.has_next)
+        self.assertEqual(clamped.expenses.offset, 6)
+        self.assertEqual([item.id for item in clamped.expenses.records], [1])
+        self.assertFalse(clamped.sales.has_next)
+
+        for arguments in ((0, 0, 0), (-1, 0, 3), (0, -1, 3)):
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                self.services.sales_snapshot(*arguments)
+
+    def test_financial_summary_uses_one_select_round_trip(self):
+        statements: list[str] = []
+        original_connect = Database.connect
+
+        def traced_connect(database, *args, **kwargs):
+            connection = original_connect(database, *args, **kwargs)
+            connection.set_trace_callback(statements.append)
+            return connection
+
+        with patch.object(Database, "connect", new=traced_connect):
+            self.services.financial_summary()
+
+        selects = [
+            statement
+            for statement in statements
+            if statement.lstrip().upper().startswith("SELECT")
+        ]
+        self.assertEqual(len(selects), 1)
 
     def test_sold_expense_names_are_immutable_historical_data(self):
         item_id = self.buy("Historical CPU", "CPU", 30)

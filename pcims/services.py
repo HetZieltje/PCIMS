@@ -8,6 +8,7 @@ from pathlib import Path
 from pcims.contracts import (
     AssembleSnapshot,
     BackupResult,
+    HistoryPage,
     InventorySnapshot,
     PurchasesSnapshot,
     RestoreResult,
@@ -34,6 +35,8 @@ from pcims.db.sale_commands import (
 from pcims.db.schema import initialize_database
 from pcims.domain import ItemType, NewExpense, SaleTerms
 from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
+
+MAX_HISTORY_PAGE_SIZE = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,14 +65,45 @@ class ApplicationServices:
             pc_names = tuple(pc.name for pc in queries.list_pcs())
         return AssembleSnapshot(inventory, pc_names)
 
-    def sales_snapshot(self) -> SalesSnapshot:
+    def sales_snapshot(
+        self,
+        expense_offset: int = 0,
+        sale_offset: int = 0,
+        page_size: int = 500,
+    ) -> SalesSnapshot:
+        if page_size < 1 or page_size > MAX_HISTORY_PAGE_SIZE:
+            raise ValueError(
+                f"History page size must be between 1 and {MAX_HISTORY_PAGE_SIZE}."
+            )
+        if expense_offset < 0 or sale_offset < 0:
+            raise ValueError("History offsets cannot be negative.")
         with self.database.transaction() as connection:
             queries = ReadQueries(connection)
-            expenses = queries.list_expenses()
+            expense_total = queries.count_expenses()
+            sale_total = queries.count_sales()
+            expense_offset = _clamped_page_offset(
+                expense_offset, expense_total, page_size
+            )
+            sale_offset = _clamped_page_offset(sale_offset, sale_total, page_size)
+            expenses = queries.list_expense_page(expense_offset, page_size)
             return SalesSnapshot(
                 queries.financial_summary(),
-                expenses,
-                queries.list_sales({expense.id: expense for expense in expenses}),
+                HistoryPage(
+                    expenses,
+                    expense_offset,
+                    expense_total,
+                    page_size,
+                ),
+                HistoryPage(
+                    queries.list_sale_page(
+                        sale_offset,
+                        page_size,
+                        {expense.id: expense for expense in expenses},
+                    ),
+                    sale_offset,
+                    sale_total,
+                    page_size,
+                ),
             )
 
     def add_expenses(self, items: Iterable[NewExpense]) -> list[int]:
@@ -155,3 +189,9 @@ class ApplicationServices:
 def default_services() -> ApplicationServices:
     """Build services once at the application composition root."""
     return ApplicationServices(default_database())
+
+
+def _clamped_page_offset(offset: int, total: int, limit: int) -> int:
+    if total == 0:
+        return 0
+    return min(offset, ((total - 1) // limit) * limit)

@@ -1107,6 +1107,27 @@ class QtWorkflowTests(unittest.TestCase):
         inventory.deleteLater()
         sales.deleteLater()
 
+    def test_sales_purchase_history_pages_without_blocking_the_gui(self):
+        self.services.add_expenses(
+            NewExpense.create(f"History {index}", "Extra", 1, TEST_DATE)
+            for index in range(501)
+        )
+        page = SalesPage(self.services, tasks=self.tasks)
+        page.refresh()
+
+        self.assertEqual(page.expense_model.rowCount(), 500)
+        self.assertFalse(page.expense_newer.isEnabled())
+        self.assertTrue(page.expense_older.isEnabled())
+        page.expense_older.click()
+        self.wait_for_page(page)
+
+        self.assertEqual(page.expense_model.rowCount(), 1)
+        self.assertEqual(page.expense_model.index(0, 0).data(), "1")
+        self.assertTrue(page.expense_newer.isEnabled())
+        self.assertFalse(page.expense_older.isEnabled())
+        self.assertIn("501–501 of 501", page.expense_page_label.text())
+        page.deleteLater()
+
     def test_stale_table_selections_fail_closed(self):
         expense_id = self.purchase("Cable", "Extra", 5)
         inventory = InventoryPage(self.services, tasks=self.tasks)
