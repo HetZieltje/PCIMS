@@ -82,7 +82,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertTrue(predicate(), "Timed out waiting for an asynchronous Qt task")
 
     def wait_for_window(self, window):
-        self.wait_until(lambda: not window._refresh_tasks)
+        self.wait_until(lambda: not window.refresh_running)
 
     def wait_for_page(self, page):
         self.wait_until(lambda: not page.command_running)
@@ -344,6 +344,53 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertTrue(window.isEnabled())
         self.assertTrue(window.isVisible())
         question.assert_called_once()
+        window.deleteLater()
+
+    def test_close_drains_inflight_refresh_before_destroying_window(self):
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        refresh_started = threading.Event()
+        release_refresh = threading.Event()
+        outcome = BackupResult(Path(self.temporary_directory.name) / "verified.db")
+
+        def slow_snapshot():
+            refresh_started.set()
+            release_refresh.wait(2)
+            return "late snapshot"
+
+        window._dirty_pages.add(window.inventory_page)
+        with (
+            patch.object(
+                window.inventory_page,
+                "load_snapshot",
+                side_effect=slow_snapshot,
+            ),
+            patch.object(
+                window.inventory_page,
+                "apply_snapshot",
+            ) as apply_snapshot,
+            patch(
+                "pcims.services.ApplicationServices.create_backup",
+                return_value=outcome,
+            ),
+            patch.object(
+                window,
+                "_close_backup_finished",
+                wraps=window._close_backup_finished,
+            ) as backup_finished,
+            patch.object(window, "close") as close,
+        ):
+            window.refresh_current()
+            self.wait_until(refresh_started.is_set)
+            event = QCloseEvent()
+            window.closeEvent(event)
+            self.wait_until(lambda: backup_finished.call_count > 0)
+            self.assertFalse(close.called)
+            release_refresh.set()
+            self.wait_until(lambda: close.called)
+
+        apply_snapshot.assert_not_called()
+        self.assertTrue(window._closing_after_backup)
         window.deleteLater()
 
     def test_restore_discards_staged_purchase_only_after_success(self):
@@ -618,11 +665,13 @@ class QtWorkflowTests(unittest.TestCase):
         ):
             window.refresh_current()
             self.wait_until(first_started.is_set)
-            window.refresh_current()
-            self.wait_until(lambda: apply_snapshot.call_count == 1)
+            for _ in range(25):
+                window.refresh_current()
+            self.assertEqual(call_count, 1)
             release_first.set()
             self.wait_for_window(window)
 
+        self.assertEqual(call_count, 2)
         self.assertEqual(apply_snapshot.call_args_list, [call("new snapshot")])
         window.deleteLater()
 

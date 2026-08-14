@@ -1,9 +1,10 @@
 """Main Qt window and application-wide presentation state."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import cast
 
-from PySide6.QtCore import QByteArray, QSettings, Qt
+from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,6 +23,14 @@ from pcims.app.pages.settings import SettingsPage
 from pcims.app.tasks import BackgroundTask, run_in_background
 from pcims.db.backup import BackupResult
 from pcims.services import ApplicationServices, default_services
+
+
+@dataclass(slots=True)
+class RefreshState:
+    requested_generation: int = 0
+    running_generation: int | None = None
+    task: BackgroundTask[object] | None = None
+    pending: bool = False
 
 
 class MainWindow(QMainWindow):
@@ -55,8 +64,9 @@ class MainWindow(QMainWindow):
             self.settings_page,
         )
         self._dirty_pages: set[QWidget] = set(self.pages[:-1])
-        self._refresh_generation: dict[QWidget, int] = {}
-        self._refresh_tasks: dict[tuple[QWidget, int], BackgroundTask[object]] = {}
+        self._refresh_states: dict[QWidget, RefreshState] = {
+            page: RefreshState() for page in self.pages[:-1]
+        }
         for page, title in zip(
             self.pages,
             ("Inventory", "Purchases", "Assemble", "Sales and History", "Settings"),
@@ -106,6 +116,17 @@ class MainWindow(QMainWindow):
         self._start_refresh(page)
 
     def _start_refresh(self, page: QWidget) -> None:
+        state = self._refresh_states.get(page)
+        if state is None:
+            self._dirty_pages.discard(page)
+            return
+        state.requested_generation += 1
+        if state.task is not None:
+            state.pending = True
+            return
+        self._launch_refresh(page, state)
+
+    def _launch_refresh(self, page: QWidget, state: RefreshState) -> None:
         load_snapshot = getattr(page, "load_snapshot", None)
         apply_snapshot = getattr(page, "apply_snapshot", None)
         if not callable(load_snapshot) or not callable(apply_snapshot):
@@ -113,10 +134,10 @@ class MainWindow(QMainWindow):
             return
         loader = cast(Callable[[], object], load_snapshot)
         applier = cast(Callable[[object], None], apply_snapshot)
-        generation = self._refresh_generation.get(page, 0) + 1
-        self._refresh_generation[page] = generation
-        key = (page, generation)
-        self._refresh_tasks[key] = run_in_background(
+        generation = state.requested_generation
+        state.running_generation = generation
+        state.pending = False
+        state.task = run_in_background(
             loader,
             lambda snapshot: self._refresh_succeeded(
                 page, generation, applier, snapshot
@@ -131,21 +152,53 @@ class MainWindow(QMainWindow):
         apply_snapshot: Callable[[object], None],
         snapshot: object,
     ) -> None:
-        self._refresh_tasks.pop((page, generation), None)
-        if self._refresh_generation.get(page) != generation:
+        state = self._finish_refresh(page, generation)
+        if state is None:
             return
-        apply_snapshot(snapshot)
-        self._dirty_pages.discard(page)
-        self.statusBar().showMessage("Data refreshed", 2500)
+        if state.requested_generation == generation:
+            apply_snapshot(snapshot)
+            self._dirty_pages.discard(page)
+            self.statusBar().showMessage("Data refreshed", 2500)
+        self._launch_pending_refresh(page, state)
 
     def _refresh_failed(
         self, page: QWidget, generation: int, error: Exception
     ) -> None:
-        self._refresh_tasks.pop((page, generation), None)
-        if self._refresh_generation.get(page) != generation:
+        state = self._finish_refresh(page, generation)
+        if state is None:
             return
-        self._dirty_pages.add(page)
-        show_error(self, "Unable to refresh data", error)
+        if state.requested_generation == generation:
+            self._dirty_pages.add(page)
+            show_error(self, "Unable to refresh data", error)
+        self._launch_pending_refresh(page, state)
+
+    def _finish_refresh(
+        self, page: QWidget, generation: int
+    ) -> RefreshState | None:
+        state = self._refresh_states.get(page)
+        if state is None or state.running_generation != generation:
+            return None
+        state.task = None
+        state.running_generation = None
+        return state
+
+    def _launch_pending_refresh(self, page: QWidget, state: RefreshState) -> None:
+        if state.pending:
+            self._launch_refresh(page, state)
+
+    @property
+    def refresh_running(self) -> bool:
+        return any(state.task is not None for state in self._refresh_states.values())
+
+    def _data_work_running(self) -> bool:
+        return self.refresh_running or any(
+            bool(getattr(page, "command_running", False)) for page in self.pages[:-1]
+        )
+
+    def _cancel_pending_refreshes(self) -> None:
+        for state in self._refresh_states.values():
+            state.requested_generation += 1
+            state.pending = False
 
     def refresh_all(self) -> None:
         self._dirty_pages.update(self.pages[:-1])
@@ -154,8 +207,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Refreshing dataâ€¦")
 
     def _on_data_changed(self) -> None:
-        for page in self.pages[:-1]:
-            self._refresh_generation[page] = self._refresh_generation.get(page, 0) + 1
+        for state in self._refresh_states.values():
+            state.requested_generation += 1
         self._dirty_pages.update(self.pages[:-1])
         self.refresh_current()
         self.statusBar().showMessage("Data updated", 2500)
@@ -269,6 +322,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         event.ignore()
+        self._cancel_pending_refreshes()
         self._close_backup_running = True
         self.setEnabled(False)
         self.statusBar().showMessage("Backing up before closing…")
@@ -279,6 +333,9 @@ class MainWindow(QMainWindow):
         )
 
     def _close_backup_finished(self, backup: BackupResult) -> None:
+        if self._data_work_running():
+            QTimer.singleShot(10, lambda: self._close_backup_finished(backup))
+            return
         self._close_backup_running = False
         if backup.has_cleanup_warnings:
             QMessageBox.warning(
