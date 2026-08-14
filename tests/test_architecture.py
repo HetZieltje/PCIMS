@@ -171,6 +171,9 @@ class ArchitectureTests(unittest.TestCase):
     def test_linux_desktop_install_assets_are_present_and_user_scoped(self):
         root = Path(__file__).parents[1]
         installer = (root / "scripts" / "install-linux.sh").read_text(encoding="utf-8")
+        artifact = (root / "scripts" / "release_artifact.py").read_text(
+            encoding="utf-8"
+        )
         desktop = (root / "packaging" / "linux" / "pcims.desktop").read_text(
             encoding="utf-8"
         )
@@ -180,6 +183,9 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("--require-hashes", installer)
         self.assertIn("staging_root", installer)
         self.assertIn("smoke-installed.py", installer)
+        self.assertIn("release_artifact.py", installer)
+        self.assertIn("copy_clean_source", artifact)
+        self.assertIn("verify_wheel_contents", artifact)
         self.assertIn('install_root="$application_parent/application"', installer)
         self.assertIn("Refusing symbolic-link application directory", installer)
         self.assertIn("Another PCIMS installation is already running", installer)
@@ -200,6 +206,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("FileShare]::None", installer)
         self.assertIn("WScript.Shell", installer)
         self.assertIn("smoke-installed.py", installer)
+        self.assertIn("release_artifact.py", installer)
         self.assertIn("Installation rollback also failed", installer)
         self.assertIn("PIP_NO_INDEX", installer_test)
         self.assertIn("PCIMS_RUN_REAL_INSTALL", installer_test)
@@ -217,6 +224,9 @@ class ArchitectureTests(unittest.TestCase):
         verification = (root / "scripts" / "verify.py").read_text(
             encoding="utf-8"
         )
+        artifact = (root / "scripts" / "release_artifact.py").read_text(
+            encoding="utf-8"
+        )
         for lock in (runtime_lock, development_lock):
             self.assertIn("--hash=sha256:", lock)
             self.assertIn("pyside6==", lock)
@@ -229,9 +239,10 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("python scripts/verify.py --output-directory dist", workflow)
         self.assertIn('"--no-isolation"', verification)
         self.assertIn("verify-reproducible-wheel.py", verification)
-        self.assertIn("copy_clean_source", verification)
-        self.assertIn("verify_wheel_contents", verification)
-        self.assertIn("zipfile.ZipFile", verification)
+        self.assertIn("copy_clean_source", artifact)
+        self.assertIn("verify_wheel_contents", artifact)
+        self.assertIn("zipfile.ZipFile", artifact)
+        self.assertIn('"wheel",', artifact)
         self.assertIn('SOURCE_DATE_EPOCH: "315532800"', workflow)
         self.assertNotIn("pip install --upgrade pip", workflow)
         self.assertIn("python -m pip check", workflow)

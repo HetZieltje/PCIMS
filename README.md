@@ -35,6 +35,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install-windows.
 The Windows installer confines application replacement to
 `%LOCALAPPDATA%\PCIMS\application`, serializes concurrent upgrades, smoke-tests
 the staged build, and restores the prior installation if publication fails.
+It builds from a clean source copy and rejects any wheel whose package manifest
+differs from the current source tree.
 
 For a user-scoped Linux installation with an isolated environment and a desktop
 menu entry, run this from the project directory:
@@ -46,7 +48,7 @@ sh scripts/install-linux.sh
 This writes only beneath `$XDG_DATA_HOME` (or `~/.local/share`) and does not
 require `sudo`. Each run builds and smoke-tests a fresh environment using the
 hash-locked runtime dependencies, then replaces the prior installation only
-after verification succeeds.
+after the same clean-wheel manifest verification succeeds.
 
 Application data follows platform conventions:
 

@@ -163,8 +163,7 @@ try {
         (Join-Path $projectDirectory 'requirements-build.lock')
     )
     Invoke-Checked $stagedPython @(
-        '-m', 'pip', 'install', '--no-build-isolation', '--no-deps',
-        $projectDirectory
+        (Join-Path $projectDirectory 'scripts\release_artifact.py')
     )
     Write-Output 'Validating the staged Windows installation...'
     Invoke-Checked $stagedPython @('-m', 'pip', 'check')

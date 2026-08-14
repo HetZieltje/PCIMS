@@ -154,8 +154,7 @@ fi
     --require-hashes -r "$project_directory/requirements.lock"
 "$staging_root/bin/python" -m pip install \
     --require-hashes -r "$project_directory/requirements-build.lock"
-"$staging_root/bin/python" -m pip install \
-    --no-build-isolation --no-deps "$project_directory"
+"$staging_root/bin/python" "$project_directory/scripts/release_artifact.py"
 "$staging_root/bin/python" -m pip check
 (
     cd "${TMPDIR:-/tmp}"

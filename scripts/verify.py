@@ -2,12 +2,12 @@
 
 import argparse
 import os
-import shutil
 import subprocess  # nosec B404
 import sys
-import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+from release_artifact import copy_clean_source, verify_wheel_contents, wheel_in
 
 ROOT = Path(__file__).parents[1]
 
@@ -24,49 +24,6 @@ def run_python(
         env=environment,
         check=True,
     )
-
-
-def wheel_in(directory: Path) -> Path:
-    wheels = tuple(directory.glob("*.whl"))
-    if len(wheels) != 1:
-        raise RuntimeError(
-            f"Expected exactly one wheel in {directory}, found {len(wheels)}."
-        )
-    return wheels[0]
-
-
-def copy_clean_source(destination: Path) -> None:
-    ignored = shutil.ignore_patterns(
-        ".git",
-        ".venv",
-        "build",
-        "dist",
-        "dist-*",
-        "*.egg-info",
-        "__pycache__",
-        "*.pyc",
-        "*.db*",
-        "*.json",
-    )
-    shutil.copytree(ROOT, destination, ignore=ignored)
-
-
-def verify_wheel_contents(wheel: Path) -> None:
-    expected = {
-        path.relative_to(ROOT).as_posix() for path in (ROOT / "pcims").rglob("*.py")
-    }
-    with zipfile.ZipFile(wheel) as archive:
-        packaged = {
-            name
-            for name in archive.namelist()
-            if name.startswith("pcims/") and name.endswith(".py")
-        }
-    if packaged != expected:
-        missing = sorted(expected - packaged)
-        unexpected = sorted(packaged - expected)
-        raise RuntimeError(
-            f"Wheel Python sources differ (missing={missing}, unexpected={unexpected})."
-        )
 
 
 def verify(output_directory: Path | None) -> None:
