@@ -218,7 +218,14 @@ class SalesPage(AsyncCommandPage):
                 self, "Select one sale", "Select exactly one sale to undo."
             )
             return
-        sale = self._sales[ids[0]]
+        sale = self._sales.get(ids[0])
+        if sale is None:
+            QMessageBox.information(
+                self,
+                "Selection changed",
+                "That sale is no longer in the current view.",
+            )
+            return
         if not ask_confirmation(self, "Undo sale", f"Undo the sale of '{sale.name}'?"):
             return
         self.run_command(

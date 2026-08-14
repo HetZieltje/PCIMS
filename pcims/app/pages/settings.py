@@ -98,6 +98,7 @@ class SettingsPage(QWidget):
             self.services.create_backup,
             self._backup_finished,
             self._backup_failed,
+            owner=self,
         )
 
     def _backup_finished(self, backup: BackupResult) -> None:
@@ -140,6 +141,7 @@ class SettingsPage(QWidget):
             lambda: self.services.restore_backup(path),
             self._restore_finished,
             self._restore_failed,
+            owner=self,
         )
 
     def _restore_failed(self, error: Exception) -> None:

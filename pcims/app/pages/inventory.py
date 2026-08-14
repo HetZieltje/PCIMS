@@ -196,7 +196,9 @@ class InventoryPage(AsyncCommandPage):
         self.pc_model.set_records(pcs)
 
     def _selected_parts(self) -> list[Expense]:
-        return [self._parts[item_id] for item_id in selected_ids(self.parts_table)]
+        ids = selected_ids(self.parts_table)
+        parts = [self._parts[item_id] for item_id in ids if item_id in self._parts]
+        return parts if len(parts) == len(ids) else []
 
     def _selected_pc(self) -> AssembledPC | None:
         ids = selected_ids(self.pc_table)
@@ -205,7 +207,12 @@ class InventoryPage(AsyncCommandPage):
                 self, "Select one PC", "Select exactly one assembled PC."
             )
             return None
-        return self._pcs[ids[0]]
+        pc = self._pcs.get(ids[0])
+        if pc is None:
+            QMessageBox.information(
+                self, "Selection changed", "That PC is no longer in the current view."
+            )
+        return pc
 
     def sell_selected_parts(self) -> None:
         parts = self._selected_parts()

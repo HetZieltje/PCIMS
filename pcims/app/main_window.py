@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
             self.services.create_backup,
             self._startup_backup_finished,
             self._startup_backup_failed,
+            owner=self,
         )
 
     def _startup_backup_finished(self, backup: BackupResult) -> None:
@@ -221,6 +222,7 @@ class MainWindow(QMainWindow):
             self.services.create_backup,
             self._close_backup_finished,
             self._close_backup_failed,
+            owner=self,
         )
 
     def _close_backup_finished(self, backup: BackupResult) -> None:

@@ -14,7 +14,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QLockFile, QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QMessageBox, QTableView
+from PySide6.QtWidgets import QMessageBox, QTableView, QWidget
+from shiboken6 import delete as delete_qt_object
 
 from pcims.app.application import acquire_instance_lock, create_application, main
 from pcims.app.assembly_model import AssemblyTreeModel
@@ -615,6 +616,18 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(model.index(0, 0).data(), "0")
         self.assertEqual(model.index(9999, 0).data(), "9999")
 
+    def test_table_model_rejects_duplicate_record_identity_without_resetting(self):
+        model = RecordTableModel[tuple[int, str]](
+            (Column("Name", lambda item: item[1], lambda item: item[1]),),
+            lambda item: item[0],
+        )
+        model.set_records(((1, "Existing"),))
+
+        with self.assertRaisesRegex(ValueError, "unique"):
+            model.set_records(((2, "First"), (2, "Second")))
+
+        self.assertEqual(model.records, ((1, "Existing"),))
+
     def test_assembly_tree_model_preserves_checked_record_identity(self):
         cpu_id = self.purchase("CPU", "CPU", 100)
         ram_id = self.purchase("RAM", "RAM", 50)
@@ -665,6 +678,7 @@ class QtWorkflowTests(unittest.TestCase):
             blocking_operation,
             lambda result: (outcomes.append(result), loop.quit()),
             lambda error: (outcomes.append(error), loop.quit()),
+            owner=manager,
         )
         self.assertTrue(worker_started.wait(1))
         QTimer.singleShot(
@@ -687,7 +701,12 @@ class QtWorkflowTests(unittest.TestCase):
         tasks.became_idle.connect(lambda: idle_events.append(True))
 
         with patch("pcims.app.tasks.log_exception") as log:
-            tasks.run(lambda: 1, lambda _result: None, failures.append)
+            tasks.run(
+                lambda: 1,
+                lambda _result: None,
+                failures.append,
+                owner=tasks,
+            )
             self.assertTrue(tasks.active)
             self.wait_until(lambda: bool(failures))
 
@@ -695,6 +714,31 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(str(failures[0]), "thread pool unavailable")
         self.assertEqual(idle_events, [True])
         log.assert_called_once()
+
+    def test_background_result_is_not_delivered_to_a_destroyed_owner(self):
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        outcomes: list[object] = []
+        owner = QWidget()
+        manager = TaskManager()
+
+        def blocking_operation():
+            worker_started.set()
+            release_worker.wait(2)
+            return "complete"
+
+        manager.run(
+            blocking_operation,
+            outcomes.append,
+            outcomes.append,
+            owner=owner,
+        )
+        self.assertTrue(worker_started.wait(1))
+        delete_qt_object(owner)
+        release_worker.set()
+        self.wait_until(lambda: not manager.active)
+
+        self.assertEqual(outcomes, [])
 
     def test_manual_backup_runs_asynchronously_and_restores_button_state(self):
         window = MainWindow(self.services)
@@ -1060,6 +1104,37 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertTrue(
             all(expense.is_available for expense in self.services.list_expenses())
         )
+        inventory.deleteLater()
+        sales.deleteLater()
+
+    def test_stale_table_selections_fail_closed(self):
+        expense_id = self.purchase("Cable", "Extra", 5)
+        inventory = InventoryPage(self.services, tasks=self.tasks)
+        inventory.refresh()
+        inventory.parts_table.selectRow(0)
+        inventory._parts.clear()
+
+        with patch("pcims.app.pages.inventory.QMessageBox.information") as information:
+            inventory.delete_selected_parts()
+
+        information.assert_called_once()
+        self.assertEqual(
+            [item.id for item in self.services.list_expenses()], [expense_id]
+        )
+
+        self.services.sell_items(
+            [expense_id], SaleTerms.create("10.00", TEST_DATE)
+        )
+        sales = SalesPage(self.services, tasks=self.tasks)
+        sales.refresh()
+        sales.sale_table.selectRow(0)
+        sales._sales.clear()
+
+        with patch("pcims.app.pages.sales.QMessageBox.information") as information:
+            sales.undo_selected()
+
+        information.assert_called_once()
+        self.assertEqual(len(self.services.list_sales()), 1)
         inventory.deleteLater()
         sales.deleteLater()
 

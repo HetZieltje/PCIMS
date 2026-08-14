@@ -121,6 +121,7 @@ class RefreshCoordinator(QObject):
             self._bindings[page].load,
             lambda snapshot: self._succeeded(page, generation, snapshot),
             lambda error: self._failed(page, generation, error),
+            owner=self,
         )
 
     def _succeeded(self, page: QWidget, generation: int, snapshot: object) -> None:

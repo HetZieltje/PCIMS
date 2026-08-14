@@ -37,6 +37,7 @@ class AsyncCommandPage(QWidget):
             operation,
             lambda _result: self._command_succeeded(on_success),
             lambda error: self._command_failed(error_title, error),
+            owner=self,
         )
         return True
 

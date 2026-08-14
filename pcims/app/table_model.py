@@ -42,8 +42,12 @@ class RecordTableModel(QAbstractTableModel, Generic[T]):
         return tuple(self._records)
 
     def set_records(self, records: Sequence[T]) -> None:
+        prepared = list(records)
+        identifiers = [self._record_id(record) for record in prepared]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("Table record IDs must be unique.")
         self.beginResetModel()
-        self._records = list(records)
+        self._records = prepared
         if self._sort_column is not None:
             self._sort_records()
         self.endResetModel()

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Generic, TypeVar
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
+from shiboken6 import isValid
 
 from pcims.app.errors import log_exception
 from pcims.db.errors import NotFoundError, ValidationError
@@ -67,6 +68,8 @@ class TaskManager(QObject):
         operation: Callable[[], ResultT],
         on_success: Callable[[ResultT], None],
         on_failure: Callable[[Exception], None],
+        *,
+        owner: QObject,
     ) -> BackgroundTask[ResultT]:
         task = BackgroundTask(operation)
         task_id = id(task)
@@ -74,7 +77,8 @@ class TaskManager(QObject):
         def succeeded(result: ResultT) -> None:
             self._active.pop(task_id, None)
             try:
-                on_success(result)
+                if isValid(owner):
+                    on_success(result)
             finally:
                 if not self._active:
                     self.became_idle.emit()
@@ -82,7 +86,8 @@ class TaskManager(QObject):
         def failed(error: Exception) -> None:
             self._active.pop(task_id, None)
             try:
-                on_failure(error)
+                if isValid(owner):
+                    on_failure(error)
             finally:
                 if not self._active:
                     self.became_idle.emit()
