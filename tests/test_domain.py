@@ -20,6 +20,8 @@ class DomainValueTests(unittest.TestCase):
         invalid_factories = (
             lambda: NewExpense.create("", "CPU", 1),
             lambda: NewExpense.create("CPU", "Unknown", 1),
+            lambda: NewExpense.create("CPU\nrenamed", "CPU", 1),
+            lambda: NewExpense.create("x" * 201, "CPU", 1),
             lambda: NewExpense("CPU", "CPU", True, date(2026, 8, 14)),
             lambda: SaleTerms(-1, date(2026, 8, 14)),
         )

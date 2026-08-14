@@ -21,6 +21,7 @@ ItemType: TypeAlias = Literal[
     "Extra",
 ]
 SaleKind: TypeAlias = Literal["item", "pc"]
+MAX_NAME_LENGTH = 200
 
 ITEM_TYPES: tuple[ItemType, ...] = (
     "CPU",
@@ -41,6 +42,10 @@ def normalized_text(value: object, label: str) -> str:
     normalized = str(value).strip() if value is not None else ""
     if not normalized:
         raise ValueError(f"{label} cannot be blank.")
+    if len(normalized) > MAX_NAME_LENGTH:
+        raise ValueError(f"{label} cannot exceed {MAX_NAME_LENGTH} characters.")
+    if not normalized.isprintable():
+        raise ValueError(f"{label} must contain only printable characters.")
     return normalized
 
 

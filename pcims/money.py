@@ -1,7 +1,6 @@
 """Exact, dependency-free money parsing shared by the UI and data layer."""
 
 import re
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 MAX_MONEY_CENTS = 99_999_999_999
 
@@ -26,13 +25,14 @@ def parse_money_cents(value: object, label: str = "Amount") -> int:
     normalized = _normalize_number(value)
     if normalized is None:
         raise ValueError(f"{label} must be a valid monetary amount.")
-    try:
-        amount = Decimal(normalized)
-    except InvalidOperation as exc:
-        raise ValueError(f"{label} must be a valid monetary amount.") from exc
-    if not amount.is_finite() or amount < 0:
-        raise ValueError(f"{label} must be finite and non-negative.")
-    cents = int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    whole, separator, fraction = normalized.partition(".")
+    significant_whole = whole.lstrip("0") or "0"
+    max_whole_digits = len(str(MAX_MONEY_CENTS // 100))
+    if len(significant_whole) > max_whole_digits:
+        raise ValueError(f"{label} is too large.")
+    cents = int(significant_whole) * 100
+    if separator:
+        cents += int(fraction.ljust(2, "0"))
     if cents > MAX_MONEY_CENTS:
         raise ValueError(f"{label} is too large.")
     return cents

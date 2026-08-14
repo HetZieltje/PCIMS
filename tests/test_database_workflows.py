@@ -328,6 +328,19 @@ class DatabaseWorkflowTests(unittest.TestCase):
                     ("Impossible", "CPU", 100, invalid_date),
                 )
 
+    def test_schema_rejects_oversized_and_control_character_names_directly(self):
+        for invalid_name in ("x" * 201, "CPU\nrenamed"):
+            with (
+                self.subTest(name=invalid_name),
+                self.assertRaises(sqlite3.IntegrityError),
+                self.database.transaction(write=True) as database,
+            ):
+                database.execute(
+                    "INSERT INTO expenses "
+                    "(name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
+                    (invalid_name, "CPU", 100, TEST_DATE.isoformat()),
+                )
+
     def test_membership_indexes_cover_display_order(self):
         with self.database.transaction() as database:
             for table in ("pc_parts", "sale_items"):

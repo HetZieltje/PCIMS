@@ -57,10 +57,15 @@ class RefreshCoordinator(QObject):
         self._bindings = {binding.page: binding for binding in bindings}
         self._states = {page: _RefreshState() for page in self._bindings}
         self._dirty_pages = set(self._bindings)
+        self._accepting = True
 
     @property
     def active(self) -> bool:
         return any(state.task is not None for state in self._states.values())
+
+    @property
+    def accepting(self) -> bool:
+        return self._accepting
 
     def is_dirty(self, page: QWidget) -> bool:
         return page in self._dirty_pages
@@ -74,6 +79,8 @@ class RefreshCoordinator(QObject):
             self.start(page)
 
     def start(self, page: QWidget) -> None:
+        if not self._accepting:
+            return
         state = self._states.get(page)
         if state is None:
             return
@@ -87,18 +94,24 @@ class RefreshCoordinator(QObject):
         for state in self._states.values():
             state.requested_generation += 1
         self._dirty_pages.update(self._states)
-        if visible_page is not None:
+        if self._accepting and visible_page is not None:
             self.start_if_dirty(visible_page)
 
     def refresh_all(self) -> None:
+        if not self._accepting:
+            return
         self._dirty_pages.update(self._states)
         for page in self._states:
             self.start(page)
 
-    def cancel_pending(self) -> None:
+    def pause(self) -> None:
+        self._accepting = False
         for state in self._states.values():
             state.requested_generation += 1
             state.pending = False
+
+    def resume(self) -> None:
+        self._accepting = True
 
     def _launch(self, page: QWidget, state: _RefreshState) -> None:
         generation = state.requested_generation

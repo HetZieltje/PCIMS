@@ -381,6 +381,7 @@ class QtWorkflowTests(unittest.TestCase):
 
         self.assertFalse(window._closing_after_backup)
         self.assertFalse(window._close_backup_running)
+        self.assertTrue(window.refreshes.accepting)
         self.assertTrue(window.isEnabled())
         self.assertTrue(window.isVisible())
         question.assert_called_once()
@@ -466,6 +467,11 @@ class QtWorkflowTests(unittest.TestCase):
                 autospec=True,
                 side_effect=observed_backup,
             ) as create_backup,
+            patch.object(
+                window.inventory_page,
+                "load_snapshot",
+                wraps=window.inventory_page.load_snapshot,
+            ) as load_inventory,
             patch("pcims.app.pages.purchases.QMessageBox.information"),
             patch(
                 "pcims.app.main_window.QMessageBox.question",
@@ -482,6 +488,7 @@ class QtWorkflowTests(unittest.TestCase):
             self.wait_until(lambda: close.called)
 
         self.assertEqual(backed_up_names, ["Late GPU"])
+        load_inventory.assert_not_called()
         window.deleteLater()
 
     def test_restore_discards_staged_purchase_only_after_success(self):

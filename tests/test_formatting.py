@@ -28,6 +28,9 @@ class FormattingTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_money_cents(value)
 
+        with self.assertRaisesRegex(ValueError, "too large"):
+            parse_money_cents("9" * 10_000)
+
     def test_quantity_allocation_preserves_every_cent(self):
         self.assertEqual(allocate_cents(1000, 3), [334, 333, 333])
         self.assertEqual(sum(allocate_cents(1000, 3)), 1000)

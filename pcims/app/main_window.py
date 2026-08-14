@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
         return self.refreshes.active
 
     def _cancel_pending_refreshes(self) -> None:
-        self.refreshes.cancel_pending()
+        self.refreshes.pause()
 
     def refresh_all(self) -> None:
         self.refreshes.refresh_all()
@@ -253,5 +253,7 @@ class MainWindow(QMainWindow):
             self.close()
             return
         self._close_requested = False
+        self.refreshes.resume()
         self.setEnabled(True)
+        self.refresh_current()
         self.statusBar().showMessage("Close cancelled because backup failed", 5000)
