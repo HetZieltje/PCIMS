@@ -3,6 +3,7 @@
 from collections.abc import Iterable
 
 from pcims.db.command_support import (
+    bounded_cents_total,
     find_pc_name_collision,
     normalized_command_text,
     positive_command_id,
@@ -31,6 +32,9 @@ def assemble_pc(
         for row in rows:
             if row["pc_id"] is not None or row["sale_id"] is not None:
                 raise ValidationError(f"'{row['name']}' is not available for assembly.")
+        bounded_cents_total(
+            (row["price_cents"] for row in rows), "Combined PC cost"
+        )
         pc_id = inserted_id(
             connection.execute("INSERT INTO assembled_pcs (name) VALUES (?)", (name,))
         )

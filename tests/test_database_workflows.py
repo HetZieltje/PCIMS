@@ -675,12 +675,103 @@ class DatabaseWorkflowTests(unittest.TestCase):
             all(item.is_available for item in self.services.list_inventory())
         )
 
-        pc_id = self.services.assemble_pc("Expensive PC", ids)
         with self.assertRaisesRegex(ValidationError, "Combined PC cost"):
-            self.services.sell_pc(pc_id, SaleTerms.create(1))
-        self.assertEqual([pc.id for pc in self.services.list_pcs()], [pc_id])
+            self.services.assemble_pc("Expensive PC", ids)
+        self.assertEqual(self.services.list_pcs(), ())
         self.assertEqual(self.services.list_sales(), ())
         validate_database(self.database_path)
+
+    def test_database_triggers_enforce_cross_row_money_and_date_rules(self):
+        maximum = MAX_MONEY_CENTS
+        first_id = self.buy("First", "Extra", f"{maximum // 100}.{maximum % 100:02d}")
+        second_id = self.buy("Second", "Extra", "0.01")
+        with self.database.transaction(write=True) as database:
+            pc_id = database.execute(
+                "INSERT INTO assembled_pcs (name) VALUES ('Bounded PC')"
+            ).lastrowid
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,0)",
+                (pc_id, first_id),
+            )
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "combined PC cost"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,1)",
+                (pc_id, second_id),
+            )
+
+        sale_item = self.buy("Future purchase", "CPU", 1, "2026-08-14")
+        with self.database.transaction(write=True) as database:
+            sale_id = database.execute(
+                "INSERT INTO sales (name,kind,selling_price_cents,sale_date) "
+                "VALUES ('Invalid chronology','item',100,'2026-08-13')"
+            ).lastrowid
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "invalid cost or date"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,0)",
+                (sale_id, sale_item),
+            )
+
+        sale_first = self.buy(
+            "Maximum sale cost",
+            "Extra",
+            f"{maximum // 100}.{maximum % 100:02d}",
+        )
+        sale_second = self.buy("Overflow sale cost", "Extra", "0.01")
+        with self.database.transaction(write=True) as database:
+            bounded_sale_id = database.execute(
+                "INSERT INTO sales (name,kind,selling_price_cents,sale_date) "
+                "VALUES ('Bounded sale','item',100,'2026-08-14')"
+            ).lastrowid
+            database.execute(
+                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,0)",
+                (bounded_sale_id, sale_first),
+            )
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "invalid cost or date"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,1)",
+                (bounded_sale_id, sale_second),
+            )
+
+    def test_linked_values_and_memberships_are_immutable_in_storage(self):
+        item_id = self.buy("Linked", "CPU", 10)
+        pc_id = self.services.assemble_pc("Immutable PC", [item_id])
+
+        invalid_updates = (
+            ("UPDATE expenses SET price_cents=price_cents+1 WHERE id=?", item_id),
+            ("UPDATE pc_parts SET position=1 WHERE pc_id=?", pc_id),
+        )
+        for statement, identifier in invalid_updates:
+            with (
+                self.subTest(statement=statement),
+                self.assertRaises(sqlite3.IntegrityError),
+                self.database.transaction(write=True) as database,
+            ):
+                database.execute(statement, (identifier,))
+
+        sold_id = self.buy("Sold linked", "RAM", 5, "2026-08-14")
+        sale_id = self.services.sell_items(
+            [sold_id], SaleTerms.create(10, "2026-08-14")
+        )
+        sale_updates = (
+            "UPDATE sales SET sale_date='2026-08-13' WHERE id=?",
+            "UPDATE sale_items SET position=1 WHERE sale_id=?",
+        )
+        for statement in sale_updates:
+            with (
+                self.subTest(statement=statement),
+                self.assertRaises(sqlite3.IntegrityError),
+                self.database.transaction(write=True) as database,
+            ):
+                database.execute(statement, (sale_id,))
 
     def test_pc_names_and_undo_collisions_are_case_insensitive(self):
         original_id = self.buy("Original", "CPU", 100)

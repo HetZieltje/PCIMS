@@ -9,7 +9,7 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES, MAX_NAME_LENGTH
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND instr(name,char(0))=0
@@ -70,7 +70,73 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         BEGIN
             SELECT RAISE(ABORT, 'assembled expense cannot be sold separately');
         END""",
+    ("trigger", "pc_part_cost_limit"): """CREATE TRIGGER pc_part_cost_limit
+        BEFORE INSERT ON pc_parts
+        WHEN (SELECT price_cents FROM expenses WHERE id=NEW.expense_id)
+             + COALESCE((SELECT SUM(e.price_cents)
+                           FROM pc_parts pp
+                           JOIN expenses e ON e.id=pp.expense_id
+                          WHERE pp.pc_id=NEW.pc_id),0) > 99999999999
+        BEGIN
+            SELECT RAISE(ABORT, 'combined PC cost is too large');
+        END""",
+    (
+        "trigger",
+        "sale_item_cost_and_date_limit",
+    ): """CREATE TRIGGER sale_item_cost_and_date_limit
+        BEFORE INSERT ON sale_items
+        WHEN EXISTS (
+            SELECT 1 FROM expenses e JOIN sales s ON s.id=NEW.sale_id
+             WHERE e.id=NEW.expense_id
+               AND (e.purchase_date>s.sale_date
+                    OR e.price_cents
+                       + COALESCE((SELECT SUM(existing.price_cents)
+                                     FROM sale_items si
+                                     JOIN expenses existing
+                                       ON existing.id=si.expense_id
+                                    WHERE si.sale_id=NEW.sale_id),0)
+                       > 99999999999)
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'sale item has invalid cost or date');
+        END""",
+    (
+        "trigger",
+        "linked_expense_value_is_immutable",
+    ): """CREATE TRIGGER linked_expense_value_is_immutable
+        BEFORE UPDATE OF price_cents,purchase_date ON expenses
+        WHEN EXISTS (SELECT 1 FROM pc_parts WHERE expense_id=OLD.id)
+          OR EXISTS (SELECT 1 FROM sale_items WHERE expense_id=OLD.id)
+        BEGIN
+            SELECT RAISE(ABORT, 'linked expense value is immutable');
+        END""",
+    (
+        "trigger",
+        "sale_date_preserves_chronology",
+    ): """CREATE TRIGGER sale_date_preserves_chronology
+        BEFORE UPDATE OF sale_date ON sales
+        WHEN EXISTS (
+            SELECT 1 FROM sale_items si JOIN expenses e ON e.id=si.expense_id
+             WHERE si.sale_id=OLD.id AND e.purchase_date>NEW.sale_date
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'sale date is before purchase date');
+        END""",
+    ("trigger", "pc_part_is_immutable"): """CREATE TRIGGER pc_part_is_immutable
+        BEFORE UPDATE ON pc_parts
+        BEGIN
+            SELECT RAISE(ABORT, 'PC membership rows are immutable');
+        END""",
+    ("trigger", "sale_item_is_immutable"): """CREATE TRIGGER sale_item_is_immutable
+        BEFORE UPDATE ON sale_items
+        BEGIN
+            SELECT RAISE(ABORT, 'sale membership rows are immutable');
+        END""",
 }
+
+for _money_trigger in ("pc_part_cost_limit", "sale_item_cost_and_date_limit"):
+    if str(MAX_MONEY_CENTS) not in SCHEMA_DEFINITIONS[("trigger", _money_trigger)]:
+        raise RuntimeError(f"{_money_trigger} does not use the current money limit.")
 
 
 def _normalize_schema_sql(sql: object) -> str:
