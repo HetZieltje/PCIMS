@@ -9,7 +9,7 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES, MAX_NAME_LENGTH
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND instr(name,char(0))=0
@@ -112,25 +112,45 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         END""",
     (
         "trigger",
-        "sale_date_preserves_chronology",
-    ): """CREATE TRIGGER sale_date_preserves_chronology
-        BEFORE UPDATE OF sale_date ON sales
-        WHEN EXISTS (
-            SELECT 1 FROM sale_items si JOIN expenses e ON e.id=si.expense_id
-             WHERE si.sale_id=OLD.id AND e.purchase_date>NEW.sale_date
-        )
+        "sold_expense_description_is_immutable",
+    ): """CREATE TRIGGER sold_expense_description_is_immutable
+        BEFORE UPDATE OF name,item_type ON expenses
+        WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=OLD.id)
         BEGIN
-            SELECT RAISE(ABORT, 'sale date is before purchase date');
+            SELECT RAISE(ABORT, 'sold expense description is immutable');
+        END""",
+    ("trigger", "sale_record_is_immutable"): """CREATE TRIGGER sale_record_is_immutable
+        BEFORE UPDATE ON sales
+        BEGIN
+            SELECT RAISE(ABORT, 'sale records are immutable');
         END""",
     ("trigger", "pc_part_is_immutable"): """CREATE TRIGGER pc_part_is_immutable
         BEFORE UPDATE ON pc_parts
         BEGIN
             SELECT RAISE(ABORT, 'PC membership rows are immutable');
         END""",
+    (
+        "trigger",
+        "pc_part_delete_requires_pc_delete",
+    ): """CREATE TRIGGER pc_part_delete_requires_pc_delete
+        BEFORE DELETE ON pc_parts
+        WHEN EXISTS (SELECT 1 FROM assembled_pcs WHERE id=OLD.pc_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'disassemble by deleting the PC record');
+        END""",
     ("trigger", "sale_item_is_immutable"): """CREATE TRIGGER sale_item_is_immutable
         BEFORE UPDATE ON sale_items
         BEGIN
             SELECT RAISE(ABORT, 'sale membership rows are immutable');
+        END""",
+    (
+        "trigger",
+        "sale_item_delete_requires_sale_delete",
+    ): """CREATE TRIGGER sale_item_delete_requires_sale_delete
+        BEFORE DELETE ON sale_items
+        WHEN EXISTS (SELECT 1 FROM sales WHERE id=OLD.sale_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'undo by deleting the sale record');
         END""",
 }
 

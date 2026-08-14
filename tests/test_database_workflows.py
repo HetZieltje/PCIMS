@@ -789,6 +789,12 @@ class DatabaseWorkflowTests(unittest.TestCase):
             ):
                 database.execute(statement, (identifier,))
 
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "deleting the PC"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute("DELETE FROM pc_parts WHERE pc_id=?", (pc_id,))
+
         sold_id = self.buy("Sold linked", "RAM", 5, "2026-08-14")
         sale_id = self.services.sell_items(
             [sold_id], SaleTerms.create(10, "2026-08-14")
@@ -804,6 +810,33 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 self.database.transaction(write=True) as database,
             ):
                 database.execute(statement, (sale_id,))
+
+        for statement, identifier in (
+            ("UPDATE expenses SET name='Rewritten' WHERE id=?", sold_id),
+            ("UPDATE expenses SET item_type='Extra' WHERE id=?", sold_id),
+        ):
+            with (
+                self.subTest(statement=statement),
+                self.assertRaisesRegex(sqlite3.IntegrityError, "description"),
+                self.database.transaction(write=True) as database,
+            ):
+                database.execute(statement, (identifier,))
+
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "deleting the sale"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute("DELETE FROM sale_items WHERE sale_id=?", (sale_id,))
+
+        self.services.rename_expenses([item_id], "Renamed linked item")
+        self.services.disassemble_pc(pc_id)
+        self.services.undo_sale(sale_id)
+        self.assertEqual(self.services.list_pcs(), ())
+        self.assertEqual(self.services.list_sales(), ())
+        self.assertIn(
+            "Renamed linked item",
+            {item.name for item in self.services.list_expenses()},
+        )
 
     def test_pc_names_and_undo_collisions_are_case_insensitive(self):
         original_id = self.buy("Original", "CPU", 100)
