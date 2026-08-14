@@ -219,25 +219,41 @@ class QtWorkflowTests(unittest.TestCase):
             first.sales_page.splitter.saveState(),
             first.sales_page.detail_splitter.saveState(),
         )
-        first._save_window_state()
-        self.assertEqual(
-            QSettings("PCIMS", "PCIMS").value("window/geometry"), expected_geometry
+        expected_ratios = tuple(
+            tuple(size / sum(splitter.sizes()) for size in splitter.sizes())
+            for splitter in (
+                first.inventory_page.splitter,
+                first.sales_page.splitter,
+                first.sales_page.detail_splitter,
+            )
         )
+        first._save_window_state()
+        settings = QSettings("PCIMS", "PCIMS")
+        self.assertEqual(settings.value("window/geometry"), expected_geometry)
+        for key, state in zip(
+            ("inventory", "sales", "sales_details"), expected_splitters
+        ):
+            self.assertEqual(settings.value(f"window/splitters/{key}"), state)
         first.deleteLater()
 
         with patch.object(MainWindow, "restoreGeometry", return_value=True) as restore:
             second = MainWindow(self.services)
             self.wait_for_window(second)
         restore.assert_called_once_with(expected_geometry)
+        second.show()
+        self.application.processEvents()
         self.assertEqual(second.tabs.currentIndex(), 3)
-        self.assertEqual(
+        for splitter, expected in zip(
             (
-                second.inventory_page.splitter.saveState(),
-                second.sales_page.splitter.saveState(),
-                second.sales_page.detail_splitter.saveState(),
+                second.inventory_page.splitter,
+                second.sales_page.splitter,
+                second.sales_page.detail_splitter,
             ),
-            expected_splitters,
-        )
+            expected_ratios,
+        ):
+            actual = tuple(size / sum(splitter.sizes()) for size in splitter.sizes())
+            for actual_ratio, expected_ratio in zip(actual, expected):
+                self.assertAlmostEqual(actual_ratio, expected_ratio, delta=0.03)
         second.deleteLater()
 
     def test_purchase_page_allocates_quantity_total_and_commits(self):
