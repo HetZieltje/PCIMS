@@ -7,8 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pcims.db.backup import BackupResult, create_backup, restore_backup
-from pcims.db.connection import Database, get_database
-from pcims.db.gate import DatabaseGate
+from pcims.db.connection import Database, default_database
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
 from pcims.db.queries import (
     ReadQueries,
@@ -63,35 +62,31 @@ class ApplicationServices:
     _recovery_lock: threading.RLock = field(
         default_factory=threading.RLock, repr=False, compare=False
     )
-    _database_gate: DatabaseGate = field(
-        default_factory=DatabaseGate, repr=False, compare=False
-    )
-
     def initialize(self) -> None:
-        with self._database_gate.exclusive():
+        with self.database.gate.exclusive():
             initialize_database(self.database)
 
     def inventory_snapshot(self) -> InventorySnapshot:
-        with self._database_gate.shared(), self.database.transaction() as connection:
+        with self.database.gate.shared(), self.database.transaction() as connection:
             queries = ReadQueries(connection)
             return InventorySnapshot(queries.list_inventory(), queries.list_pcs())
 
     def purchases_snapshot(self) -> PurchasesSnapshot:
-        with self._database_gate.shared(), self.database.transaction() as connection:
+        with self.database.gate.shared(), self.database.transaction() as connection:
             names = {
                 expense.name for expense in ReadQueries(connection).list_expenses()
             }
         return PurchasesSnapshot(tuple(sorted(names, key=str.casefold)))
 
     def assemble_snapshot(self) -> AssembleSnapshot:
-        with self._database_gate.shared(), self.database.transaction() as connection:
+        with self.database.gate.shared(), self.database.transaction() as connection:
             queries = ReadQueries(connection)
             inventory = queries.list_inventory(available_only=True)
             pc_names = tuple(pc.name for pc in queries.list_pcs())
         return AssembleSnapshot(inventory, pc_names)
 
     def sales_snapshot(self) -> SalesSnapshot:
-        with self._database_gate.shared(), self.database.transaction() as connection:
+        with self.database.gate.shared(), self.database.transaction() as connection:
             queries = ReadQueries(connection)
             return SalesSnapshot(
                 queries.financial_summary(),
@@ -100,43 +95,43 @@ class ApplicationServices:
             )
 
     def add_expenses(self, items: Iterable[PurchaseInput]) -> list[int]:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return add_expenses(items, database=self.database)
 
     def list_expenses(self) -> tuple[Expense, ...]:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return list_expenses(database=self.database)
 
     def list_inventory(
         self, item_type: object | None = None, available_only: bool = False
     ) -> tuple[Expense, ...]:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return list_inventory(item_type, available_only, database=self.database)
 
     def delete_expenses(self, expense_ids: Iterable[object]) -> None:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             delete_expenses(expense_ids, database=self.database)
 
     def rename_expenses(
         self, expense_ids: Iterable[object], new_name: object
     ) -> None:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             rename_expenses(expense_ids, new_name, database=self.database)
 
     def assemble_pc(self, name: object, expense_ids: Iterable[object]) -> int:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return assemble_pc(name, expense_ids, database=self.database)
 
     def list_pcs(self) -> tuple[AssembledPC, ...]:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return list_pcs(database=self.database)
 
     def disassemble_pc(self, pc_id: object) -> None:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             disassemble_pc(pc_id, database=self.database)
 
     def rename_pc(self, pc_id: object, new_name: object) -> None:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             rename_pc(pc_id, new_name, database=self.database)
 
     def sell_items(
@@ -145,7 +140,7 @@ class ApplicationServices:
         selling_price: object,
         sale_date: object | None = None,
     ) -> int:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return sell_items(
                 expense_ids, selling_price, sale_date, database=self.database
             )
@@ -156,19 +151,19 @@ class ApplicationServices:
         selling_price: object,
         sale_date: object | None = None,
     ) -> int:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return sell_pc(pc_id, selling_price, sale_date, database=self.database)
 
     def list_sales(self) -> tuple[Sale, ...]:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return list_sales(database=self.database)
 
     def undo_sale(self, sale_id: object) -> None:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             undo_sale(sale_id, database=self.database)
 
     def financial_summary(self) -> FinancialSummary:
-        with self._database_gate.shared():
+        with self.database.gate.shared():
             return get_financial_summary(database=self.database)
 
     def create_backup(
@@ -176,7 +171,7 @@ class ApplicationServices:
         destination_directory: str | os.PathLike[str] | None = None,
         keep: int = 14,
     ) -> BackupResult:
-        with self._database_gate.exclusive(), self._recovery_lock:
+        with self.database.gate.exclusive(), self._recovery_lock:
             return create_backup(
                 destination_directory, keep, database=self.database
             )
@@ -186,7 +181,7 @@ class ApplicationServices:
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
     ) -> BackupResult:
-        with self._database_gate.exclusive(), self._recovery_lock:
+        with self.database.gate.exclusive(), self._recovery_lock:
             return restore_backup(
                 backup_path, pre_restore_directory, database=self.database
             )
@@ -198,4 +193,4 @@ class ApplicationServices:
 
 def default_services() -> ApplicationServices:
     """Build services once at the application composition root."""
-    return ApplicationServices(get_database())
+    return ApplicationServices(default_database())

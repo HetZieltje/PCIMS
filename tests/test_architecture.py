@@ -48,6 +48,15 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("SCHEMA_DEFINITIONS", schema)
         self.assertIn("validate_current_data", schema)
 
+    def test_database_operations_have_no_implicit_process_global_fallback(self):
+        database_package = Path(__file__).parents[1] / "pcims" / "db"
+        source = "\n".join(
+            path.read_text(encoding="utf-8") for path in database_package.glob("*.py")
+        )
+        self.assertNotIn("configure_database", source)
+        self.assertNotIn("get_database()", source)
+        self.assertNotIn("database: Database | None", source)
+
     def test_qt_pages_depend_on_application_services_not_query_globals(self):
         pages = Path(__file__).parents[1] / "pcims" / "app" / "pages"
         for path in pages.glob("*.py"):

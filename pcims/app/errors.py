@@ -1,6 +1,7 @@
 """Last-resort logging and reporting for unexpected GUI exceptions."""
 
 import sys
+import threading
 import traceback
 from collections.abc import Callable
 from datetime import datetime
@@ -15,6 +16,35 @@ from pcims.db.connection import get_data_dir
 ExceptionHook = Callable[
     [type[BaseException], BaseException, TracebackType | None], None
 ]
+MAX_ERROR_LOG_BYTES = 1_000_000
+_log_lock = threading.Lock()
+
+
+def log_exception(
+    exception_type: type[BaseException],
+    exception: BaseException,
+    traceback_object: TracebackType | None,
+    log_path: str | Path | None = None,
+) -> Path | None:
+    """Append one traceback to a bounded, thread-safe diagnostic log."""
+    destination = Path(log_path or get_data_dir() / "pcims-errors.log").resolve()
+    try:
+        with _log_lock:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if (
+                destination.is_file()
+                and destination.stat().st_size >= MAX_ERROR_LOG_BYTES
+            ):
+                destination.replace(destination.with_name(f"{destination.name}.1"))
+            with destination.open("a", encoding="utf-8") as log_file:
+                log_file.write(f"\n[{datetime.now().astimezone().isoformat()}]\n")
+                traceback.print_exception(
+                    exception_type, exception, traceback_object, file=log_file
+                )
+        return destination
+    except OSError:
+        traceback.print_exception(exception_type, exception, traceback_object)
+        return None
 
 
 def install_exception_hook(
@@ -22,7 +52,6 @@ def install_exception_hook(
 ) -> ExceptionHook:
     """Install a GUI-safe exception hook and return the previous hook."""
     previous_hook = sys.excepthook
-    destination = Path(log_path or get_data_dir() / "pcims-errors.log").resolve()
 
     def report_exception(
         exception_type: type[BaseException],
@@ -32,21 +61,15 @@ def install_exception_hook(
         if issubclass(exception_type, KeyboardInterrupt):
             previous_hook(exception_type, exception, traceback_object)
             return
-        logged = False
-        try:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with destination.open("a", encoding="utf-8") as log_file:
-                log_file.write(f"\n[{datetime.now().astimezone().isoformat()}]\n")
-                traceback.print_exception(
-                    exception_type, exception, traceback_object, file=log_file
-                )
-            logged = True
-        except OSError:
-            traceback.print_exception(exception_type, exception, traceback_object)
+        destination = log_exception(
+            exception_type, exception, traceback_object, log_path
+        )
 
         application = QApplication.instance()
         if isinstance(application, QApplication):
-            detail = f"\n\nDetails were written to:\n{destination}" if logged else ""
+            detail = (
+                f"\n\nDetails were written to:\n{destination}" if destination else ""
+            )
             try:
                 QMessageBox.critical(
                     QApplication.activeWindow(),

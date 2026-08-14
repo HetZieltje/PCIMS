@@ -17,7 +17,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox, QTableView
 
 from pcims.app.application import acquire_instance_lock, create_application, main
-from pcims.app.errors import install_exception_hook
+from pcims.app.errors import install_exception_hook, log_exception
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
@@ -30,15 +30,8 @@ from pcims.app.table_model import (
     selected_ids,
 )
 from pcims.app.tasks import run_in_background
-from pcims.db.backup import BackupResult, create_backup
-from pcims.db.connection import configure_database
-from pcims.db.queries import (
-    add_expenses,
-    list_expenses,
-    list_pcs,
-    list_sales,
-)
-from pcims.db.schema import initialize_database
+from pcims.db.backup import BackupResult
+from pcims.db.connection import Database
 from pcims.services import ApplicationServices
 
 TEST_DATE = date(2026, 8, 14)
@@ -48,6 +41,10 @@ class QtWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.settings_directory = tempfile.TemporaryDirectory()
+        cls.data_environment = patch.dict(
+            os.environ, {"PCIMS_DATA_DIR": cls.settings_directory.name}
+        )
+        cls.data_environment.start()
         QSettings.setDefaultFormat(QSettings.Format.IniFormat)
         QSettings.setPath(
             QSettings.Format.IniFormat,
@@ -59,6 +56,7 @@ class QtWorkflowTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.application.processEvents()
+        cls.data_environment.stop()
         cls.settings_directory.cleanup()
 
     def setUp(self):
@@ -66,8 +64,11 @@ class QtWorkflowTests(unittest.TestCase):
         settings = QSettings("PCIMS", "PCIMS")
         settings.clear()
         settings.sync()
-        configure_database(Path(self.temporary_directory.name) / "qt-test.db")
-        initialize_database()
+        self.database = Database.at(
+            Path(self.temporary_directory.name) / "qt-test.db"
+        )
+        self.services = ApplicationServices(self.database)
+        self.services.initialize()
 
     def tearDown(self):
         self.application.processEvents()
@@ -86,9 +87,8 @@ class QtWorkflowTests(unittest.TestCase):
     def wait_for_page(self, page):
         self.wait_until(lambda: not page.command_running)
 
-    @staticmethod
-    def purchase(name, item_type, price):
-        return add_expenses(
+    def purchase(self, name, item_type, price):
+        return self.services.add_expenses(
             [
                 {
                     "name": name,
@@ -100,7 +100,7 @@ class QtWorkflowTests(unittest.TestCase):
         )[0]
 
     def test_main_window_constructs_and_refreshes_every_page(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         window.show()
         self.wait_for_window(window)
 
@@ -130,7 +130,7 @@ class QtWorkflowTests(unittest.TestCase):
             page.deleteLater()
 
     def test_data_changes_refresh_only_visible_page_until_tab_is_opened(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         window.tabs.setCurrentWidget(window.inventory_page)
         with (
@@ -171,7 +171,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_inventory_filters_use_loaded_data_without_database_queries(self):
         self.purchase("Case fan", "Fan", 10)
-        page = InventoryPage()
+        page = InventoryPage(self.services)
         page.refresh()
         with (
             patch("pcims.services.ApplicationServices.list_inventory") as inventory_query,
@@ -186,7 +186,7 @@ class QtWorkflowTests(unittest.TestCase):
         page.deleteLater()
 
     def test_main_window_restores_geometry_tab_and_splitters(self):
-        first = MainWindow()
+        first = MainWindow(self.services)
         self.wait_for_window(first)
         first.resize(1080, 720)
         first.tabs.setCurrentIndex(3)
@@ -208,7 +208,7 @@ class QtWorkflowTests(unittest.TestCase):
         first.deleteLater()
 
         with patch.object(MainWindow, "restoreGeometry", return_value=True) as restore:
-            second = MainWindow()
+            second = MainWindow(self.services)
             self.wait_for_window(second)
         restore.assert_called_once_with(expected_geometry)
         second.show()
@@ -225,7 +225,7 @@ class QtWorkflowTests(unittest.TestCase):
         second.deleteLater()
 
     def test_purchase_page_allocates_quantity_total_and_commits(self):
-        page = PurchasesPage()
+        page = PurchasesPage(self.services)
         page.refresh()
         page.name.setText("Case fan")
         page.type.setCurrentText("Fan")
@@ -243,12 +243,13 @@ class QtWorkflowTests(unittest.TestCase):
             self.wait_for_page(page)
 
         self.assertEqual(
-            [item.price_cents for item in list_expenses()], [334, 333, 333]
+            [item.price_cents for item in self.services.list_expenses()],
+            [334, 333, 333],
         )
         page.deleteLater()
 
     def test_purchase_page_reports_database_failure_without_losing_staged_work(self):
-        page = PurchasesPage()
+        page = PurchasesPage(self.services)
         page.refresh()
         page.name.setText("Case fan")
         page.type.setCurrentText("Fan")
@@ -261,17 +262,19 @@ class QtWorkflowTests(unittest.TestCase):
                 side_effect=sqlite3.OperationalError("simulated disk failure"),
             ),
             patch("pcims.app.async_page.show_error") as show_error,
+            patch("pcims.app.tasks.log_exception") as log_error,
         ):
             page.commit_purchase()
             self.wait_for_page(page)
 
         self.assertTrue(page.has_staged_items)
         show_error.assert_called_once()
+        log_error.assert_called_once()
         self.assertIn("simulated disk failure", str(show_error.call_args.args[2]))
         page.deleteLater()
 
     def test_close_warns_before_discarding_staged_purchase(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         window.purchases_page._staged.append({"staged_id": 1})
         event = QCloseEvent()
@@ -284,7 +287,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.deleteLater()
 
     def test_close_accepts_verified_backup_with_retention_warning(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         window.show()
         event = QCloseEvent()
@@ -317,7 +320,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.deleteLater()
 
     def test_failed_close_backup_returns_control_when_close_is_declined(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         window.show()
         event = QCloseEvent()
@@ -345,9 +348,11 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_restore_discards_staged_purchase_only_after_success(self):
         self.purchase("Backup item", "CPU", 100)
-        backup = create_backup(Path(self.temporary_directory.name) / "backups")
+        backup = self.services.create_backup(
+            Path(self.temporary_directory.name) / "backups"
+        )
         self.purchase("Later item", "RAM", 50)
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         window.purchases_page._staged.append({"staged_id": 1})
         loop = QEventLoop()
@@ -375,12 +380,14 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertIn("Unrecorded purchase lines", confirm.call_args.args[2])
         self.assertTrue(window.isEnabled())
         self.assertFalse(window.purchases_page.has_staged_items)
-        self.assertEqual([item.name for item in list_expenses()], ["Backup item"])
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()], ["Backup item"]
+        )
         window.deleteLater()
 
     def test_failed_async_restore_reenables_window_and_preserves_work(self):
         self.purchase("Existing item", "Extra", 10)
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         window.purchases_page._staged.append({"staged_id": 1})
         missing = Path(self.temporary_directory.name) / "missing.db"
@@ -403,7 +410,9 @@ class QtWorkflowTests(unittest.TestCase):
 
         self.assertTrue(window.isEnabled())
         self.assertTrue(window.purchases_page.has_staged_items)
-        self.assertEqual([item.name for item in list_expenses()], ["Existing item"])
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()], ["Existing item"]
+        )
         self.assertEqual(window.settings_page.restore_button.text(), "Restore backup…")
         show_error.assert_called_once()
         window.deleteLater()
@@ -497,7 +506,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertIsNotNone(task)
 
     def test_manual_backup_runs_asynchronously_and_restores_button_state(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         page = window.settings_page
         loop = QEventLoop()
@@ -524,7 +533,7 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_page_uses_injected_services_not_process_database(self):
         isolated_database = Path(self.temporary_directory.name) / "injected.db"
-        services = ApplicationServices(configure_database(isolated_database))
+        services = ApplicationServices(Database.at(isolated_database))
         services.initialize()
         services.add_expenses(
             [
@@ -537,14 +546,14 @@ class QtWorkflowTests(unittest.TestCase):
             ]
         )
         other_database = Path(self.temporary_directory.name) / "other.db"
-        configure_database(other_database)
-        initialize_database()
+        other_services = ApplicationServices(Database.at(other_database))
+        other_services.initialize()
 
         page = InventoryPage(services)
         page.refresh()
         self.assertEqual(page.parts_model.rowCount(), 1)
         self.assertEqual(page.parts_model.index(0, 1).data(), "Injected item")
-        self.assertEqual(list_expenses(), ())
+        self.assertEqual(other_services.list_expenses(), ())
         page.deleteLater()
 
     def test_startup_io_failure_is_reported_and_releases_instance_lock(self):
@@ -558,7 +567,7 @@ class QtWorkflowTests(unittest.TestCase):
             ),
             patch("pcims.app.application.QMessageBox.critical") as critical,
         ):
-            result = main([])
+            result = main([], self.services)
 
         self.assertEqual(result, 2)
         critical.assert_called_once()
@@ -566,7 +575,7 @@ class QtWorkflowTests(unittest.TestCase):
         lock.unlock.assert_called_once()
 
     def test_runtime_refresh_failure_is_reported_and_left_retryable(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         window._dirty_pages.add(window.inventory_page)
         with (
@@ -585,7 +594,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.deleteLater()
 
     def test_stale_async_refresh_cannot_overwrite_a_newer_result(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         first_started = threading.Event()
         release_first = threading.Event()
@@ -618,7 +627,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.deleteLater()
 
     def test_data_change_invalidates_an_inflight_hidden_page_refresh(self):
-        window = MainWindow()
+        window = MainWindow(self.services)
         self.wait_for_window(window)
         window.tabs.setCurrentWidget(window.purchases_page)
         self.wait_for_window(window)
@@ -650,7 +659,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.deleteLater()
 
     def test_database_mutation_keeps_the_qt_event_loop_responsive(self):
-        page = PurchasesPage()
+        page = PurchasesPage(self.services)
         page.name.setText("Slow item")
         page.price.setText("1.00")
         page.add_line()
@@ -698,12 +707,31 @@ class QtWorkflowTests(unittest.TestCase):
         finally:
             sys.excepthook = previous
 
+    def test_error_log_rotation_is_bounded_and_preserves_latest_traceback(self):
+        log_path = Path(self.temporary_directory.name) / "rotating-errors.log"
+        log_path.write_text("old diagnostic content", encoding="utf-8")
+        error = RuntimeError("latest worker failure")
+
+        with patch("pcims.app.errors.MAX_ERROR_LOG_BYTES", 10):
+            destination = log_exception(
+                type(error), error, error.__traceback__, log_path
+            )
+
+        self.assertEqual(destination, log_path.resolve())
+        self.assertEqual(
+            log_path.with_name(f"{log_path.name}.1").read_text(encoding="utf-8"),
+            "old diagnostic content",
+        )
+        self.assertIn(
+            "latest worker failure", log_path.read_text(encoding="utf-8")
+        )
+
     def test_assemble_page_checks_concrete_ids_and_assembles(self):
         expected_ids = [
             self.purchase("RAM", "RAM", 40),
             self.purchase("RAM", "RAM", 45),
         ]
-        page = AssemblePage()
+        page = AssemblePage(self.services)
         page.refresh()
         page.name.setText("Linux workstation")
         checked = []
@@ -717,14 +745,14 @@ class QtWorkflowTests(unittest.TestCase):
         self.wait_for_page(page)
 
         self.assertEqual(checked, expected_ids)
-        pc = list_pcs()[0]
+        pc = self.services.list_pcs()[0]
         self.assertEqual(pc.name, "Linux workstation")
         self.assertEqual([part.id for part in pc.parts], expected_ids)
         page.deleteLater()
 
     def test_inventory_sale_and_sales_page_undo_workflow(self):
         ids = [self.purchase("Cable", "Extra", 5), self.purchase("Cable", "Extra", 6)]
-        inventory = InventoryPage()
+        inventory = InventoryPage(self.services)
         inventory.refresh()
         inventory.parts_table.selectAll()
         with patch(
@@ -734,10 +762,10 @@ class QtWorkflowTests(unittest.TestCase):
             inventory.sell_selected_parts()
         self.wait_for_page(inventory)
 
-        sale = list_sales()[0]
+        sale = self.services.list_sales()[0]
         self.assertEqual({item.id for item in sale.items}, set(ids))
 
-        sales = SalesPage()
+        sales = SalesPage(self.services)
         sales.refresh()
         self.assertEqual(sales.summary_labels["cash"].text(), "€9.00")
         self.assertNotIn("assets", sales.summary_labels)
@@ -746,8 +774,10 @@ class QtWorkflowTests(unittest.TestCase):
             sales.undo_selected()
         self.wait_for_page(sales)
 
-        self.assertEqual(list_sales(), ())
-        self.assertTrue(all(expense.is_available for expense in list_expenses()))
+        self.assertEqual(self.services.list_sales(), ())
+        self.assertTrue(
+            all(expense.is_available for expense in self.services.list_expenses())
+        )
         inventory.deleteLater()
         sales.deleteLater()
 
@@ -755,7 +785,7 @@ class QtWorkflowTests(unittest.TestCase):
         cpu_id = self.purchase("CPU", "CPU", 100)
         spare_id = self.purchase("Spare cable", "Extra", 5)
 
-        inventory = InventoryPage()
+        inventory = InventoryPage(self.services)
         inventory.refresh()
         inventory.parts_table.selectRow(0)
         with patch(
@@ -764,7 +794,7 @@ class QtWorkflowTests(unittest.TestCase):
         ):
             inventory.rename_selected_parts()
         self.wait_for_page(inventory)
-        self.assertEqual(list_expenses()[0].name, "Renamed CPU")
+        self.assertEqual(self.services.list_expenses()[0].name, "Renamed CPU")
 
         inventory.refresh()
         spare_row = next(
@@ -776,9 +806,11 @@ class QtWorkflowTests(unittest.TestCase):
         with patch("pcims.app.pages.inventory.ask_confirmation", return_value=True):
             inventory.delete_selected_parts()
         self.wait_for_page(inventory)
-        self.assertEqual([item.id for item in list_expenses()], [cpu_id])
+        self.assertEqual(
+            [item.id for item in self.services.list_expenses()], [cpu_id]
+        )
 
-        assemble = AssemblePage()
+        assemble = AssemblePage(self.services)
         assemble.refresh()
         assemble.name.setText("Test PC")
         assemble.tree.topLevelItem(0).child(0).setCheckState(0, Qt.CheckState.Checked)
@@ -793,21 +825,21 @@ class QtWorkflowTests(unittest.TestCase):
         ):
             inventory.rename_selected_pc()
         self.wait_for_page(inventory)
-        self.assertEqual(list_pcs()[0].name, "Renamed PC")
+        self.assertEqual(self.services.list_pcs()[0].name, "Renamed PC")
 
         inventory.refresh()
         inventory.pc_table.selectRow(0)
         with patch("pcims.app.pages.inventory.ask_confirmation", return_value=True):
             inventory.disassemble_selected_pc()
         self.wait_for_page(inventory)
-        self.assertEqual(list_pcs(), ())
-        self.assertTrue(list_expenses()[0].is_available)
+        self.assertEqual(self.services.list_pcs(), ())
+        self.assertTrue(self.services.list_expenses()[0].is_available)
         assemble.deleteLater()
         inventory.deleteLater()
 
     def test_pc_sale_and_undo_through_qt_pages(self):
         ids = [self.purchase("CPU", "CPU", 100), self.purchase("RAM", "RAM", 50)]
-        assemble = AssemblePage()
+        assemble = AssemblePage(self.services)
         assemble.refresh()
         assemble.name.setText("PC 1")
         for group_index in range(assemble.tree.topLevelItemCount()):
@@ -817,7 +849,7 @@ class QtWorkflowTests(unittest.TestCase):
         assemble.assemble()
         self.wait_for_page(assemble)
 
-        inventory = InventoryPage()
+        inventory = InventoryPage(self.services)
         inventory.refresh()
         inventory.pc_table.selectRow(0)
         with patch(
@@ -827,17 +859,19 @@ class QtWorkflowTests(unittest.TestCase):
             inventory.sell_selected_pc()
         self.wait_for_page(inventory)
 
-        self.assertEqual(list_pcs(), ())
-        self.assertEqual({item.id for item in list_sales()[0].items}, set(ids))
+        self.assertEqual(self.services.list_pcs(), ())
+        self.assertEqual(
+            {item.id for item in self.services.list_sales()[0].items}, set(ids)
+        )
 
-        sales = SalesPage()
+        sales = SalesPage(self.services)
         sales.refresh()
         sales.sale_table.selectRow(0)
         with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):
             sales.undo_selected()
         self.wait_for_page(sales)
-        self.assertEqual([pc.name for pc in list_pcs()], ["PC 1"])
-        self.assertEqual(list_sales(), ())
+        self.assertEqual([pc.name for pc in self.services.list_pcs()], ["PC 1"])
+        self.assertEqual(self.services.list_sales(), ())
         assemble.deleteLater()
         inventory.deleteLater()
         sales.deleteLater()

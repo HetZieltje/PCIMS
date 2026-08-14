@@ -11,9 +11,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QStyleFactory
 
 from pcims.app.errors import install_exception_hook
 from pcims.app.main_window import MainWindow
-from pcims.db.connection import get_database_path
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
-from pcims.services import default_services
+from pcims.services import ApplicationServices, default_services
 
 
 def create_application(argv: Sequence[str] | None = None) -> QApplication:
@@ -32,21 +31,24 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
     return application
 
 
-def acquire_instance_lock(database_path: Path | None = None) -> QLockFile | None:
+def acquire_instance_lock(database_path: Path) -> QLockFile | None:
     """Lock one configured database so two stale GUI sessions cannot race."""
-    database_path = (database_path or get_database_path()).resolve()
+    database_path = database_path.resolve()
     database_path.parent.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(database_path.with_suffix(database_path.suffix + ".lock")))
     lock.setStaleLockTime(30_000)
     return lock if lock.tryLock(0) else None
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    services: ApplicationServices | None = None,
+) -> int:
     application = create_application(argv)
-    services = default_services()
+    services = services or default_services()
     install_exception_hook()
     try:
-        instance_lock = acquire_instance_lock()
+        instance_lock = acquire_instance_lock(services.database_path)
     except OSError as error:
         QMessageBox.critical(
             None,

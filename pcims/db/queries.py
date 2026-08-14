@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import cast
 
-from pcims.db.connection import Database, get_database
+from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
 from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
 from pcims.domain import ITEM_TYPES, ItemType, PurchaseInput, SaleKind
@@ -15,9 +15,9 @@ from pcims.money import MAX_MONEY_CENTS, parse_money_cents
 
 
 def _transaction(
-    database: Database | None, *, write: bool = False
+    database: Database, *, write: bool = False
 ) -> AbstractContextManager[sqlite3.Connection]:
-    return (database or get_database()).transaction(write=write)
+    return database.transaction(write=write)
 
 
 def _text(value: object, label: str) -> str:
@@ -218,7 +218,7 @@ class ReadQueries:
 
 
 def add_expenses(
-    items: Iterable[PurchaseInput], *, database: Database | None = None
+    items: Iterable[PurchaseInput], *, database: Database
 ) -> list[int]:
     """Record one or more purchased items atomically."""
     normalized = [
@@ -244,7 +244,7 @@ def add_expenses(
         ]
 
 
-def list_expenses(*, database: Database | None = None) -> tuple[Expense, ...]:
+def list_expenses(*, database: Database) -> tuple[Expense, ...]:
     with _transaction(database) as connection:
         return ReadQueries(connection).list_expenses()
 
@@ -253,14 +253,14 @@ def list_inventory(
     item_type: object | None = None,
     available_only: bool = False,
     *,
-    database: Database | None = None,
+    database: Database,
 ) -> tuple[Expense, ...]:
     with _transaction(database) as connection:
         return ReadQueries(connection).list_inventory(item_type, available_only)
 
 
 def delete_expenses(
-    expense_ids: Iterable[object], *, database: Database | None = None
+    expense_ids: Iterable[object], *, database: Database
 ) -> None:
     ids = _unique_ids(expense_ids, "Expense ID")
     placeholders = ",".join("?" for _ in ids)
@@ -290,7 +290,7 @@ def rename_expenses(
     expense_ids: Iterable[object],
     new_name: object,
     *,
-    database: Database | None = None,
+    database: Database,
 ) -> None:
     ids = _unique_ids(expense_ids, "Expense ID")
     new_name = _text(new_name, "New item name")
@@ -314,7 +314,7 @@ def assemble_pc(
     name: object,
     expense_ids: Iterable[object],
     *,
-    database: Database | None = None,
+    database: Database,
 ) -> int:
     name = _text(name, "PC name")
     ids = _unique_ids(expense_ids, "Expense ID")
@@ -341,12 +341,12 @@ def assemble_pc(
         return pc_id
 
 
-def list_pcs(*, database: Database | None = None) -> tuple[AssembledPC, ...]:
+def list_pcs(*, database: Database) -> tuple[AssembledPC, ...]:
     with _transaction(database) as connection:
         return ReadQueries(connection).list_pcs()
 
 
-def disassemble_pc(pc_id: object, *, database: Database | None = None) -> None:
+def disassemble_pc(pc_id: object, *, database: Database) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
     with _transaction(database, write=True) as connection:
         result = connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
@@ -355,7 +355,7 @@ def disassemble_pc(pc_id: object, *, database: Database | None = None) -> None:
 
 
 def rename_pc(
-    pc_id: object, new_name: object, *, database: Database | None = None
+    pc_id: object, new_name: object, *, database: Database
 ) -> None:
     pc_id = _positive_id(pc_id, "PC ID")
     new_name = _text(new_name, "New PC name")
@@ -383,7 +383,7 @@ def sell_items(
     selling_price: object,
     sale_date: object | None = None,
     *,
-    database: Database | None = None,
+    database: Database,
 ) -> int:
     ids = _unique_ids(expense_ids, "Expense ID")
     selling_cents = _money_cents(selling_price, "Selling price")
@@ -425,7 +425,7 @@ def sell_pc(
     selling_price: object,
     sale_date: object | None = None,
     *,
-    database: Database | None = None,
+    database: Database,
 ) -> int:
     pc_id = _positive_id(pc_id, "PC ID")
     selling_cents = _money_cents(selling_price, "Selling price")
@@ -463,12 +463,12 @@ def sell_pc(
         return sale_id
 
 
-def list_sales(*, database: Database | None = None) -> tuple[Sale, ...]:
+def list_sales(*, database: Database) -> tuple[Sale, ...]:
     with _transaction(database) as connection:
         return ReadQueries(connection).list_sales()
 
 
-def undo_sale(sale_id: object, *, database: Database | None = None) -> None:
+def undo_sale(sale_id: object, *, database: Database) -> None:
     sale_id = _positive_id(sale_id, "Sale ID")
     with _transaction(database, write=True) as connection:
         sale = connection.execute(
@@ -508,6 +508,6 @@ def undo_sale(sale_id: object, *, database: Database | None = None) -> None:
             connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))
 
 
-def get_financial_summary(*, database: Database | None = None) -> FinancialSummary:
+def get_financial_summary(*, database: Database) -> FinancialSummary:
     with _transaction(database) as connection:
         return ReadQueries(connection).financial_summary()

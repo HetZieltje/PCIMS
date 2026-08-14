@@ -5,6 +5,8 @@ from typing import Generic, TypeVar
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 
+from pcims.app.errors import log_exception
+
 ResultT = TypeVar("ResultT")
 
 
@@ -26,6 +28,7 @@ class BackgroundTask(QRunnable, Generic[ResultT]):
         try:
             result = self.operation()
         except Exception as error:  # noqa: BLE001 - task boundary reports failures
+            log_exception(type(error), error, error.__traceback__)
             self.signals.failed.emit(error)
         else:
             self.signals.succeeded.emit(result)

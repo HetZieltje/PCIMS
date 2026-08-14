@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pcims.db.connection import Database, get_database
+from pcims.db.connection import Database
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.db.schema import validate_current_data, validate_schema
 
@@ -73,12 +73,12 @@ def create_backup(
     destination_directory: str | os.PathLike[str] | None = None,
     keep: int = 14,
     *,
-    database: Database | None = None,
+    database: Database,
 ) -> BackupResult:
     if keep < 1:
         raise ValueError("At least one backup must be retained.")
     destination = (
-        Path(destination_directory or (database or get_database()).path.parent / "backups")
+        Path(destination_directory or database.path.parent / "backups")
         .expanduser()
         .resolve()
     )
@@ -88,7 +88,7 @@ def create_backup(
     temporary_path = final_path.with_suffix(".tmp")
     primary_error: BaseException | None = None
     try:
-        with (database or get_database()).transaction() as source, closing(
+        with database.transaction() as source, closing(
             sqlite3.connect(temporary_path)
         ) as target:
             source.backup(target)
@@ -120,11 +120,10 @@ def restore_backup(
     backup_path: str | os.PathLike[str],
     pre_restore_directory: str | os.PathLike[str] | None = None,
     *,
-    database: Database | None = None,
+    database: Database,
 ) -> BackupResult:
     source_path = Path(backup_path).expanduser().resolve()
-    active_database = database or get_database()
-    live_path = active_database.path
+    live_path = database.path
     if not source_path.is_file():
         raise FileNotFoundError(f"Backup does not exist: {source_path}")
     if source_path == live_path:
@@ -138,7 +137,7 @@ def restore_backup(
     try:
         shutil.copy2(source_path, staged_path)
         validate_database(staged_path)
-        safety_backup = create_backup(pre_restore_directory, database=active_database)
+        safety_backup = create_backup(pre_restore_directory, database=database)
         os.replace(staged_path, live_path)
     except BaseException as error:
         primary_error = error

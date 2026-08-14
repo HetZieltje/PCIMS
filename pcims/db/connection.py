@@ -3,9 +3,11 @@
 import os
 import sqlite3
 from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+
+from pcims.db.gate import DatabaseGate, gate_for
 
 
 def get_data_dir() -> Path:
@@ -27,6 +29,11 @@ class Database:
     """One explicit SQLite database location and its connection policy."""
 
     path: Path
+
+    @property
+    def gate(self) -> DatabaseGate:
+        """Return the process-wide coordination gate for this database path."""
+        return gate_for(self.path)
 
     @classmethod
     def at(cls, path: str | os.PathLike[str]) -> "Database":
@@ -57,28 +64,7 @@ class Database:
             connection.close()
 
 
-_configured_path = os.environ.get("PCIMS_DB_PATH")
-_database = Database.at(_configured_path or get_data_dir() / "pcims.db")
-
-
-def get_database() -> Database:
-    return _database
-
-
-def get_database_path() -> Path:
-    return get_database().path
-
-
-def configure_database(path: str | os.PathLike[str]) -> Database:
-    """Select the process database at the composition boundary and return it."""
-    global _database
-    _database = Database.at(path)
-    return _database
-
-
-def get_connection() -> sqlite3.Connection:
-    return get_database().connect()
-
-
-def connection() -> AbstractContextManager[sqlite3.Connection]:
-    return get_database().transaction()
+def default_database() -> Database:
+    """Build the environment-selected database without mutable process state."""
+    configured_path = os.environ.get("PCIMS_DB_PATH")
+    return Database.at(configured_path or get_data_dir() / "pcims.db")

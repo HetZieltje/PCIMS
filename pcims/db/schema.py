@@ -4,7 +4,7 @@ import sqlite3
 from contextlib import closing
 from datetime import date
 
-from pcims.db.connection import Database, get_database
+from pcims.db.connection import Database
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES
 from pcims.money import MAX_MONEY_CENTS
@@ -200,10 +200,9 @@ def validate_current_data(database: sqlite3.Connection) -> None:
     _validate_relationships(database)
 
 
-def initialize_database(database: Database | None = None) -> None:
+def initialize_database(database: Database) -> None:
     """Create the current schema, or reject any incompatible existing schema."""
-    active_database = database or get_database()
-    with closing(active_database.connect()) as setup_connection:
+    with closing(database.connect()) as setup_connection:
         journal_mode = setup_connection.execute("PRAGMA journal_mode = WAL").fetchone()[
             0
         ]
@@ -211,7 +210,7 @@ def initialize_database(database: Database | None = None) -> None:
             raise DatabaseIntegrityError(
                 f"Database could not enable WAL journaling (got {journal_mode})."
             )
-    with active_database.transaction(write=True) as connection:
+    with database.transaction(write=True) as connection:
         objects_exist = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
         ).fetchone()
