@@ -7,11 +7,12 @@ from pcims.db.command_support import (
     bounded_cents_total,
     find_pc_name_collision,
     positive_command_id,
+    select_expense_rows,
     unique_command_ids,
 )
 from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
-from pcims.db.records import EXPENSE_SELECT, inserted_id
+from pcims.db.records import EXPENSE_SELECT
 from pcims.domain import SaleTerms
 
 
@@ -28,11 +29,8 @@ def sell_items(
 ) -> int:
     ids = unique_command_ids(expense_ids, "Expense ID")
     sale_day = terms.sale_date.isoformat()
-    placeholders = ",".join("?" for _ in ids)
     with database.transaction(write=True) as connection:
-        rows = connection.execute(
-            EXPENSE_SELECT + f" WHERE e.id IN ({placeholders}) ORDER BY e.id", ids
-        ).fetchall()
+        rows = sorted(select_expense_rows(connection, ids), key=lambda row: row["id"])
         if len(rows) != len(ids):
             raise NotFoundError("One or more selected expenses no longer exist.")
         for row in rows:
@@ -44,13 +42,10 @@ def sell_items(
         bounded_cents_total(
             (row["price_cents"] for row in rows), "Combined item cost"
         )
-        sale_id = inserted_id(
-            connection.execute(
-                "INSERT INTO sales "
-                "(name,kind,selling_price_cents,sale_date) "
-                "VALUES (?,'item',?,?)",
-                (name, terms.selling_price_cents, sale_day),
-            )
+        sale_id = int(
+            connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM sales").fetchone()[
+                0
+            ]
         )
         connection.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
@@ -58,6 +53,12 @@ def sell_items(
                 (sale_id, expense_id, position)
                 for position, expense_id in enumerate(ids)
             ),
+        )
+        connection.execute(
+            "INSERT INTO sales "
+            "(id,name,kind,selling_price_cents,sale_date) "
+            "VALUES (?,?,'item',?,?)",
+            (sale_id, name, terms.selling_price_cents, sale_day),
         )
         return sale_id
 
@@ -82,13 +83,10 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
         )
         expense_ids = [row["id"] for row in rows]
         connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
-        sale_id = inserted_id(
-            connection.execute(
-                "INSERT INTO sales "
-                "(name,kind,selling_price_cents,sale_date) "
-                "VALUES (?,'pc',?,?)",
-                (pc["name"], terms.selling_price_cents, sale_day),
-            )
+        sale_id = int(
+            connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM sales").fetchone()[
+                0
+            ]
         )
         connection.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
@@ -96,6 +94,12 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
                 (sale_id, expense_id, position)
                 for position, expense_id in enumerate(expense_ids)
             ),
+        )
+        connection.execute(
+            "INSERT INTO sales "
+            "(id,name,kind,selling_price_cents,sale_date) "
+            "VALUES (?,?,'pc',?,?)",
+            (sale_id, pc["name"], terms.selling_price_cents, sale_day),
         )
         return sale_id
 
@@ -125,10 +129,10 @@ def undo_sale(sale_id: int, *, database: Database) -> None:
                     f"'{collision['name']}' exists."
                 )
             connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))
-            pc_id = inserted_id(
+            pc_id = int(
                 connection.execute(
-                    "INSERT INTO assembled_pcs (name) VALUES (?)", (sale["name"],)
-                )
+                    "SELECT COALESCE(MAX(id),0)+1 FROM assembled_pcs"
+                ).fetchone()[0]
             )
             connection.executemany(
                 "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
@@ -136,6 +140,10 @@ def undo_sale(sale_id: int, *, database: Database) -> None:
                     (pc_id, expense_id, position)
                     for position, expense_id in enumerate(item_ids)
                 ),
+            )
+            connection.execute(
+                "INSERT INTO assembled_pcs (id,name) VALUES (?,?)",
+                (pc_id, sale["name"]),
             )
         else:
             connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))

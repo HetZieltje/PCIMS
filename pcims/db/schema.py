@@ -9,7 +9,7 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES, MAX_NAME_LENGTH
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND instr(name,char(0))=0
@@ -31,7 +31,8 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
             CHECK ({_VALID_NAME_SQL})
     ) STRICT""",
     ("table", "pc_parts"): """CREATE TABLE pc_parts (
-        pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE,
+        pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE
+            DEFERRABLE INITIALLY DEFERRED,
         expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
         position INTEGER NOT NULL CHECK (position >= 0),
         PRIMARY KEY (pc_id, expense_id),
@@ -49,7 +50,8 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
                    AND COALESCE(strftime('%Y-%m-%d',sale_date)=sale_date,0))
     ) STRICT""",
     ("table", "sale_items"): """CREATE TABLE sale_items (
-        sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+        sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE
+            DEFERRABLE INITIALLY DEFERRED,
         expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
         position INTEGER NOT NULL CHECK (position >= 0),
         PRIMARY KEY (sale_id, expense_id),
@@ -68,12 +70,39 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         END""",
     (
         "trigger",
+        "pc_part_insert_requires_new_pc",
+    ): """CREATE TRIGGER pc_part_insert_requires_new_pc
+        BEFORE INSERT ON pc_parts
+        WHEN EXISTS (SELECT 1 FROM assembled_pcs WHERE id=NEW.pc_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'published PC membership is immutable');
+        END""",
+    (
+        "trigger",
+        "assembled_pc_requires_parts",
+    ): """CREATE TRIGGER assembled_pc_requires_parts
+        AFTER INSERT ON assembled_pcs
+        WHEN NOT EXISTS (SELECT 1 FROM pc_parts WHERE pc_id=NEW.id)
+        BEGIN
+            SELECT RAISE(ABORT, 'assembled PC must contain components');
+        END""",
+    (
+        "trigger",
         "sale_item_must_not_be_in_pc",
     ): """CREATE TRIGGER sale_item_must_not_be_in_pc
         BEFORE INSERT ON sale_items
         WHEN EXISTS (SELECT 1 FROM pc_parts WHERE expense_id=NEW.expense_id)
         BEGIN
             SELECT RAISE(ABORT, 'assembled expense cannot be sold separately');
+        END""",
+    (
+        "trigger",
+        "sale_item_insert_requires_new_sale",
+    ): """CREATE TRIGGER sale_item_insert_requires_new_sale
+        BEFORE INSERT ON sale_items
+        WHEN EXISTS (SELECT 1 FROM sales WHERE id=NEW.sale_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'published sale membership is immutable');
         END""",
     ("trigger", "pc_part_cost_limit"): """CREATE TRIGGER pc_part_cost_limit
         BEFORE INSERT ON pc_parts
@@ -104,6 +133,22 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         )
         BEGIN
             SELECT RAISE(ABORT, 'sale item has invalid cost or date');
+        END""",
+    (
+        "trigger",
+        "sale_requires_valid_items",
+    ): """CREATE TRIGGER sale_requires_valid_items
+        AFTER INSERT ON sales
+        WHEN NOT EXISTS (SELECT 1 FROM sale_items WHERE sale_id=NEW.id)
+          OR EXISTS (
+              SELECT 1 FROM sale_items si JOIN expenses e ON e.id=si.expense_id
+               WHERE si.sale_id=NEW.id AND e.purchase_date>NEW.sale_date
+          )
+          OR (SELECT SUM(e.price_cents)
+                FROM sale_items si JOIN expenses e ON e.id=si.expense_id
+               WHERE si.sale_id=NEW.id) > 99999999999
+        BEGIN
+            SELECT RAISE(ABORT, 'sale must contain valid items');
         END""",
     (
         "trigger",
@@ -159,7 +204,11 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         END""",
 }
 
-for _money_trigger in ("pc_part_cost_limit", "sale_item_cost_and_date_limit"):
+for _money_trigger in (
+    "pc_part_cost_limit",
+    "sale_item_cost_and_date_limit",
+    "sale_requires_valid_items",
+):
     if str(MAX_MONEY_CENTS) not in SCHEMA_DEFINITIONS[("trigger", _money_trigger)]:
         raise RuntimeError(f"{_money_trigger} does not use the current money limit.")
 

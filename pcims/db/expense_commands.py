@@ -2,10 +2,15 @@
 
 from collections.abc import Iterable
 
-from pcims.db.command_support import normalized_command_text, unique_command_ids
+from pcims.db.command_support import (
+    id_batches,
+    normalized_command_text,
+    select_expense_rows,
+    unique_command_ids,
+)
 from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
-from pcims.db.records import EXPENSE_SELECT, inserted_id
+from pcims.db.records import inserted_id
 from pcims.domain import NewExpense
 
 
@@ -34,11 +39,8 @@ def add_expenses(items: Iterable[NewExpense], *, database: Database) -> list[int
 
 def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:
     ids = unique_command_ids(expense_ids, "Expense ID")
-    placeholders = ",".join("?" for _ in ids)
     with database.transaction(write=True) as connection:
-        rows = connection.execute(
-            EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})", ids
-        ).fetchall()
+        rows = select_expense_rows(connection, ids)
         if len(rows) != len(ids):
             found = {row["id"] for row in rows}
             missing = next(item_id for item_id in ids if item_id not in found)
@@ -62,15 +64,8 @@ def rename_expenses(
 ) -> None:
     ids = unique_command_ids(expense_ids, "Expense ID")
     name = normalized_command_text(new_name, "New item name")
-    placeholders = ",".join("?" for _ in ids)
     with database.transaction(write=True) as connection:
-        rows = connection.execute(
-            # IDs are validated integers; only the number of placeholders varies.
-            "SELECT e.id,si.sale_id FROM expenses e "
-            "LEFT JOIN sale_items si ON si.expense_id=e.id "
-            f"WHERE e.id IN ({placeholders})",  # nosec B608
-            ids,
-        ).fetchall()
+        rows = select_expense_rows(connection, ids)
         if len(rows) != len(ids):
             raise NotFoundError("One or more selected expenses no longer exist.")
         sold = next((row for row in rows if row["sale_id"] is not None), None)
@@ -78,8 +73,10 @@ def rename_expenses(
             raise ValidationError(
                 f"Expense {sold['id']} has sale history and cannot be renamed."
             )
-        connection.execute(
-            # IDs and name remain bound parameters; no user text enters the SQL.
-            f"UPDATE expenses SET name=? WHERE id IN ({placeholders})",  # nosec B608
-            [name, *ids],
-        )
+        for batch in id_batches(ids):
+            placeholders = ",".join("?" for _ in batch)
+            connection.execute(
+                # IDs and name are bound; only the validated batch width varies.
+                f"UPDATE expenses SET name=? WHERE id IN ({placeholders})",  # nosec B608
+                [name, *batch],
+            )

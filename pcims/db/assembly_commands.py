@@ -7,11 +7,11 @@ from pcims.db.command_support import (
     find_pc_name_collision,
     normalized_command_text,
     positive_command_id,
+    select_expense_rows,
     unique_command_ids,
 )
 from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
-from pcims.db.records import EXPENSE_SELECT, inserted_id
 
 
 def assemble_pc(
@@ -19,14 +19,11 @@ def assemble_pc(
 ) -> int:
     name = normalized_command_text(name, "PC name")
     ids = unique_command_ids(expense_ids, "Expense ID")
-    placeholders = ",".join("?" for _ in ids)
     with database.transaction(write=True) as connection:
         collision = find_pc_name_collision(connection, name)
         if collision:
             raise ValidationError(f"A PC named '{collision['name']}' already exists.")
-        rows = connection.execute(
-            EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})", ids
-        ).fetchall()
+        rows = select_expense_rows(connection, ids)
         if len(rows) != len(ids):
             raise NotFoundError("One or more selected expenses no longer exist.")
         for row in rows:
@@ -35,12 +32,17 @@ def assemble_pc(
         bounded_cents_total(
             (row["price_cents"] for row in rows), "Combined PC cost"
         )
-        pc_id = inserted_id(
-            connection.execute("INSERT INTO assembled_pcs (name) VALUES (?)", (name,))
+        pc_id = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(id),0)+1 FROM assembled_pcs"
+            ).fetchone()[0]
         )
         connection.executemany(
             "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
             ((pc_id, expense_id, position) for position, expense_id in enumerate(ids)),
+        )
+        connection.execute(
+            "INSERT INTO assembled_pcs (id,name) VALUES (?,?)", (pc_id, name)
         )
         return pc_id
 

@@ -377,11 +377,25 @@ class DatabaseWorkflowTests(unittest.TestCase):
         )
 
     def test_pc_name_uniqueness_is_enforced_by_unicode_database_collation(self):
+        first_id = self.buy("First", "CPU", 10)
+        second_id = self.buy("Second", "RAM", 10)
         with self.assertRaises(sqlite3.IntegrityError), self.database.transaction(
             write=True
         ) as database:
-            database.execute("INSERT INTO assembled_pcs (name) VALUES (?)", ("Straße",))
-            database.execute("INSERT INTO assembled_pcs (name) VALUES (?)", ("STRASSE",))
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (101,?,0)",
+                (first_id,),
+            )
+            database.execute(
+                "INSERT INTO assembled_pcs (id,name) VALUES (101,?)", ("Straße",)
+            )
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (102,?,0)",
+                (second_id,),
+            )
+            database.execute(
+                "INSERT INTO assembled_pcs (id,name) VALUES (102,?)", ("STRASSE",)
+            )
 
         with self.database.transaction() as database:
             count = database.execute("SELECT COUNT(*) FROM assembled_pcs").fetchone()[0]
@@ -759,36 +773,34 @@ class DatabaseWorkflowTests(unittest.TestCase):
         maximum = MAX_MONEY_CENTS
         first_id = self.buy("First", "Extra", f"{maximum // 100}.{maximum % 100:02d}")
         second_id = self.buy("Second", "Extra", "0.01")
-        with self.database.transaction(write=True) as database:
-            pc_id = database.execute(
-                "INSERT INTO assembled_pcs (name) VALUES ('Bounded PC')"
-            ).lastrowid
-            database.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,0)",
-                (pc_id, first_id),
-            )
+        pc_id = 101
         with (
             self.assertRaisesRegex(sqlite3.IntegrityError, "combined PC cost"),
             self.database.transaction(write=True) as database,
         ):
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,0)",
+                (pc_id, first_id),
+            )
             database.execute(
                 "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,1)",
                 (pc_id, second_id),
             )
 
         sale_item = self.buy("Future purchase", "CPU", 1, "2026-08-14")
-        with self.database.transaction(write=True) as database:
-            sale_id = database.execute(
-                "INSERT INTO sales (name,kind,selling_price_cents,sale_date) "
-                "VALUES ('Invalid chronology','item',100,'2026-08-13')"
-            ).lastrowid
+        sale_id = 101
         with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "invalid cost or date"),
+            self.assertRaisesRegex(sqlite3.IntegrityError, "valid items"),
             self.database.transaction(write=True) as database,
         ):
             database.execute(
                 "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,0)",
                 (sale_id, sale_item),
+            )
+            database.execute(
+                "INSERT INTO sales (id,name,kind,selling_price_cents,sale_date) "
+                "VALUES (?,'Invalid chronology','item',100,'2026-08-13')",
+                (sale_id,),
             )
 
         sale_first = self.buy(
@@ -797,22 +809,63 @@ class DatabaseWorkflowTests(unittest.TestCase):
             f"{maximum // 100}.{maximum % 100:02d}",
         )
         sale_second = self.buy("Overflow sale cost", "Extra", "0.01")
-        with self.database.transaction(write=True) as database:
-            bounded_sale_id = database.execute(
-                "INSERT INTO sales (name,kind,selling_price_cents,sale_date) "
-                "VALUES ('Bounded sale','item',100,'2026-08-14')"
-            ).lastrowid
+        bounded_sale_id = 102
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "valid items"),
+            self.database.transaction(write=True) as database,
+        ):
             database.execute(
                 "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,0)",
                 (bounded_sale_id, sale_first),
             )
+            database.execute(
+                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,1)",
+                (bounded_sale_id, sale_second),
+            )
+            database.execute(
+                "INSERT INTO sales (id,name,kind,selling_price_cents,sale_date) "
+                "VALUES (?,'Bounded sale','item',100,'2026-08-14')",
+                (bounded_sale_id,),
+            )
+
+    def test_empty_or_post_publication_aggregate_membership_is_rejected(self):
+        item_ids = [self.buy("Part", "Extra", 1) for _ in range(2)]
         with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "invalid cost or date"),
+            self.assertRaisesRegex(sqlite3.IntegrityError, "must contain"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                "INSERT INTO assembled_pcs (id,name) VALUES (100,'Empty PC')"
+            )
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "valid items"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                "INSERT INTO sales "
+                "(id,name,kind,selling_price_cents,sale_date) "
+                "VALUES (100,'Empty sale','item',100,'2026-08-14')"
+            )
+
+        pc_id = self.services.assemble_pc("Published PC", [item_ids[0]])
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "published PC"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,1)",
+                (pc_id, item_ids[1]),
+            )
+
+        sale_id = self.services.sell_items([item_ids[1]], SaleTerms.create(2))
+        later_id = self.buy("Later part", "Extra", 1)
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "published sale"),
             self.database.transaction(write=True) as database,
         ):
             database.execute(
                 "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,1)",
-                (bounded_sale_id, sale_second),
+                (sale_id, later_id),
             )
 
     def test_linked_values_and_memberships_are_immutable_in_storage(self):
@@ -936,6 +989,28 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(
             {item.id for item in self.services.list_expenses()}, set(ids)
         )
+
+    def test_bulk_commands_stay_below_sqlite_parameter_limits(self):
+        ids = [self.buy(f"Bulk {index}", "Extra", 1) for index in range(6)]
+        original_connect = Database.connect
+
+        def limited_connect(database, *args, **kwargs):
+            connection = original_connect(database, *args, **kwargs)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 4)
+            return connection
+
+        with (
+            patch.object(Database, "connect", new=limited_connect),
+            patch("pcims.db.command_support.SQLITE_ID_BATCH_SIZE", 2),
+        ):
+            self.services.rename_expenses(ids, "Batched")
+            pc_id = self.services.assemble_pc("Batched PC", ids)
+            self.services.disassemble_pc(pc_id)
+            sale_id = self.services.sell_items(ids, SaleTerms.create(12))
+            self.services.undo_sale(sale_id)
+            self.services.delete_expenses(ids)
+
+        self.assertEqual(self.services.list_expenses(), ())
 
     def test_renaming_pc_does_not_rewrite_parts(self):
         item_id = self.buy("CPU", "CPU", 100)
