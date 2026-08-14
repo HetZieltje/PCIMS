@@ -1,4 +1,5 @@
 import gc
+import os
 import sqlite3
 import tempfile
 import threading
@@ -280,6 +281,17 @@ class DatabaseWorkflowTests(unittest.TestCase):
             sale_columns,
             ["id", "name", "kind", "cost_cents", "selling_price_cents", "sale_date"],
         )
+
+    def test_pc_name_uniqueness_is_enforced_by_unicode_database_collation(self):
+        with self.assertRaises(sqlite3.IntegrityError), self.database.transaction(
+            write=True
+        ) as database:
+            database.execute("INSERT INTO assembled_pcs (name) VALUES (?)", ("Straße",))
+            database.execute("INSERT INTO assembled_pcs (name) VALUES (?)", ("STRASSE",))
+
+        with self.database.transaction() as database:
+            count = database.execute("SELECT COUNT(*) FROM assembled_pcs").fetchone()[0]
+        self.assertEqual(count, 0)
 
     def test_membership_indexes_cover_display_order(self):
         with self.database.transaction() as database:
@@ -704,6 +716,35 @@ class DatabaseWorkflowTests(unittest.TestCase):
         validate_database(result)
         self.assertTrue(result.has_cleanup_warnings)
         self.assertIn("simulated directory scan failure", result.cleanup_warning)
+
+    def test_backup_flushes_file_and_directory_around_atomic_publish(self):
+        self.buy("Keep", "CPU", 10)
+        backup_directory = Path(self.temporary_directory.name) / "durable-backups"
+        events: list[tuple[str, Path]] = []
+        real_replace = os.replace
+
+        def observed_replace(source, destination):
+            events.append(("replace", Path(destination)))
+            real_replace(source, destination)
+
+        with (
+            patch(
+                "pcims.db.backup._sync_file",
+                side_effect=lambda path: events.append(("file", path)),
+            ),
+            patch(
+                "pcims.db.backup._sync_directory",
+                side_effect=lambda path: events.append(("directory", path)),
+            ),
+            patch("pcims.db.backup.os.replace", side_effect=observed_replace),
+        ):
+            result = create_backup(backup_directory, database=self.database)
+
+        self.assertEqual(
+            [event for event, _path in events], ["file", "replace", "directory"]
+        )
+        self.assertEqual(events[-1][1], backup_directory.resolve())
+        validate_database(result)
 
     def test_temporary_cleanup_failure_preserves_primary_backup_error(self):
         self.buy("Keep", "CPU", 10)

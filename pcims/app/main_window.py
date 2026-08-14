@@ -1,16 +1,13 @@
 """Main Qt window and application-wide presentation state."""
 
-from typing import cast
-
-from PySide6.QtCore import QByteArray, QSettings, Qt
-from PySide6.QtGui import QCloseEvent, QColor, QPalette
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
-    QApplication,
     QMainWindow,
     QMessageBox,
     QTabWidget,
 )
 
+from pcims.app.appearance import apply_application_theme
 from pcims.app.common import show_error
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
@@ -19,6 +16,7 @@ from pcims.app.pages.sales import SalesPage
 from pcims.app.pages.settings import SettingsPage
 from pcims.app.refresh import RefreshCoordinator, bind_refresh
 from pcims.app.tasks import TaskManager
+from pcims.app.window_state import WindowStateStore
 from pcims.db.backup import BackupResult
 from pcims.services import ApplicationServices
 
@@ -30,7 +28,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("PCIMS — PC Inventory Management")
         self.resize(1240, 800)
         self.setMinimumSize(900, 600)
-        self.settings = QSettings("PCIMS", "PCIMS")
+        self.window_state = WindowStateStore()
         self._closing_after_backup = False
         self._close_requested = False
         self._close_backup_running = False
@@ -46,7 +44,7 @@ class MainWindow(QMainWindow):
         self.sales_page = SalesPage(self.services, tasks=self.tasks)
         self.settings_page = SettingsPage(
             self.services,
-            str(self.settings.value("theme", "system")),
+            self.window_state.theme,
             has_pending_changes=lambda: self.purchases_page.has_staged_items,
             tasks=self.tasks,
         )
@@ -99,7 +97,7 @@ class MainWindow(QMainWindow):
         self.settings_page.theme_changed.connect(self.apply_theme)
         self.settings_page.database_restored.connect(self._after_database_restore)
         self.tabs.currentChanged.connect(self.refresh_current)
-        self.apply_theme(str(self.settings.value("theme", "system")))
+        self.apply_theme(self.window_state.theme)
         self._restore_window_state()
         self.statusBar().showMessage("Ready")
         self.refresh_current()
@@ -157,87 +155,29 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Backup restored", 5000)
 
     def _restore_window_state(self) -> None:
-        geometry = self.settings.value("window/geometry")
-        if isinstance(geometry, QByteArray):
-            self.restoreGeometry(geometry)
-        try:
-            tab_index = int(str(self.settings.value("window/active_tab", 0)))
-        except (TypeError, ValueError):
-            tab_index = 0
-        if 0 <= tab_index < self.tabs.count():
-            self.tabs.setCurrentIndex(tab_index)
-        for key, splitter in (
-            ("inventory", self.inventory_page.splitter),
-            ("sales", self.sales_page.splitter),
-            ("sales_details", self.sales_page.detail_splitter),
-        ):
-            state = self.settings.value(f"window/splitters/{key}")
-            if isinstance(state, QByteArray):
-                splitter.restoreState(state)
+        self.window_state.restore(
+            self,
+            self.tabs,
+            (
+                ("inventory", self.inventory_page.splitter),
+                ("sales", self.sales_page.splitter),
+                ("sales_details", self.sales_page.detail_splitter),
+            ),
+        )
 
     def _save_window_state(self) -> None:
-        self.settings.setValue("window/geometry", self.saveGeometry())
-        self.settings.setValue("window/active_tab", self.tabs.currentIndex())
-        for key, splitter in (
-            ("inventory", self.inventory_page.splitter),
-            ("sales", self.sales_page.splitter),
-            ("sales_details", self.sales_page.detail_splitter),
-        ):
-            self.settings.setValue(f"window/splitters/{key}", splitter.saveState())
-        self.settings.sync()
+        self.window_state.save(
+            self,
+            self.tabs,
+            (
+                ("inventory", self.inventory_page.splitter),
+                ("sales", self.sales_page.splitter),
+                ("sales_details", self.sales_page.detail_splitter),
+            ),
+        )
 
     def apply_theme(self, theme: str) -> None:
-        theme = theme if theme in {"system", "light", "dark"} else "system"
-        existing = QApplication.instance()
-        if existing is None:
-            raise RuntimeError("A QApplication must exist before applying a theme.")
-        application = cast(QApplication, existing)
-        application.setPalette(application.style().standardPalette())
-        application.setStyleSheet("")
-        if theme == "light":
-            palette = QPalette()
-            palette.setColor(QPalette.ColorRole.Window, QColor(245, 245, 245))
-            palette.setColor(QPalette.ColorRole.WindowText, QColor(25, 25, 25))
-            palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
-            palette.setColor(QPalette.ColorRole.AlternateBase, QColor(240, 240, 240))
-            palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
-            palette.setColor(QPalette.ColorRole.ToolTipText, QColor(25, 25, 25))
-            palette.setColor(QPalette.ColorRole.Text, QColor(25, 25, 25))
-            palette.setColor(QPalette.ColorRole.Button, QColor(238, 238, 238))
-            palette.setColor(QPalette.ColorRole.ButtonText, QColor(25, 25, 25))
-            palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 212))
-            palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-            palette.setColor(
-                QPalette.ColorGroup.Disabled,
-                QPalette.ColorRole.Text,
-                QColor(125, 125, 125),
-            )
-            application.setPalette(palette)
-        elif theme == "dark":
-            palette = QPalette()
-            palette.setColor(QPalette.ColorRole.Window, QColor(37, 37, 38))
-            palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
-            palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
-            palette.setColor(QPalette.ColorRole.AlternateBase, QColor(45, 45, 48))
-            palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(45, 45, 48))
-            palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
-            palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-            palette.setColor(QPalette.ColorRole.Button, QColor(45, 45, 48))
-            palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
-            palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-            palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 212))
-            palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-            palette.setColor(
-                QPalette.ColorGroup.Disabled,
-                QPalette.ColorRole.Text,
-                QColor(130, 130, 130),
-            )
-            application.setPalette(palette)
-        if theme != "system":
-            application.setStyleSheet(
-                "QGroupBox { font-weight: 600; } QPushButton { padding: 5px 10px; }"
-            )
-        self.settings.setValue("theme", theme)
+        self.window_state.theme = apply_application_theme(theme)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._closing_after_backup:

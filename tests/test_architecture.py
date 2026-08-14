@@ -137,6 +137,18 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn('getattr(page, "load_snapshot"', main_window)
         self.assertNotIn('getattr(page, "command_running"', main_window)
 
+    def test_window_persistence_and_palette_policy_are_separate_from_lifecycle(self):
+        app = Path(__file__).parents[1] / "pcims" / "app"
+        main_window = (app / "main_window.py").read_text(encoding="utf-8")
+        appearance = (app / "appearance.py").read_text(encoding="utf-8")
+        window_state = (app / "window_state.py").read_text(encoding="utf-8")
+
+        self.assertIn("def apply_application_theme", appearance)
+        self.assertIn("class WindowStateStore", window_state)
+        self.assertNotIn("QPalette", main_window)
+        self.assertNotIn("QSettings", main_window)
+        self.assertNotIn("QByteArray", main_window)
+
     def test_linux_desktop_install_assets_are_present_and_user_scoped(self):
         root = Path(__file__).parents[1]
         installer = (root / "scripts" / "install-linux.sh").read_text(encoding="utf-8")

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pcims.db.connection import Database
+from pcims.db.connection import Database, register_database_collations
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.db.schema import validate_current_data, validate_schema
 
@@ -36,6 +36,23 @@ class BackupResult(os.PathLike[str]):
         return "\n".join(self.cleanup_errors)
 
 
+def _sync_file(path: Path) -> None:
+    """Flush file contents before an atomic name replacement is reported durable."""
+    with path.open("r+b") as file:
+        os.fsync(file.fileno())
+
+
+def _sync_directory(path: Path) -> None:
+    """Flush a directory entry on platforms that expose directory descriptors."""
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _remove_temporary(path: Path, primary_error: BaseException | None) -> None:
     if not path.exists():
         return
@@ -52,6 +69,7 @@ def _remove_temporary(path: Path, primary_error: BaseException | None) -> None:
 def validate_database(path: str | os.PathLike[str]) -> None:
     resolved = Path(path).expanduser().resolve()
     with closing(sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)) as database:
+        register_database_collations(database)
         integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise sqlite3.DatabaseError(f"Database integrity check failed: {integrity}")
@@ -93,7 +111,9 @@ def _create_backup(
         ) as target:
             source.backup(target)
         validate_database(temporary_path)
+        _sync_file(temporary_path)
         os.replace(temporary_path, final_path)
+        _sync_directory(destination)
     except BaseException as error:
         primary_error = error
         raise
@@ -149,7 +169,9 @@ def _restore_backup(
         shutil.copy2(source_path, staged_path)
         validate_database(staged_path)
         safety_backup = create_backup(pre_restore_directory, database=database)
+        _sync_file(staged_path)
         os.replace(staged_path, live_path)
+        _sync_directory(live_path.parent)
     except BaseException as error:
         primary_error = error
         raise

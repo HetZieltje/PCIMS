@@ -2,6 +2,7 @@
 
 import sqlite3
 from collections.abc import Iterable
+from typing import cast
 
 from pcims.db.errors import ValidationError
 from pcims.domain import normalized_id, normalized_ids, normalized_text
@@ -41,12 +42,17 @@ def find_pc_name_collision(
     name: str,
     exclude_id: int | None = None,
 ) -> sqlite3.Row | None:
-    folded = name.casefold()
-    return next(
-        (
-            row
-            for row in connection.execute("SELECT id,name FROM assembled_pcs")
-            if row["id"] != exclude_id and row["name"].casefold() == folded
-        ),
-        None,
+    if exclude_id is None:
+        return cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT id,name FROM assembled_pcs WHERE name=?", (name,)
+            ).fetchone(),
+        )
+    return cast(
+        sqlite3.Row | None,
+        connection.execute(
+            "SELECT id,name FROM assembled_pcs WHERE name=? AND id<>?",
+            (name, exclude_id),
+        ).fetchone(),
     )

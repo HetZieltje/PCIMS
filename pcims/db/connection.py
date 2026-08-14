@@ -10,6 +10,17 @@ from pathlib import Path
 from pcims.db.gate import DatabaseGate, gate_for
 
 
+def _unicode_nocase(left: str, right: str) -> int:
+    left_folded = left.casefold()
+    right_folded = right.casefold()
+    return (left_folded > right_folded) - (left_folded < right_folded)
+
+
+def register_database_collations(connection: sqlite3.Connection) -> None:
+    """Install the deterministic Unicode comparison used by schema constraints."""
+    connection.create_collation("PCIMS_NOCASE", _unicode_nocase)
+
+
 def get_data_dir() -> Path:
     """Return the per-user writable PCIMS data directory."""
     configured = os.environ.get("PCIMS_DATA_DIR")
@@ -49,6 +60,7 @@ class Database:
                 f"{self.path.as_uri()}?mode=rw", uri=True, timeout=10
             )
         database.row_factory = sqlite3.Row
+        register_database_collations(database)
         database.execute("PRAGMA foreign_keys = ON")
         database.execute("PRAGMA busy_timeout = 10000")
         database.execute("PRAGMA synchronous = FULL")

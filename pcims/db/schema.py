@@ -9,7 +9,7 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
     ("table", "expenses"): f"""CREATE TABLE expenses (
@@ -22,7 +22,8 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
     )""",
     ("table", "assembled_pcs"): """CREATE TABLE assembled_pcs (
         id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0)
+        name TEXT NOT NULL COLLATE PCIMS_NOCASE UNIQUE
+            CHECK (length(trim(name)) > 0)
     )""",
     ("table", "pc_parts"): """CREATE TABLE pc_parts (
         pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE,
