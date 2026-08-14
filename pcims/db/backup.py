@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import sqlite3
+import stat
 import uuid
 from contextlib import closing
 from datetime import UTC, datetime
@@ -86,9 +87,12 @@ def _prune_backups(
     timestamped: list[tuple[int, str, Path]] = []
     for path in paths:
         try:
-            timestamped.append((path.stat().st_mtime_ns, path.name, path))
+            metadata = path.stat()
         except OSError as error:
             warnings.append(f"Unable to inspect backup {path}: {error}")
+            continue
+        if stat.S_ISREG(metadata.st_mode):
+            timestamped.append((metadata.st_mtime_ns, path.name, path))
     timestamped.sort(reverse=True)
     for _timestamp, _name, old_backup in timestamped[keep:]:
         try:

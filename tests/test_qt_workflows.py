@@ -1002,6 +1002,18 @@ class QtWorkflowTests(unittest.TestCase):
             type(error), error, error.__traceback__
         )
 
+    def test_error_reporting_survives_an_invalid_data_directory_override(self):
+        error = RuntimeError("invalid configuration diagnostic")
+
+        with (
+            patch.dict(os.environ, {"PCIMS_DATA_DIR": "relative-data"}),
+            patch("pcims.app.errors.traceback.print_exception") as print_exception,
+        ):
+            destination = log_exception(type(error), error, error.__traceback__)
+
+        self.assertIsNone(destination)
+        print_exception.assert_called_once()
+
     def test_assemble_page_checks_concrete_ids_and_assembles(self):
         expected_ids = [
             self.purchase("RAM", "RAM", 40),

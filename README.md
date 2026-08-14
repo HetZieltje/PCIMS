@@ -43,6 +43,10 @@ Application data follows platform conventions:
 - Linux with `XDG_DATA_HOME`: `$XDG_DATA_HOME/pcims`
 - Other Linux environments: `~/.local/share/pcims`
 
+`PCIMS_DATA_DIR` and `PCIMS_DB_PATH` are supported for controlled deployments
+and tests. Both must be absolute paths so a desktop launch cannot select a
+different database merely because its working directory changed.
+
 The application creates verified backups at startup and normal shutdown.
 Manual backup and restore controls are available under Settings.
 

@@ -18,7 +18,7 @@ from pcims.db.backup import (
     restore_backup,
     validate_database,
 )
-from pcims.db.connection import Database, default_database
+from pcims.db.connection import Database, default_database, get_data_dir
 from pcims.db.errors import (
     DatabaseIntegrityError,
     NotFoundError,
@@ -77,6 +77,32 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(configured.path.parent, data_directory.resolve())
         self.assertEqual(stat.S_IMODE(data_directory.stat().st_mode), 0o700)
+
+    def test_platform_data_directory_ignores_the_other_operating_system(self):
+        windows_root = Path(self.temporary_directory.name) / "windows-data"
+        linux_root = Path(self.temporary_directory.name) / "linux-data"
+        environment = {
+            "LOCALAPPDATA": str(windows_root),
+            "XDG_DATA_HOME": str(linux_root),
+        }
+
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch("pcims.db.connection.OPERATING_SYSTEM", "posix"),
+        ):
+            self.assertEqual(get_data_dir(), linux_root.resolve() / "pcims")
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch("pcims.db.connection.OPERATING_SYSTEM", "nt"),
+        ):
+            self.assertEqual(get_data_dir(), windows_root.resolve() / "PCIMS")
+
+    def test_relative_environment_database_paths_are_rejected(self):
+        with (
+            patch.dict(os.environ, {"PCIMS_DB_PATH": "relative.db"}),
+            self.assertRaisesRegex(ValueError, "absolute path"),
+        ):
+            default_database()
 
     def test_database_configuration_is_an_explicit_immutable_value(self):
         configured = self.database
@@ -833,6 +859,21 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertFalse(first.path.exists())
         self.assertTrue(second.path.exists())
+
+    def test_non_file_cannot_consume_a_backup_retention_slot(self):
+        first = create_backup(keep=2, database=self.database)
+        matching_directory = first.path.with_name(
+            f"{first.path.name[:19]}9999-12-31_23-59-59_999999.db"
+        )
+        matching_directory.mkdir()
+        future = (datetime.now(UTC) + timedelta(days=1)).timestamp()
+        os.utime(matching_directory, (future, future))
+
+        second = create_backup(keep=1, database=self.database)
+
+        self.assertFalse(first.path.exists())
+        self.assertTrue(second.path.exists())
+        self.assertTrue(matching_directory.is_dir())
 
     def test_backup_flushes_file_and_directory_around_atomic_publish(self):
         self.buy("Keep", "CPU", 10)

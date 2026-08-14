@@ -58,7 +58,7 @@ def log_exception(
                     exception_type, exception, traceback_object, file=log_file
                 )
         return destination
-    except OSError:
+    except (OSError, ValueError):
         traceback.print_exception(exception_type, exception, traceback_object)
         return None
 

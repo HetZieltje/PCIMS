@@ -9,6 +9,18 @@ from pathlib import Path
 
 from pcims.db.gate import DatabaseGate, gate_for
 
+OPERATING_SYSTEM = os.name
+
+
+def _environment_path(name: str) -> Path | None:
+    value = os.environ.get(name)
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"{name} must be an absolute path.")
+    return path.resolve()
+
 
 def _unicode_nocase(left: str, right: str) -> int:
     left_folded = left.casefold()
@@ -23,15 +35,17 @@ def register_database_collations(connection: sqlite3.Connection) -> None:
 
 def get_data_dir() -> Path:
     """Return the per-user writable PCIMS data directory."""
-    configured = os.environ.get("PCIMS_DATA_DIR")
+    configured = _environment_path("PCIMS_DATA_DIR")
     if configured:
-        return Path(configured).expanduser().resolve()
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        return (Path(local_app_data) / "PCIMS").resolve()
-    xdg_data_home = os.environ.get("XDG_DATA_HOME")
-    if xdg_data_home:
-        return (Path(xdg_data_home) / "pcims").expanduser().resolve()
+        return configured
+    if OPERATING_SYSTEM == "nt":
+        local_app_data = _environment_path("LOCALAPPDATA")
+        if local_app_data:
+            return local_app_data / "PCIMS"
+    else:
+        xdg_data_home = _environment_path("XDG_DATA_HOME")
+        if xdg_data_home:
+            return xdg_data_home / "pcims"
     return (Path.home() / ".local" / "share" / "pcims").resolve()
 
 
@@ -39,7 +53,7 @@ def ensure_private_directory(path: str | os.PathLike[str]) -> Path:
     """Create one application-owned directory and restrict POSIX access."""
     resolved = Path(path).expanduser().resolve()
     resolved.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name != "nt":
+    if OPERATING_SYSTEM != "nt":
         resolved.chmod(0o700)
     return resolved
 
@@ -100,7 +114,7 @@ class Database:
 
 def default_database() -> Database:
     """Build an explicit override or protect the platform-default data location."""
-    configured_path = os.environ.get("PCIMS_DB_PATH")
+    configured_path = _environment_path("PCIMS_DB_PATH")
     if configured_path:
         return Database.at(configured_path)
     return Database.at(ensure_private_directory(get_data_dir()) / "pcims.db")
