@@ -36,3 +36,14 @@ jobs:
       - run: mypy pcims --strict --no-error-summary
       - run: bandit -q -r pcims
       - run: python -m build
+      - name: Install and smoke built wheel
+        shell: bash
+        run: |
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          smoke_script="$(pwd)/scripts/smoke-installed.py"
+          python -m pip uninstall -y pcims
+          python -m pip install --no-deps "$wheel"
+          smoke_directory="$(mktemp -d)"
+          cd "$smoke_directory"
+          python "$smoke_script"

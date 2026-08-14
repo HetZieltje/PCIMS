@@ -26,7 +26,11 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_backend_has_no_legacy_schema_terms_or_compatibility_apis(self):
         root = Path(__file__).parents[1]
-        source = (root / "pcims" / "db" / "queries.py").read_text(encoding="utf-8")
+        database_package = root / "pcims" / "db"
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in database_package.glob("*.py")
+        )
         for legacy_term in (
             "used_in",
             "in_inventory",
@@ -38,13 +42,21 @@ class ArchitectureTests(unittest.TestCase):
         ):
             self.assertNotIn(legacy_term, source.casefold())
 
-    def test_schema_and_workflows_have_separate_modules(self):
+    def test_schema_reads_records_and_commands_have_separate_modules(self):
         root = Path(__file__).parents[1] / "pcims" / "db"
-        queries = (root / "queries.py").read_text(encoding="utf-8")
+        reads = (root / "reads.py").read_text(encoding="utf-8")
+        commands = (root / "commands.py").read_text(encoding="utf-8")
+        records = (root / "records.py").read_text(encoding="utf-8")
         schema = (root / "schema.py").read_text(encoding="utf-8")
 
-        self.assertNotIn("CREATE TABLE", queries)
-        self.assertNotIn("PRAGMA user_version", queries)
+        self.assertFalse((root / "queries.py").exists())
+        self.assertIn("class ReadQueries", reads)
+        self.assertNotIn("INSERT INTO", reads)
+        self.assertIn("def sell_pc", commands)
+        self.assertNotIn("class ReadQueries", commands)
+        self.assertIn("def expense_from_row", records)
+        self.assertNotIn("CREATE TABLE", reads + commands + records)
+        self.assertNotIn("PRAGMA user_version", reads + commands + records)
         self.assertIn("SCHEMA_DEFINITIONS", schema)
         self.assertIn("validate_current_data", schema)
 
@@ -62,18 +74,28 @@ class ArchitectureTests(unittest.TestCase):
         for path in pages.glob("*.py"):
             with self.subTest(path=path.name):
                 source = path.read_text(encoding="utf-8")
-                self.assertNotIn("from pcims.db.queries import", source)
+                self.assertNotIn("from pcims.db.commands", source)
+                self.assertNotIn("from pcims.db.reads", source)
                 self.assertNotIn("from pcims.db.backup import create_backup", source)
 
     def test_service_commands_are_typed_and_normalized_outside_sql_workflows(self):
         root = Path(__file__).parents[1] / "pcims"
         services = (root / "services.py").read_text(encoding="utf-8")
-        queries = (root / "db" / "queries.py").read_text(encoding="utf-8")
+        commands = (root / "db" / "commands.py").read_text(encoding="utf-8")
         self.assertNotIn("PurchaseInput", services)
         self.assertNotIn("Iterable[object]", services)
         self.assertNotIn("selling_price: object", services)
-        self.assertNotIn("def _money_cents", queries)
-        self.assertNotIn("def _iso_date", queries)
+        self.assertNotIn("def _money_cents", commands)
+        self.assertNotIn("def _iso_date", commands)
+
+    def test_database_coordination_cannot_be_bypassed_by_low_level_workflows(self):
+        root = Path(__file__).parents[1] / "pcims"
+        connection = (root / "db" / "connection.py").read_text(encoding="utf-8")
+        backup = (root / "db" / "backup.py").read_text(encoding="utf-8")
+        services = (root / "services.py").read_text(encoding="utf-8")
+        self.assertIn("with self.gate.shared():", connection)
+        self.assertIn("with database.gate.exclusive():", backup)
+        self.assertNotIn("database.gate", services)
 
     def test_flat_application_grids_use_model_view_not_cell_widgets(self):
         pages = Path(__file__).parents[1] / "pcims" / "app" / "pages"

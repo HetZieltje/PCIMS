@@ -116,7 +116,7 @@ def create_backup(
     return BackupResult(final_path, tuple(cleanup_errors))
 
 
-def restore_backup(
+def _restore_backup(
     backup_path: str | os.PathLike[str],
     pre_restore_directory: str | os.PathLike[str] | None = None,
     *,
@@ -145,3 +145,14 @@ def restore_backup(
     finally:
         _remove_temporary(staged_path, primary_error)
     return safety_backup
+
+
+def restore_backup(
+    backup_path: str | os.PathLike[str],
+    pre_restore_directory: str | os.PathLike[str] | None = None,
+    *,
+    database: Database,
+) -> BackupResult:
+    """Atomically replace the live database after all operations have drained."""
+    with database.gate.exclusive():
+        return _restore_backup(backup_path, pre_restore_directory, database=database)

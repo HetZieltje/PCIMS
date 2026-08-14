@@ -3,7 +3,7 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing, contextmanager
+from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,6 +14,7 @@ from pcims.db.backup import (
     restore_backup,
     validate_database,
 )
+from pcims.db.commands import add_expenses
 from pcims.db.connection import Database
 from pcims.db.errors import (
     DatabaseIntegrityError,
@@ -21,12 +22,7 @@ from pcims.db.errors import (
     SchemaVersionError,
     ValidationError,
 )
-from pcims.db.queries import (
-    ReadQueries,
-    add_expenses,
-    list_pcs,
-    list_sales,
-)
+from pcims.db.reads import ReadQueries, list_pcs, list_sales
 from pcims.db.schema import SCHEMA_DEFINITIONS, SCHEMA_VERSION, initialize_database
 from pcims.domain import NewExpense, SaleTerms
 from pcims.money import MAX_MONEY_CENTS
@@ -119,66 +115,72 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 connection_mock.commit.assert_called_once()
                 connection_mock.close.assert_called_once()
 
-    def test_backup_and_restore_are_serialized_by_the_service_boundary(self):
-        services = ApplicationServices(self.database)
-        backup_started = threading.Event()
-        release_backup = threading.Event()
+    def test_two_direct_restores_are_serialized_by_the_database_gate(self):
+        first_restore_started = threading.Event()
+        release_first_restore = threading.Event()
         restore_started = threading.Event()
         result = BackupResult(self.database_path)
-
-        def slow_backup(*_args, **_kwargs):
-            backup_started.set()
-            release_backup.wait(2)
-            return result
+        call_count = 0
+        call_lock = threading.Lock()
 
         def observed_restore(*_args, **_kwargs):
-            restore_started.set()
+            nonlocal call_count
+            with call_lock:
+                call_count += 1
+                current_call = call_count
+            if current_call == 1:
+                first_restore_started.set()
+                release_first_restore.wait(2)
+            else:
+                restore_started.set()
             return result
 
         with (
-            patch("pcims.services.create_backup", side_effect=slow_backup),
-            patch("pcims.services.restore_backup", side_effect=observed_restore),
+            patch("pcims.db.backup._restore_backup", side_effect=observed_restore),
             ThreadPoolExecutor(max_workers=2) as executor,
         ):
-            backup_future = executor.submit(services.create_backup)
-            self.assertTrue(backup_started.wait(1))
-            restore_future = executor.submit(services.restore_backup, self.database_path)
+            first = executor.submit(
+                restore_backup, self.database_path, database=self.database
+            )
+            self.assertTrue(first_restore_started.wait(1))
+            second = executor.submit(
+                restore_backup, self.database_path, database=self.database
+            )
             self.assertFalse(restore_started.wait(0.1))
-            release_backup.set()
-            self.assertEqual(backup_future.result(timeout=2), result)
-            self.assertEqual(restore_future.result(timeout=2), result)
+            release_first_restore.set()
+            self.assertEqual(first.result(timeout=2), result)
+            self.assertEqual(second.result(timeout=2), result)
             self.assertTrue(restore_started.is_set())
 
-    def test_restore_waits_for_ordinary_database_operations(self):
-        operation_services = ApplicationServices(Database.at(self.database_path))
-        recovery_services = ApplicationServices(Database.at(self.database_path))
+    def test_direct_restore_waits_for_direct_database_transaction(self):
+        operation_database = Database.at(self.database_path)
+        recovery_database = Database.at(self.database_path)
         operation_started = threading.Event()
         release_operation = threading.Event()
         restore_started = threading.Event()
         result = BackupResult(self.database_path)
 
-        def slow_add(*_args, **_kwargs):
-            operation_started.set()
-            release_operation.wait(2)
-            return []
+        def hold_transaction():
+            with operation_database.transaction():
+                operation_started.set()
+                release_operation.wait(2)
 
         def observed_restore(*_args, **_kwargs):
             restore_started.set()
             return result
 
         with (
-            patch("pcims.services.add_expenses", side_effect=slow_add),
-            patch("pcims.services.restore_backup", side_effect=observed_restore),
+            patch("pcims.db.backup._restore_backup", side_effect=observed_restore),
             ThreadPoolExecutor(max_workers=2) as executor,
         ):
-            operation = executor.submit(operation_services.add_expenses, [])
+            operation = executor.submit(hold_transaction)
             self.assertTrue(operation_started.wait(1))
             recovery = executor.submit(
-                recovery_services.restore_backup, self.database_path
+                restore_backup, self.database_path, database=recovery_database
             )
             self.assertFalse(restore_started.wait(0.1))
             release_operation.set()
-            self.assertEqual(operation.result(timeout=2), [])
+            self.assertIsNone(operation.result(timeout=2))
             self.assertEqual(recovery.result(timeout=2), result)
             self.assertTrue(restore_started.is_set())
 
@@ -409,14 +411,18 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         for listing in (list_pcs, list_sales):
             statements = []
+            original_connect = Database.connect
 
-            @contextmanager
-            def traced_connection(_database=None, trace_statements=statements):
-                with self.database.transaction() as database:
-                    database.set_trace_callback(trace_statements.append)
-                    yield database
+            def traced_connect(
+                database,
+                trace_statements=statements,
+                connect=original_connect,
+            ):
+                connection = connect(database)
+                connection.set_trace_callback(trace_statements.append)
+                return connection
 
-            with patch("pcims.db.queries._transaction", traced_connection):
+            with patch.object(Database, "connect", new=traced_connect):
                 self.assertEqual(len(listing(database=self.database)), 2)
             selects = [
                 statement

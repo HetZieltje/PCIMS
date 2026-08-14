@@ -22,36 +22,63 @@ class DatabaseGate:
     def __init__(self) -> None:
         self._condition = threading.Condition(threading.Lock())
         self._readers = 0
+        self._reader_depth: dict[int, int] = {}
         self._writer_active = False
+        self._writer_thread_id: int | None = None
+        self._writer_depth = 0
         self._writers_waiting = 0
 
     @contextmanager
     def shared(self) -> Iterator[None]:
+        thread_id = threading.get_ident()
         with self._condition:
-            while self._writer_active or self._writers_waiting:
+            while (
+                self._writer_active and self._writer_thread_id != thread_id
+            ) or (
+                self._writers_waiting
+                and self._reader_depth.get(thread_id, 0) == 0
+                and self._writer_thread_id != thread_id
+            ):
                 self._condition.wait()
             self._readers += 1
+            self._reader_depth[thread_id] = self._reader_depth.get(thread_id, 0) + 1
         try:
             yield
         finally:
             with self._condition:
                 self._readers -= 1
+                depth = self._reader_depth[thread_id] - 1
+                if depth:
+                    self._reader_depth[thread_id] = depth
+                else:
+                    del self._reader_depth[thread_id]
                 if self._readers == 0:
                     self._condition.notify_all()
 
     @contextmanager
     def exclusive(self) -> Iterator[None]:
+        thread_id = threading.get_ident()
         with self._condition:
-            self._writers_waiting += 1
-            try:
-                while self._writer_active or self._readers:
-                    self._condition.wait()
-                self._writer_active = True
-            finally:
-                self._writers_waiting -= 1
+            if self._writer_thread_id == thread_id:
+                self._writer_depth += 1
+            else:
+                if self._reader_depth.get(thread_id, 0):
+                    raise RuntimeError("A shared database operation cannot be upgraded.")
+                self._writers_waiting += 1
+                try:
+                    while self._writer_active or self._readers:
+                        self._condition.wait()
+                    self._writer_active = True
+                    self._writer_thread_id = thread_id
+                    self._writer_depth = 1
+                finally:
+                    self._writers_waiting -= 1
         try:
             yield
         finally:
             with self._condition:
-                self._writer_active = False
-                self._condition.notify_all()
+                self._writer_depth -= 1
+                if self._writer_depth == 0:
+                    self._writer_active = False
+                    self._writer_thread_id = None
+                    self._condition.notify_all()

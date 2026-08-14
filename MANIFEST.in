@@ -1,2 +1,3 @@
 include packaging/linux/pcims.desktop
 include scripts/install-linux.sh
+include scripts/smoke-installed.py

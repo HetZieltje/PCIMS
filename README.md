@@ -63,7 +63,8 @@ being modified; use a current-format backup or a new database path.
 
 Tests configure temporary SQLite files and the Qt offscreen platform. They do
 not open or delete the application database. CI runs the same checks on Windows
-and Linux with Python 3.11 and 3.13, then builds the source and wheel packages.
+and Linux with Python 3.11 and 3.13, then builds, installs, and smoke-tests the
+wheel from outside the source checkout.
 
 ## Build a desktop executable
 

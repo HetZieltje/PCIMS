@@ -200,7 +200,7 @@ def validate_current_data(database: sqlite3.Connection) -> None:
     _validate_relationships(database)
 
 
-def initialize_database(database: Database) -> None:
+def _initialize_database(database: Database) -> None:
     """Create the current schema, or reject any incompatible existing schema."""
     with closing(database.connect()) as setup_connection:
         journal_mode = setup_connection.execute("PRAGMA journal_mode = WAL").fetchone()[
@@ -237,3 +237,9 @@ def initialize_database(database: Database) -> None:
             connection.execute(statement)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         validate_schema(connection)
+
+
+def initialize_database(database: Database) -> None:
+    """Initialize while excluding live operations and database replacement."""
+    with database.gate.exclusive():
+        _initialize_database(database)

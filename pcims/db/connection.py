@@ -52,16 +52,17 @@ class Database:
     @contextmanager
     def transaction(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
         """Yield a snapshot read or immediately locked write transaction."""
-        connection = self.connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            yield connection
-            connection.commit()
-        except BaseException:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with self.gate.shared():
+            connection = self.connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+                yield connection
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
 
 
 def default_database() -> Database:
