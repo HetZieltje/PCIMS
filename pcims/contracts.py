@@ -6,9 +6,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from pcims.db.backup import BackupResult
-from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
 from pcims.domain import NewExpense, SaleTerms
+from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
+
+
+@dataclass(frozen=True, slots=True)
+class BackupResult(os.PathLike[str]):
+    """A verified backup plus any non-fatal durability or retention warnings."""
+
+    path: Path
+    warnings: tuple[str, ...] = ()
+
+    def __fspath__(self) -> str:
+        return str(self.path)
+
+    def __str__(self) -> str:
+        return str(self.path)
+
+    @property
+    def has_warnings(self) -> bool:
+        return bool(self.warnings)
+
+    @property
+    def warning_text(self) -> str:
+        return "\n".join(self.warnings)
 
 
 @dataclass(frozen=True, slots=True)

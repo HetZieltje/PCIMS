@@ -6,35 +6,13 @@ import shutil
 import sqlite3
 import uuid
 from contextlib import closing
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pcims.contracts import BackupResult
 from pcims.db.connection import Database, register_database_collations
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.db.schema import validate_current_data, validate_schema
-
-
-@dataclass(frozen=True, slots=True)
-class BackupResult(os.PathLike[str]):
-    """A verified backup plus any non-fatal durability or retention warnings."""
-
-    path: Path
-    warnings: tuple[str, ...] = ()
-
-    def __fspath__(self) -> str:
-        return str(self.path)
-
-    def __str__(self) -> str:
-        return str(self.path)
-
-    @property
-    def has_warnings(self) -> bool:
-        return bool(self.warnings)
-
-    @property
-    def warning_text(self) -> str:
-        return "\n".join(self.warnings)
 
 
 def _sync_file(path: Path) -> None:
@@ -69,6 +47,18 @@ def _remove_live_sidecars(database_path: Path) -> None:
             sidecar.unlink()
         except FileNotFoundError:
             pass
+
+
+def _checkpoint_live_database(database: Database) -> None:
+    """Make the live main file complete before its WAL sidecars are removed."""
+    with closing(database.connect()) as connection:
+        busy, _remaining, _checkpointed = connection.execute(
+            "PRAGMA wal_checkpoint(TRUNCATE)"
+        ).fetchone()
+    if busy:
+        raise sqlite3.OperationalError(
+            "The active database is busy and cannot be prepared for restore."
+        )
 
 
 def _remove_temporary(path: Path, primary_error: BaseException | None) -> None:
@@ -212,6 +202,7 @@ def _restore_backup(
         validate_database(staged_path)
         safety_backup = create_backup(pre_restore_directory, database=database)
         _sync_file(staged_path)
+        _checkpoint_live_database(database)
         _remove_live_sidecars(live_path)
         os.replace(staged_path, live_path)
         try:

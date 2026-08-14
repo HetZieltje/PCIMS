@@ -23,7 +23,7 @@ from pcims.app.table_model import (
 )
 from pcims.app.tasks import TaskManager
 from pcims.contracts import SalesOperations, SalesSnapshot
-from pcims.db.models import Expense, Sale
+from pcims.models import Expense, Sale
 
 
 def _expense_status(item: Expense) -> str:

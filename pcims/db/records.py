@@ -4,8 +4,8 @@ import sqlite3
 from datetime import date
 from typing import cast
 
-from pcims.db.models import Expense
 from pcims.domain import ItemType
+from pcims.models import Expense
 
 EXPENSE_SELECT = """
     SELECT e.id,e.name,e.item_type,e.price_cents,e.purchase_date,

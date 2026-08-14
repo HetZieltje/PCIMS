@@ -92,6 +92,18 @@ class ArchitectureTests(unittest.TestCase):
                 if path.name != "__init__.py":
                     self.assertIn("Operations", source)
 
+    def test_application_records_do_not_belong_to_persistence_package(self):
+        root = Path(__file__).parents[1] / "pcims"
+        self.assertTrue((root / "models.py").is_file())
+        self.assertFalse((root / "db" / "models.py").exists())
+        contracts = (root / "contracts.py").read_text(encoding="utf-8")
+        self.assertNotIn("from pcims.db", contracts)
+        for path in (root / "app" / "pages").glob("*.py"):
+            with self.subTest(path=path.name):
+                self.assertNotIn(
+                    "from pcims.db", path.read_text(encoding="utf-8")
+                )
+
     def test_service_commands_are_typed_and_normalized_outside_sql_workflows(self):
         root = Path(__file__).parents[1] / "pcims"
         services = (root / "services.py").read_text(encoding="utf-8")

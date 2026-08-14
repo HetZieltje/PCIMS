@@ -6,8 +6,8 @@ from PySide6.QtCore import QAbstractItemModel, QModelIndex, QPersistentModelInde
 
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import ID_ROLE
-from pcims.db.models import Expense
 from pcims.domain import ITEM_TYPES, ItemType
+from pcims.models import Expense
 
 _ROOT_INDEX = QModelIndex()
 

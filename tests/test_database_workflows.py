@@ -12,8 +12,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from pcims.contracts import BackupResult
 from pcims.db.backup import (
-    BackupResult,
     create_backup,
     restore_backup,
     validate_database,
@@ -907,6 +907,38 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(all(not sidecar.exists() for sidecar in sidecars))
         self.assertEqual(
             [item.name for item in self.services.list_expenses()], ["Restored state"]
+        )
+
+    def test_failed_restore_replace_leaves_live_database_self_contained(self):
+        self.buy("Keep current state", "CPU", 10)
+        source_database = Database.at(
+            Path(self.temporary_directory.name) / "replacement-source.db"
+        )
+        source_services = ApplicationServices(source_database)
+        source_services.initialize()
+        source_services.add_expenses(
+            [NewExpense.create("Replacement state", "RAM", "20.00", "2024-01-01")]
+        )
+        source = source_services.create_backup()
+        safety = BackupResult(self.database_path.with_name("safety.db"))
+        real_replace = os.replace
+
+        def fail_live_replace(source_path, destination_path):
+            if Path(destination_path) == self.database_path:
+                raise PermissionError("simulated live database lock")
+            real_replace(source_path, destination_path)
+
+        with (
+            patch("pcims.db.backup.create_backup", return_value=safety),
+            patch("pcims.db.backup.os.replace", side_effect=fail_live_replace),
+            self.assertRaisesRegex(PermissionError, "simulated live database lock"),
+        ):
+            restore_backup(source, database=self.database)
+
+        validate_database(self.database_path)
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()],
+            ["Keep current state"],
         )
 
     def test_post_replace_directory_failure_reports_completed_restore_warning(self):

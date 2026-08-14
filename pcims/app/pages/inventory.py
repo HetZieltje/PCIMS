@@ -26,8 +26,8 @@ from pcims.app.table_model import (
 )
 from pcims.app.tasks import TaskManager
 from pcims.contracts import InventoryOperations, InventorySnapshot
-from pcims.db.models import AssembledPC, Expense
 from pcims.domain import ITEM_TYPES
+from pcims.models import AssembledPC, Expense
 
 
 def _component_summary(pc: AssembledPC) -> str:

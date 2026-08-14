@@ -1,4 +1,4 @@
-"""Immutable records returned by the PCIMS data layer."""
+"""Immutable application records independent from storage and presentation."""
 
 from dataclasses import dataclass
 from datetime import date

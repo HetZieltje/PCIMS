@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QSettings, Qt, QThreadPool, QTimer
+from PySide6.QtCore import QEventLoop, QLockFile, QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox, QTableView
 
@@ -31,7 +31,7 @@ from pcims.app.table_model import (
     selected_ids,
 )
 from pcims.app.tasks import TaskManager
-from pcims.db.backup import BackupResult
+from pcims.contracts import BackupResult
 from pcims.db.connection import Database
 from pcims.db.errors import ValidationError
 from pcims.domain import NewExpense, SaleTerms
@@ -760,6 +760,52 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(result, 2)
         critical.assert_called_once()
         self.assertIn("permission denied", critical.call_args.args[2])
+        lock.unlock.assert_called_once()
+        self.assertIs(sys.excepthook, previous_hook)
+
+    def test_instance_lock_permission_failure_is_not_reported_as_another_session(self):
+        lock = MagicMock()
+        lock.tryLock.return_value = False
+        lock.error.return_value = QLockFile.LockError.PermissionError
+
+        class PermissionDeniedLock:
+            LockError = QLockFile.LockError
+
+            def __new__(cls, _path):
+                return lock
+
+        with (
+            patch("pcims.app.application.QLockFile", PermissionDeniedLock),
+            self.assertRaisesRegex(PermissionError, "instance lock"),
+        ):
+            acquire_instance_lock(self.services.database_path)
+
+    def test_unexpected_bootstrap_failure_uses_installed_error_reporter(self):
+        lock = MagicMock()
+        reporter = MagicMock()
+        previous_hook = sys.excepthook
+
+        def install_reporter():
+            sys.excepthook = reporter
+            return previous_hook
+
+        with (
+            patch(
+                "pcims.app.application.install_exception_hook",
+                side_effect=install_reporter,
+            ),
+            patch("pcims.app.application.acquire_instance_lock", return_value=lock),
+            patch(
+                "pcims.app.application.MainWindow",
+                side_effect=RuntimeError("simulated bootstrap defect"),
+            ),
+        ):
+            result = main([], self.services)
+
+        self.assertEqual(result, 1)
+        reporter.assert_called_once()
+        self.assertIs(reporter.call_args.args[0], RuntimeError)
+        self.assertIn("simulated bootstrap defect", str(reporter.call_args.args[1]))
         lock.unlock.assert_called_once()
         self.assertIs(sys.excepthook, previous_hook)
 

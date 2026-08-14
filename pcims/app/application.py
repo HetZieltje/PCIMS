@@ -39,7 +39,15 @@ def acquire_instance_lock(database_path: Path) -> QLockFile | None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(database_path.with_suffix(database_path.suffix + ".lock")))
     lock.setStaleLockTime(30_000)
-    return lock if lock.tryLock(0) else None
+    if lock.tryLock(0):
+        return lock
+    error = lock.error()
+    if error == QLockFile.LockError.LockFailedError:
+        return None
+    message = f"PCIMS could not create its instance lock beside {database_path}."
+    if error == QLockFile.LockError.PermissionError:
+        raise PermissionError(message)
+    raise OSError(message)
 
 
 def _run_application(
@@ -97,7 +105,11 @@ def main(
     services = services or default_services()
     previous_hook = install_exception_hook()
     try:
-        return _run_application(application, services)
+        try:
+            return _run_application(application, services)
+        except Exception as error:  # noqa: BLE001 - application bootstrap boundary
+            sys.excepthook(type(error), error, error.__traceback__)
+            return 1
     finally:
         sys.excepthook = previous_hook
 

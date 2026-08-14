@@ -17,7 +17,7 @@ from pcims.app.pages.settings import SettingsPage
 from pcims.app.refresh import RefreshCoordinator, bind_refresh
 from pcims.app.tasks import TaskManager
 from pcims.app.window_state import WindowStateStore
-from pcims.db.backup import BackupResult
+from pcims.contracts import BackupResult
 from pcims.services import ApplicationServices
 
 

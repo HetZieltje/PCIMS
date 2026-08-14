@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
-from pcims.db.models import AssembledPC, Expense, FinancialSummary, Sale
 from pcims.db.records import EXPENSE_SELECT, expense_from_row
 from pcims.domain import ItemType, SaleKind
+from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
 
 
 @dataclass(frozen=True, slots=True)

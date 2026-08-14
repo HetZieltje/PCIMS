@@ -17,8 +17,7 @@ from PySide6.QtWidgets import (
 
 from pcims.app.common import ask_confirmation, show_error
 from pcims.app.tasks import TaskManager
-from pcims.contracts import MaintenanceOperations
-from pcims.db.backup import BackupResult
+from pcims.contracts import BackupResult, MaintenanceOperations
 
 
 class SettingsPage(QWidget):
