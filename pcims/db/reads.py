@@ -22,7 +22,9 @@ class ReadQueries:
         return tuple(expense_from_row(row) for row in rows)
 
     def count_expenses(self) -> int:
-        return int(self.connection.execute("SELECT COUNT(*) FROM expenses").fetchone()[0])
+        return int(
+            self.connection.execute("SELECT COUNT(*) FROM expenses").fetchone()[0]
+        )
 
     def list_expense_page(self, offset: int, limit: int) -> tuple[Expense, ...]:
         rows = self.connection.execute(
@@ -33,8 +35,7 @@ class ReadQueries:
 
     def list_expense_names(self) -> tuple[str, ...]:
         rows = self.connection.execute(
-            "SELECT DISTINCT name FROM expenses "
-            "ORDER BY name COLLATE PCIMS_NOCASE,name"
+            "SELECT DISTINCT name FROM expenses ORDER BY name COLLATE PCIMS_NOCASE,name"
         )
         return tuple(str(row[0]) for row in rows)
 
@@ -76,8 +77,7 @@ class ReadQueries:
         self, expenses_by_id: Mapping[int, Expense] | None = None
     ) -> tuple[Sale, ...]:
         sales = self.connection.execute(
-            "SELECT id,name,kind,selling_price_cents,sale_date "
-            "FROM sales ORDER BY id"
+            "SELECT id,name,kind,selling_price_cents,sale_date FROM sales ORDER BY id"
         ).fetchall()
         items_by_sale: dict[int, list[Expense]] = {
             int(sale["id"]): [] for sale in sales
@@ -91,8 +91,7 @@ class ReadQueries:
                 items_by_sale[int(row["sale_id"])].append(expense_from_row(row))
         else:
             memberships = self.connection.execute(
-                "SELECT sale_id,expense_id FROM sale_items "
-                "ORDER BY sale_id,position"
+                "SELECT sale_id,expense_id FROM sale_items ORDER BY sale_id,position"
             )
             for membership in memberships:
                 items_by_sale[int(membership["sale_id"])].append(
@@ -103,9 +102,7 @@ class ReadQueries:
                 id=sale["id"],
                 name=sale["name"],
                 kind=cast(SaleKind, sale["kind"]),
-                cost_cents=sum(
-                    item.price_cents for item in items_by_sale[sale["id"]]
-                ),
+                cost_cents=sum(item.price_cents for item in items_by_sale[sale["id"]]),
                 selling_price_cents=sale["selling_price_cents"],
                 sale_date=date.fromisoformat(sale["sale_date"]),
                 items=tuple(items_by_sale[sale["id"]]),
@@ -132,8 +129,7 @@ class ReadQueries:
         sale_ids = [int(sale["id"]) for sale in sales]
         placeholders = ",".join("?" for _ in sale_ids)
         rows = self.connection.execute(
-            EXPENSE_SELECT
-            + f" WHERE si.sale_id IN ({placeholders}) "  # nosec B608
+            EXPENSE_SELECT + f" WHERE si.sale_id IN ({placeholders}) "  # nosec B608
             "ORDER BY si.sale_id,si.position",
             sale_ids,
         )
@@ -143,9 +139,7 @@ class ReadQueries:
         for row in rows:
             expense_id = int(row["id"])
             expense = (
-                expenses_by_id.get(expense_id)
-                if expenses_by_id is not None
-                else None
+                expenses_by_id.get(expense_id) if expenses_by_id is not None else None
             )
             items_by_sale[int(row["sale_id"])].append(
                 expense if expense is not None else expense_from_row(row)
@@ -155,9 +149,7 @@ class ReadQueries:
                 id=sale["id"],
                 name=sale["name"],
                 kind=cast(SaleKind, sale["kind"]),
-                cost_cents=sum(
-                    item.price_cents for item in items_by_sale[sale["id"]]
-                ),
+                cost_cents=sum(item.price_cents for item in items_by_sale[sale["id"]]),
                 selling_price_cents=sale["selling_price_cents"],
                 sale_date=date.fromisoformat(sale["sale_date"]),
                 items=tuple(items_by_sale[sale["id"]]),

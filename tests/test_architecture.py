@@ -28,8 +28,7 @@ class ArchitectureTests(unittest.TestCase):
         root = Path(__file__).parents[1]
         database_package = root / "pcims" / "db"
         source = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in database_package.glob("*.py")
+            path.read_text(encoding="utf-8") for path in database_package.glob("*.py")
         )
         for legacy_term in (
             "used_in",
@@ -46,8 +45,7 @@ class ArchitectureTests(unittest.TestCase):
         root = Path(__file__).parents[1] / "pcims" / "db"
         reads = (root / "reads.py").read_text(encoding="utf-8")
         commands = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in root.glob("*_commands.py")
+            path.read_text(encoding="utf-8") for path in root.glob("*_commands.py")
         )
         records = (root / "records.py").read_text(encoding="utf-8")
         schema = (root / "schema.py").read_text(encoding="utf-8")
@@ -100,9 +98,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("from pcims.db", contracts)
         for path in (root / "app" / "pages").glob("*.py"):
             with self.subTest(path=path.name):
-                self.assertNotIn(
-                    "from pcims.db", path.read_text(encoding="utf-8")
-                )
+                self.assertNotIn("from pcims.db", path.read_text(encoding="utf-8"))
 
     def test_service_commands_are_typed_and_normalized_outside_sql_workflows(self):
         root = Path(__file__).parents[1] / "pcims"
@@ -137,7 +133,9 @@ class ArchitectureTests(unittest.TestCase):
                 self.assertNotIn("QTreeWidget", source)
                 self.assertNotIn("QTreeWidgetItem", source)
 
-    def test_background_work_has_one_owned_lifecycle_and_explicit_refresh_contracts(self):
+    def test_background_work_has_one_owned_lifecycle_and_explicit_refresh_contracts(
+        self,
+    ):
         app = Path(__file__).parents[1] / "pcims" / "app"
         source = "\n".join(
             path.read_text(encoding="utf-8") for path in app.rglob("*.py")
@@ -189,7 +187,9 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('install_root="$application_parent/application"', installer)
         self.assertIn("Refusing symbolic-link application directory", installer)
         self.assertIn("Another PCIMS installation is already running", installer)
-        self.assertIn("Multiple interrupted installations require manual recovery", installer)
+        self.assertIn(
+            "Multiple interrupted installations require manual recovery", installer
+        )
         self.assertIn('Exec="@PCIMS_PYTHON@" -m pcims.app.application', desktop)
         self.assertIn("Terminal=false", desktop)
 
@@ -214,16 +214,12 @@ class ArchitectureTests(unittest.TestCase):
     def test_dependencies_have_cross_platform_hash_locks(self):
         root = Path(__file__).parents[1]
         runtime_lock = (root / "requirements.lock").read_text(encoding="utf-8")
-        development_lock = (root / "requirements-dev.lock").read_text(
-            encoding="utf-8"
-        )
+        development_lock = (root / "requirements-dev.lock").read_text(encoding="utf-8")
         build_lock = (root / "requirements-build.lock").read_text(encoding="utf-8")
         workflow = (root / ".github" / "workflows" / "test.yml").read_text(
             encoding="utf-8"
         )
-        verification = (root / "scripts" / "verify.py").read_text(
-            encoding="utf-8"
-        )
+        verification = (root / "scripts" / "verify.py").read_text(encoding="utf-8")
         artifact = (root / "scripts" / "release_artifact.py").read_text(
             encoding="utf-8"
         )
@@ -248,6 +244,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("python -m pip check", workflow)
         self.assertIn('"compileall", "-q", "pcims", "scripts"', verification)
         self.assertIn('"bandit", "-q", "-r", "pcims", "scripts"', verification)
+        self.assertIn('"ruff", "format", "--check"', verification)
         self.assertIn("test-linux-installer.sh", verification)
         self.assertIn("test-windows-installer.ps1", verification)
         self.assertIn("Install the real Linux desktop application", workflow)
@@ -258,11 +255,7 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_purchase_staging_uses_immutable_domain_records(self):
         purchases = (
-            Path(__file__).parents[1]
-            / "pcims"
-            / "app"
-            / "pages"
-            / "purchases.py"
+            Path(__file__).parents[1] / "pcims" / "app" / "pages" / "purchases.py"
         ).read_text(encoding="utf-8")
         self.assertIn("@dataclass(frozen=True, slots=True)", purchases)
         self.assertNotIn("TypedDict", purchases)

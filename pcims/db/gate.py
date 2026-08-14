@@ -42,9 +42,7 @@ class DatabaseGate:
     def shared(self) -> Iterator[None]:
         thread_id = threading.get_ident()
         with self._condition:
-            while (
-                self._writer_active and self._writer_thread_id != thread_id
-            ) or (
+            while (self._writer_active and self._writer_thread_id != thread_id) or (
                 self._writers_waiting
                 and self._reader_depth.get(thread_id, 0) == 0
                 and self._writer_thread_id != thread_id
@@ -73,7 +71,9 @@ class DatabaseGate:
                 self._writer_depth += 1
             else:
                 if self._reader_depth.get(thread_id, 0):
-                    raise RuntimeError("A shared database operation cannot be upgraded.")
+                    raise RuntimeError(
+                        "A shared database operation cannot be upgraded."
+                    )
                 self._writers_waiting += 1
                 try:
                     while self._writer_active or self._readers:

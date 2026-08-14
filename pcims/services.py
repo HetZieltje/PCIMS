@@ -122,9 +122,7 @@ class ApplicationServices:
     def delete_expenses(self, expense_ids: Iterable[int]) -> None:
         delete_expenses(expense_ids, database=self.database)
 
-    def rename_expenses(
-        self, expense_ids: Iterable[int], new_name: str
-    ) -> None:
+    def rename_expenses(self, expense_ids: Iterable[int], new_name: str) -> None:
         rename_expenses(expense_ids, new_name, database=self.database)
 
     def assemble_pc(self, name: str, expense_ids: Iterable[int]) -> int:

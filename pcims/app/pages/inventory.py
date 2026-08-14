@@ -80,8 +80,12 @@ class InventoryPage(AsyncCommandPage):
         self.parts_model = RecordTableModel[Expense](
             (
                 Column("ID", lambda item: str(item.id), lambda item: item.id),
-                Column("Name", lambda item: item.name, lambda item: item.name.casefold()),
-                Column("Type", lambda item: item.item_type, lambda item: item.item_type),
+                Column(
+                    "Name", lambda item: item.name, lambda item: item.name.casefold()
+                ),
+                Column(
+                    "Type", lambda item: item.item_type, lambda item: item.item_type
+                ),
                 Column(
                     "Cost",
                     lambda item: format_cents(item.price_cents),

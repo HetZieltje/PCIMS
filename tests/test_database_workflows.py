@@ -114,7 +114,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
             database.execute("CREATE TABLE isolated (id INTEGER PRIMARY KEY)")
             database.commit()
         self.assertTrue(independent.path.is_file())
-        with self.assertRaises(sqlite3.OperationalError), configured.transaction() as database:
+        with (
+            self.assertRaises(sqlite3.OperationalError),
+            configured.transaction() as database,
+        ):
             database.execute("SELECT * FROM isolated")
 
     def test_connection_is_closed_if_hardening_configuration_fails(self):
@@ -176,7 +179,9 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def test_live_connections_use_durable_wal_and_defensive_pragmas(self):
         with closing(self.database.connect()) as database:
-            self.assertEqual(database.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+            self.assertEqual(
+                database.execute("PRAGMA journal_mode").fetchone()[0], "wal"
+            )
             self.assertEqual(database.execute("PRAGMA synchronous").fetchone()[0], 2)
             self.assertEqual(database.execute("PRAGMA foreign_keys").fetchone()[0], 1)
             self.assertEqual(database.execute("PRAGMA trusted_schema").fetchone()[0], 0)
@@ -227,9 +232,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
         for write, statement in ((False, "BEGIN"), (True, "BEGIN IMMEDIATE")):
             with self.subTest(write=write):
                 connection_mock = MagicMock(spec=sqlite3.Connection)
-                with patch.object(
-                    Database, "connect", return_value=connection_mock
-                ), active_database.transaction(write=write) as yielded:
+                with (
+                    patch.object(Database, "connect", return_value=connection_mock),
+                    active_database.transaction(write=write) as yielded,
+                ):
                     self.assertIs(yielded, connection_mock)
                 connection_mock.execute.assert_called_once_with(statement)
                 connection_mock.commit.assert_called_once()
@@ -379,9 +385,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
     def test_pc_name_uniqueness_is_enforced_by_unicode_database_collation(self):
         first_id = self.buy("First", "CPU", 10)
         second_id = self.buy("Second", "RAM", 10)
-        with self.assertRaises(sqlite3.IntegrityError), self.database.transaction(
-            write=True
-        ) as database:
+        with (
+            self.assertRaises(sqlite3.IntegrityError),
+            self.database.transaction(write=True) as database,
+        ):
             database.execute(
                 "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (101,?,0)",
                 (first_id,),
@@ -647,9 +654,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
         ids = [self.buy("RAM", "RAM", 40), self.buy("RAM", "RAM", 45)]
         pc_id = self.services.assemble_pc("PC 1", ids)
 
-        with self.assertRaises(
-            sqlite3.IntegrityError
-        ), self.database.transaction() as database:
+        with (
+            self.assertRaises(sqlite3.IntegrityError),
+            self.database.transaction() as database,
+        ):
             database.execute(
                 "UPDATE pc_parts SET position=0 WHERE pc_id=? AND expense_id=?",
                 (pc_id, ids[1]),
@@ -694,9 +702,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def test_standalone_group_sale_is_one_record_and_undo_restores_all(self):
         ids = [self.buy("Fan", "Fan", 10) for _ in range(3)]
-        sale_id = self.services.sell_items(
-            ids, SaleTerms.create("100.00", TEST_DATE)
-        )
+        sale_id = self.services.sell_items(ids, SaleTerms.create("100.00", TEST_DATE))
 
         sale = self.services.list_sales()[0]
         self.assertEqual(sale.id, sale_id)
@@ -709,9 +715,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.services.undo_sale(sale_id)
         self.assertEqual(self.services.list_sales(), ())
-        self.assertEqual(
-            {item.id for item in self.services.list_inventory()}, set(ids)
-        )
+        self.assertEqual({item.id for item in self.services.list_inventory()}, set(ids))
 
     def test_sales_snapshot_reuses_purchase_history_records(self):
         item_id = self.buy("Shared", "Extra", 5)
@@ -719,9 +723,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         snapshot = self.services.sales_snapshot()
 
-        expense = next(
-            item for item in snapshot.expenses.records if item.id == item_id
-        )
+        expense = next(item for item in snapshot.expenses.records if item.id == item_id)
         self.assertIs(snapshot.sales.records[0].items[0], expense)
 
     def test_sales_history_is_bounded_navigable_and_clamped(self):
@@ -991,9 +993,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.services.assemble_pc("GAMING PC", [spare_id])
         with self.assertRaisesRegex(ValidationError, "Cannot undo"):
             self.services.undo_sale(sale_id)
-        self.assertEqual(
-            [pc.name for pc in self.services.list_pcs()], ["GAMING PC"]
-        )
+        self.assertEqual([pc.name for pc in self.services.list_pcs()], ["GAMING PC"])
         self.assertEqual(len(self.services.list_sales()), 1)
 
     def test_pc_undo_name_collision_has_no_partial_effect(self):
@@ -1018,9 +1018,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.services.sell_items(ids, SaleTerms.create(200, TEST_DATE))
 
         self.assertEqual(self.services.list_sales(), ())
-        self.assertEqual(
-            {item.id for item in self.services.list_inventory()}, set(ids)
-        )
+        self.assertEqual({item.id for item in self.services.list_inventory()}, set(ids))
 
     def test_delete_and_rename_groups_are_atomic(self):
         ids = [self.buy("Cable", "Extra", 5), self.buy("Cable", "Extra", 6)]
@@ -1032,9 +1030,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.services.assemble_pc("PC 1", [ids[1]])
         with self.assertRaises(ValidationError):
             self.services.delete_expenses(ids)
-        self.assertEqual(
-            {item.id for item in self.services.list_expenses()}, set(ids)
-        )
+        self.assertEqual({item.id for item in self.services.list_expenses()}, set(ids))
 
     def test_bulk_commands_stay_below_sqlite_parameter_limits(self):
         ids = [self.buy(f"Bulk {index}", "Extra", 1) for index in range(6)]
@@ -1117,16 +1113,14 @@ class DatabaseWorkflowTests(unittest.TestCase):
         old_id = services.add_expenses(
             [NewExpense.create("Old state", "CPU", 10, TEST_DATE)]
         )[0]
-        backup = create_backup(
-            special_directory / "backups #1%", database=database
-        )
-        services.add_expenses(
-            [NewExpense.create("New state", "RAM", 20, TEST_DATE)]
-        )
+        backup = create_backup(special_directory / "backups #1%", database=database)
+        services.add_expenses([NewExpense.create("New state", "RAM", 20, TEST_DATE)])
 
         restore_backup(backup, database=database)
 
-        self.assertEqual([item.name for item in services.list_expenses()], ["Old state"])
+        self.assertEqual(
+            [item.name for item in services.list_expenses()], ["Old state"]
+        )
         self.assertEqual(services.list_expenses()[0].id, old_id)
         validate_database(backup)
 
@@ -1333,7 +1327,9 @@ class DatabaseWorkflowTests(unittest.TestCase):
     def test_restore_removes_stale_wal_sidecars_before_replacing_main_file(self):
         self.buy("Restored state", "CPU", 10)
         source = create_backup(database=self.database)
-        sidecars = tuple(Path(f"{self.database_path}{suffix}") for suffix in ("-wal", "-shm"))
+        sidecars = tuple(
+            Path(f"{self.database_path}{suffix}") for suffix in ("-wal", "-shm")
+        )
         for sidecar in sidecars:
             sidecar.write_bytes(b"stale journal")
         safety = BackupResult(self.database_path.with_name("safety.db"))

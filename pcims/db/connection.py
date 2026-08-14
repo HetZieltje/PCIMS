@@ -95,9 +95,7 @@ class Database:
             try:
                 database.close()
             except BaseException as cleanup_error:  # noqa: BLE001 - preserve primary
-                error.add_note(
-                    f"Connection cleanup also failed: {cleanup_error}"
-                )
+                error.add_note(f"Connection cleanup also failed: {cleanup_error}")
             raise
         return database
 
@@ -116,9 +114,7 @@ class Database:
                 try:
                     connection.rollback()
                 except BaseException as cleanup_error:  # noqa: BLE001 - preserve primary
-                    error.add_note(
-                        f"Transaction rollback also failed: {cleanup_error}"
-                    )
+                    error.add_note(f"Transaction rollback also failed: {cleanup_error}")
                 raise
             finally:
                 try:

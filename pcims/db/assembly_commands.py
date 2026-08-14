@@ -14,9 +14,7 @@ from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
 
 
-def assemble_pc(
-    name: str, expense_ids: Iterable[int], *, database: Database
-) -> int:
+def assemble_pc(name: str, expense_ids: Iterable[int], *, database: Database) -> int:
     name = normalized_command_text(name, "PC name")
     ids = unique_command_ids(expense_ids, "Expense ID")
     with database.transaction(write=True) as connection:
@@ -29,9 +27,7 @@ def assemble_pc(
         for row in rows:
             if row["pc_id"] is not None or row["sale_id"] is not None:
                 raise ValidationError(f"'{row['name']}' is not available for assembly.")
-        bounded_cents_total(
-            (row["price_cents"] for row in rows), "Combined PC cost"
-        )
+        bounded_cents_total((row["price_cents"] for row in rows), "Combined PC cost")
         pc_id = int(
             connection.execute(
                 "SELECT COALESCE(MAX(id),0)+1 FROM assembled_pcs"

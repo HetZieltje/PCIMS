@@ -8,7 +8,9 @@ from pathlib import Path
 def wheel_in(directory: Path) -> Path:
     wheels = tuple(directory.glob("*.whl"))
     if len(wheels) != 1:
-        raise RuntimeError(f"Expected exactly one wheel in {directory}, found {len(wheels)}.")
+        raise RuntimeError(
+            f"Expected exactly one wheel in {directory}, found {len(wheels)}."
+        )
     return wheels[0]
 
 

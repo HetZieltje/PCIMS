@@ -120,7 +120,10 @@ class RecordTableModel(QAbstractTableModel, Generic[T]):
         }
         self.changePersistentIndexList(
             old_indexes,
-            [self.index(row_by_id[record_id], column) for record_id, column in old_locations],
+            [
+                self.index(row_by_id[record_id], column)
+                for record_id, column in old_locations
+            ],
         )
         self.layoutChanged.emit()
 
@@ -157,6 +160,8 @@ def selected_ids(table: QTableView) -> list[int]:
 
     return [
         int(index.data(ID_ROLE))
-        for index in sorted(table.selectionModel().selectedRows(), key=lambda item: item.row())
+        for index in sorted(
+            table.selectionModel().selectedRows(), key=lambda item: item.row()
+        )
         if index.data(ID_ROLE) is not None
     ]

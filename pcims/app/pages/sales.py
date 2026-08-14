@@ -69,8 +69,12 @@ class SalesPage(AsyncCommandPage):
         self.expense_model = RecordTableModel[Expense](
             (
                 Column("ID", lambda item: str(item.id), lambda item: item.id),
-                Column("Name", lambda item: item.name, lambda item: item.name.casefold()),
-                Column("Type", lambda item: item.item_type, lambda item: item.item_type),
+                Column(
+                    "Name", lambda item: item.name, lambda item: item.name.casefold()
+                ),
+                Column(
+                    "Type", lambda item: item.item_type, lambda item: item.item_type
+                ),
                 Column(
                     "Cost",
                     lambda item: format_cents(item.price_cents),
@@ -82,7 +86,9 @@ class SalesPage(AsyncCommandPage):
                     lambda item: item.purchase_date.toordinal(),
                 ),
                 Column(
-                    "Status", _expense_status, lambda item: _expense_status(item).casefold()
+                    "Status",
+                    _expense_status,
+                    lambda item: _expense_status(item).casefold(),
                 ),
             ),
             lambda item: item.id,
@@ -114,7 +120,9 @@ class SalesPage(AsyncCommandPage):
                     lambda sale: sale.sale_date.toordinal(),
                 ),
                 Column("Kind", lambda sale: sale.kind.upper(), lambda sale: sale.kind),
-                Column("Name", lambda sale: sale.name, lambda sale: sale.name.casefold()),
+                Column(
+                    "Name", lambda sale: sale.name, lambda sale: sale.name.casefold()
+                ),
                 Column(
                     "Cost",
                     lambda sale: format_cents(sale.cost_cents),
@@ -130,7 +138,11 @@ class SalesPage(AsyncCommandPage):
                     lambda sale: format_cents(sale.profit_cents),
                     lambda sale: sale.profit_cents,
                 ),
-                Column("Items", lambda sale: str(len(sale.items)), lambda sale: len(sale.items)),
+                Column(
+                    "Items",
+                    lambda sale: str(len(sale.items)),
+                    lambda sale: len(sale.items),
+                ),
             ),
             lambda sale: sale.id,
         )
@@ -165,8 +177,12 @@ class SalesPage(AsyncCommandPage):
         self.detail_model = RecordTableModel[Expense](
             (
                 Column("ID", lambda item: str(item.id), lambda item: item.id),
-                Column("Name", lambda item: item.name, lambda item: item.name.casefold()),
-                Column("Type", lambda item: item.item_type, lambda item: item.item_type),
+                Column(
+                    "Name", lambda item: item.name, lambda item: item.name.casefold()
+                ),
+                Column(
+                    "Type", lambda item: item.item_type, lambda item: item.item_type
+                ),
                 Column(
                     "Cost",
                     lambda item: format_cents(item.price_cents),
@@ -246,7 +262,9 @@ class SalesPage(AsyncCommandPage):
         )
 
     def _change_expense_page(self, direction: int) -> None:
-        offset = max(0, self._expense_page.offset + direction * self._expense_page.limit)
+        offset = max(
+            0, self._expense_page.offset + direction * self._expense_page.limit
+        )
         self._load_page(offset, self._sale_page.offset)
 
     def _change_sale_page(self, direction: int) -> None:

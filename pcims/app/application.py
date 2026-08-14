@@ -50,9 +50,7 @@ def acquire_instance_lock(database_path: Path) -> QLockFile | None:
     raise OSError(message)
 
 
-def _run_application(
-    application: QApplication, services: ApplicationServices
-) -> int:
+def _run_application(application: QApplication, services: ApplicationServices) -> int:
     try:
         instance_lock = acquire_instance_lock(services.database_path)
     except OSError as error:

@@ -68,9 +68,7 @@ class QtWorkflowTests(unittest.TestCase):
         settings = QSettings("PCIMS", "PCIMS")
         settings.clear()
         settings.sync()
-        self.database = Database.at(
-            Path(self.temporary_directory.name) / "qt-test.db"
-        )
+        self.database = Database.at(Path(self.temporary_directory.name) / "qt-test.db")
         self.services = ApplicationServices(self.database)
         self.services.initialize()
         self.tasks = TaskManager()
@@ -192,7 +190,9 @@ class QtWorkflowTests(unittest.TestCase):
         page = InventoryPage(self.services, tasks=self.tasks)
         page.refresh()
         with (
-            patch("pcims.services.ApplicationServices.list_inventory") as inventory_query,
+            patch(
+                "pcims.services.ApplicationServices.list_inventory"
+            ) as inventory_query,
             patch("pcims.services.ApplicationServices.list_pcs") as pc_query,
         ):
             page.search.setText("fan")
@@ -572,9 +572,7 @@ class QtWorkflowTests(unittest.TestCase):
             (Column("Price", lambda item: item[1], lambda item: item[0]),),
             lambda item: item[0],
         )
-        model.set_records(
-            ((10000, "€100.00"), (900, "€9.00"), (2000, "€20.00"))
-        )
+        model.set_records(((10000, "€100.00"), (900, "€9.00"), (2000, "€20.00")))
         model.sort(0, Qt.SortOrder.AscendingOrder)
         self.assertEqual(
             [model.index(row, 0).data() for row in range(3)],
@@ -610,7 +608,9 @@ class QtWorkflowTests(unittest.TestCase):
             lambda item: item[0],
         )
         model.sort(0, Qt.SortOrder.AscendingOrder)
-        model.set_records(tuple((number, f"Item {number}") for number in range(9999, -1, -1)))
+        model.set_records(
+            tuple((number, f"Item {number}") for number in range(9999, -1, -1))
+        )
 
         self.assertEqual(model.rowCount(), 10_000)
         self.assertEqual(model.index(0, 0).data(), "0")
@@ -1003,9 +1003,7 @@ class QtWorkflowTests(unittest.TestCase):
             log_path.with_name(f"{log_path.name}.1").read_text(encoding="utf-8"),
             "old diagnostic content",
         )
-        self.assertIn(
-            "latest worker failure", log_path.read_text(encoding="utf-8")
-        )
+        self.assertIn("latest worker failure", log_path.read_text(encoding="utf-8"))
 
     def test_error_log_appends_when_rotation_target_is_locked(self):
         log_path = Path(self.temporary_directory.name) / "locked-rotation.log"
@@ -1042,9 +1040,7 @@ class QtWorkflowTests(unittest.TestCase):
             destination = log_exception(type(error), error, error.__traceback__)
 
         self.assertIsNone(destination)
-        print_exception.assert_called_once_with(
-            type(error), error, error.__traceback__
-        )
+        print_exception.assert_called_once_with(type(error), error, error.__traceback__)
 
     def test_error_reporting_survives_an_invalid_data_directory_override(self):
         error = RuntimeError("invalid configuration diagnostic")
@@ -1143,9 +1139,7 @@ class QtWorkflowTests(unittest.TestCase):
             [item.id for item in self.services.list_expenses()], [expense_id]
         )
 
-        self.services.sell_items(
-            [expense_id], SaleTerms.create("10.00", TEST_DATE)
-        )
+        self.services.sell_items([expense_id], SaleTerms.create("10.00", TEST_DATE))
         sales = SalesPage(self.services, tasks=self.tasks)
         sales.refresh()
         sales.sale_table.selectRow(0)
@@ -1184,9 +1178,7 @@ class QtWorkflowTests(unittest.TestCase):
         with patch("pcims.app.pages.inventory.ask_confirmation", return_value=True):
             inventory.delete_selected_parts()
         self.wait_for_page(inventory)
-        self.assertEqual(
-            [item.id for item in self.services.list_expenses()], [cpu_id]
-        )
+        self.assertEqual([item.id for item in self.services.list_expenses()], [cpu_id])
 
         assemble = AssemblePage(self.services, tasks=self.tasks)
         assemble.refresh()

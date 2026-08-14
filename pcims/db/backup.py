@@ -161,9 +161,10 @@ def _create_backup(
     publication_errors: list[str] = []
     durable = True
     try:
-        with database.transaction() as source, closing(
-            sqlite3.connect(temporary_path)
-        ) as target:
+        with (
+            database.transaction() as source,
+            closing(sqlite3.connect(temporary_path)) as target,
+        ):
             source.backup(target)
         if os.name != "nt":
             temporary_path.chmod(0o600)

@@ -30,9 +30,7 @@ def log_exception(
     """Append one traceback to a bounded, thread-safe diagnostic log."""
     try:
         if log_path is None:
-            destination = (
-                ensure_private_directory(get_data_dir()) / "pcims-errors.log"
-            )
+            destination = ensure_private_directory(get_data_dir()) / "pcims-errors.log"
         else:
             destination = Path(log_path).resolve()
         with _log_lock:
@@ -43,9 +41,7 @@ def log_exception(
                 and destination.stat().st_size >= MAX_ERROR_LOG_BYTES
             ):
                 try:
-                    destination.replace(
-                        destination.with_name(f"{destination.name}.1")
-                    )
+                    destination.replace(destination.with_name(f"{destination.name}.1"))
                 except OSError as rotation_error:
                     rotation_warning = f"Log rotation failed: {rotation_error}"
             with destination.open("a", encoding="utf-8") as log_file:

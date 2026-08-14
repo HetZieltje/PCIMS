@@ -38,9 +38,7 @@ def verify_wheel_contents(wheel: Path, project_root: Path = ROOT) -> None:
     expected = {
         path.relative_to(project_root).as_posix()
         for path in (project_root / "pcims").rglob("*")
-        if path.is_file()
-        and "__pycache__" not in path.parts
-        and path.suffix != ".pyc"
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     }
     with zipfile.ZipFile(wheel) as archive:
         packaged = {

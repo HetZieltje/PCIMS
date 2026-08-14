@@ -39,13 +39,9 @@ def sell_items(
         _validate_sale_date(rows, sale_day)
         names = {row["name"] for row in rows}
         name = rows[0]["name"] if len(names) == 1 else f"{len(rows)} items"
-        bounded_cents_total(
-            (row["price_cents"] for row in rows), "Combined item cost"
-        )
+        bounded_cents_total((row["price_cents"] for row in rows), "Combined item cost")
         sale_id = int(
-            connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM sales").fetchone()[
-                0
-            ]
+            connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM sales").fetchone()[0]
         )
         connection.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
@@ -78,15 +74,11 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
         if not rows:
             raise ValidationError(f"PC '{pc['name']}' has no components.")
         _validate_sale_date(rows, sale_day)
-        bounded_cents_total(
-            (row["price_cents"] for row in rows), "Combined PC cost"
-        )
+        bounded_cents_total((row["price_cents"] for row in rows), "Combined PC cost")
         expense_ids = [row["id"] for row in rows]
         connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
         sale_id = int(
-            connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM sales").fetchone()[
-                0
-            ]
+            connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM sales").fetchone()[0]
         )
         connection.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",

@@ -29,6 +29,7 @@ def run_python(
 def verify(output_directory: Path | None) -> None:
     run_python("-X", "dev", "-W", "error", "-m", "unittest", "discover", "-s", "tests")
     run_python("-m", "ruff", "check", "pcims", "tests", "scripts")
+    run_python("-m", "ruff", "format", "--check", "pcims", "tests", "scripts")
     run_python("-m", "mypy", "pcims", "--strict")
     run_python("-m", "bandit", "-q", "-r", "pcims", "scripts")
     run_python("-m", "compileall", "-q", "pcims", "scripts")

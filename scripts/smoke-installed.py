@@ -33,9 +33,7 @@ def main() -> None:
         expense_id = services.add_expenses(
             [NewExpense.create("Artifact GPU", "GPU", "100.00", "2026-08-14")]
         )[0]
-        services.sell_items(
-            [expense_id], SaleTerms.create("125.00", "2026-08-14")
-        )
+        services.sell_items([expense_id], SaleTerms.create("125.00", "2026-08-14"))
         if services.financial_summary().profit_cents != 2_500:
             raise RuntimeError("Installed wheel produced an invalid financial result.")
         window = MainWindow(services)
