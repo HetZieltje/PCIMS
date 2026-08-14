@@ -1,5 +1,6 @@
 include packaging/linux/pcims.desktop
 include requirements.lock
+include requirements-build.lock
 include scripts/install-linux.sh
 include scripts/smoke-installed.py
 include tests/test-linux-installer.sh

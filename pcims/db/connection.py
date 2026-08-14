@@ -59,6 +59,12 @@ class Database:
             database = sqlite3.connect(
                 f"{self.path.as_uri()}?mode=rw", uri=True, timeout=10
             )
+        try:
+            if os.name != "nt":
+                self.path.chmod(0o600)
+        except BaseException:
+            database.close()
+            raise
         database.row_factory = sqlite3.Row
         register_database_collations(database)
         database.execute("PRAGMA foreign_keys = ON")

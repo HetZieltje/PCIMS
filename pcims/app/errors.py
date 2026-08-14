@@ -1,5 +1,6 @@
 """Last-resort logging and reporting for unexpected GUI exceptions."""
 
+import os
 import sys
 import threading
 import traceback
@@ -31,13 +32,23 @@ def log_exception(
     try:
         with _log_lock:
             destination.parent.mkdir(parents=True, exist_ok=True)
+            rotation_warning: str | None = None
             if (
                 destination.is_file()
                 and destination.stat().st_size >= MAX_ERROR_LOG_BYTES
             ):
-                destination.replace(destination.with_name(f"{destination.name}.1"))
+                try:
+                    destination.replace(
+                        destination.with_name(f"{destination.name}.1")
+                    )
+                except OSError as rotation_error:
+                    rotation_warning = f"Log rotation failed: {rotation_error}"
             with destination.open("a", encoding="utf-8") as log_file:
+                if os.name != "nt":
+                    destination.chmod(0o600)
                 log_file.write(f"\n[{datetime.now().astimezone().isoformat()}]\n")
+                if rotation_warning:
+                    log_file.write(f"{rotation_warning}\n")
                 traceback.print_exception(
                     exception_type, exception, traceback_object, file=log_file
                 )

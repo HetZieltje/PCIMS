@@ -910,6 +910,28 @@ class QtWorkflowTests(unittest.TestCase):
             "latest worker failure", log_path.read_text(encoding="utf-8")
         )
 
+    def test_error_log_appends_when_rotation_target_is_locked(self):
+        log_path = Path(self.temporary_directory.name) / "locked-rotation.log"
+        log_path.write_text("old diagnostic content", encoding="utf-8")
+        error = RuntimeError("traceback must survive")
+
+        with (
+            patch("pcims.app.errors.MAX_ERROR_LOG_BYTES", 10),
+            patch.object(
+                Path,
+                "replace",
+                side_effect=PermissionError("rotation target locked"),
+            ),
+        ):
+            destination = log_exception(
+                type(error), error, error.__traceback__, log_path
+            )
+
+        content = log_path.read_text(encoding="utf-8")
+        self.assertEqual(destination, log_path.resolve())
+        self.assertIn("Log rotation failed: rotation target locked", content)
+        self.assertIn("traceback must survive", content)
+
     def test_assemble_page_checks_concrete_ids_and_assembles(self):
         expected_ids = [
             self.purchase("RAM", "RAM", 40),

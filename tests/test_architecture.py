@@ -177,13 +177,20 @@ class ArchitectureTests(unittest.TestCase):
         development_lock = (root / "requirements-dev.lock").read_text(
             encoding="utf-8"
         )
+        build_lock = (root / "requirements-build.lock").read_text(encoding="utf-8")
         workflow = (root / ".github" / "workflows" / "test.yml").read_text(
             encoding="utf-8"
         )
         for lock in (runtime_lock, development_lock):
             self.assertIn("--hash=sha256:", lock)
             self.assertIn("pyside6==", lock)
+        self.assertIn("setuptools==80.9.0", build_lock)
+        self.assertIn("--hash=sha256:", build_lock)
         self.assertIn("--require-hashes -r requirements-dev.lock", workflow)
+        self.assertIn("--require-hashes -r requirements-build.lock", workflow)
+        self.assertIn("--no-build-isolation", workflow)
+        self.assertIn("python -m build --no-isolation", workflow)
+        self.assertNotIn("pip install --upgrade pip", workflow)
         self.assertIn("python -m pip check", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertNotIn("actions/checkout@v", workflow)

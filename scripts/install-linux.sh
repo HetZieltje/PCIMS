@@ -55,7 +55,10 @@ mkdir -p "$install_parent"
 "$python_command" -m venv "$staging_root"
 "$staging_root/bin/python" -m pip install \
     --require-hashes -r "$project_directory/requirements.lock"
-"$staging_root/bin/python" -m pip install --no-deps "$project_directory"
+"$staging_root/bin/python" -m pip install \
+    --require-hashes -r "$project_directory/requirements-build.lock"
+"$staging_root/bin/python" -m pip install \
+    --no-build-isolation --no-deps "$project_directory"
 "$staging_root/bin/python" -m pip check
 (
     cd "${TMPDIR:-/tmp}"

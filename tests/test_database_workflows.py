@@ -1,6 +1,7 @@
 import gc
 import os
 import sqlite3
+import stat
 import tempfile
 import threading
 import unittest
@@ -55,6 +56,13 @@ class DatabaseWorkflowTests(unittest.TestCase):
         gc.collect()
 
         self.assertIsNone(gate_reference())
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits are not available")
+    def test_database_and_backup_files_are_private_to_the_user(self):
+        backup = create_backup(database=self.database)
+
+        self.assertEqual(stat.S_IMODE(self.database_path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(backup.path.stat().st_mode), 0o600)
 
     def test_database_configuration_is_an_explicit_immutable_value(self):
         configured = self.database

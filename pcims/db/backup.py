@@ -130,6 +130,8 @@ def _create_backup(
             sqlite3.connect(temporary_path)
         ) as target:
             source.backup(target)
+        if os.name != "nt":
+            temporary_path.chmod(0o600)
         validate_database(temporary_path)
         _sync_file(temporary_path)
         os.replace(temporary_path, final_path)
@@ -192,6 +194,8 @@ def _restore_backup(
     primary_error: BaseException | None = None
     try:
         shutil.copy2(source_path, staged_path)
+        if os.name != "nt":
+            staged_path.chmod(0o600)
         validate_database(staged_path)
         safety_backup = create_backup(pre_restore_directory, database=database)
         _sync_file(staged_path)
