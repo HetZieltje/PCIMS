@@ -1,15 +1,24 @@
 """Exact schema definition, creation, and semantic integrity checks."""
 
+import os
 import sqlite3
+import uuid
 from contextlib import closing
-from datetime import date
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Literal
 
-from pcims.db.connection import Database
+from pcims.db.connection import (
+    Database,
+    ensure_private_directory,
+    register_database_collations,
+)
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES, MAX_NAME_LENGTH
 from pcims.money import MAX_MONEY_CENTS
 
 SCHEMA_VERSION = 14
+UPGRADABLE_SCHEMA_VERSION = 13
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND instr(name,char(0))=0
@@ -204,6 +213,11 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         END""",
 }
 
+_SCHEMA_13_DEFINITIONS = {
+    key: definition.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "INTEGER PRIMARY KEY")
+    for key, definition in SCHEMA_DEFINITIONS.items()
+}
+
 for _money_trigger in (
     "pc_part_cost_limit",
     "sale_item_cost_and_date_limit",
@@ -217,10 +231,8 @@ def _normalize_schema_sql(sql: object) -> str:
     return " ".join(str(sql).split()).casefold()
 
 
-def validate_schema(database: sqlite3.Connection) -> None:
-    """Require the exact current tables, constraints, indexes, and triggers."""
-    version = int(database.execute("PRAGMA user_version").fetchone()[0])
-    actual = {
+def _schema_objects(database: sqlite3.Connection) -> dict[tuple[str, str], str]:
+    return {
         (str(row[0]), str(row[1])): _normalize_schema_sql(row[2])
         for row in database.execute(
             """SELECT type,name,sql FROM sqlite_master
@@ -228,10 +240,17 @@ def validate_schema(database: sqlite3.Connection) -> None:
                  AND type IN ('table','index','trigger','view')"""
         )
     }
-    expected = {
-        key: _normalize_schema_sql(sql) for key, sql in SCHEMA_DEFINITIONS.items()
-    }
-    if version == SCHEMA_VERSION and actual == expected:
+
+
+def _validate_schema_definition(
+    database: sqlite3.Connection,
+    expected_version: int,
+    definitions: dict[tuple[str, str], str],
+) -> None:
+    actual_version = int(database.execute("PRAGMA user_version").fetchone()[0])
+    actual = _schema_objects(database)
+    expected = {key: _normalize_schema_sql(sql) for key, sql in definitions.items()}
+    if actual_version == expected_version and actual == expected:
         return
 
     missing = sorted(name for _, name in expected.keys() - actual.keys())
@@ -242,8 +261,8 @@ def validate_schema(database: sqlite3.Connection) -> None:
         if expected[(kind, name)] != actual[(kind, name)]
     )
     differences: list[str] = []
-    if version != SCHEMA_VERSION:
-        differences.append(f"version {version}, expected {SCHEMA_VERSION}")
+    if actual_version != expected_version:
+        differences.append(f"version {actual_version}, expected {expected_version}")
     if missing:
         differences.append(f"missing {', '.join(missing)}")
     if unexpected:
@@ -255,6 +274,11 @@ def validate_schema(database: sqlite3.Connection) -> None:
         f" ({'; '.join(differences)}). Restore a current-format backup or choose "
         "a new database."
     )
+
+
+def validate_schema(database: sqlite3.Connection) -> None:
+    """Require the exact current tables, constraints, indexes, and triggers."""
+    _validate_schema_definition(database, SCHEMA_VERSION, SCHEMA_DEFINITIONS)
 
 
 def _validate_dates(database: sqlite3.Connection) -> None:
@@ -345,8 +369,143 @@ def validate_current_data(database: sqlite3.Connection) -> None:
     _validate_relationships(database)
 
 
+def _validate_storage(database: sqlite3.Connection) -> None:
+    integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
+    if integrity != "ok":
+        raise DatabaseIntegrityError(f"Database integrity check failed: {integrity}")
+    foreign_key_violations = database.execute("PRAGMA foreign_key_check").fetchall()
+    if foreign_key_violations:
+        table, row_id, referenced_table, _ = foreign_key_violations[0]
+        raise DatabaseIntegrityError(
+            f"Database foreign-key check failed at {table} row {row_id} "
+            f"(missing {referenced_table} record)."
+        )
+
+
+def _inspect_database(database: Database) -> Literal["empty", "current", "upgrade"]:
+    with database.transaction() as connection:
+        if not _schema_objects(connection):
+            return "empty"
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version == UPGRADABLE_SCHEMA_VERSION:
+            _validate_schema_definition(
+                connection,
+                UPGRADABLE_SCHEMA_VERSION,
+                _SCHEMA_13_DEFINITIONS,
+            )
+            state: Literal["current", "upgrade"] = "upgrade"
+        else:
+            validate_schema(connection)
+            state = "current"
+        _validate_storage(connection)
+        validate_current_data(connection)
+        return state
+
+
+def _sync_upgrade_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _create_pre_upgrade_backup(database: Database) -> Path:
+    """Publish a verified v13 copy before the one supported forward upgrade."""
+    destination = ensure_private_directory(database.path.parent / "backups")
+    stamp = datetime.now(UTC).astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    final_path = destination / (
+        f"{database.path.stem}_pre_v14_{stamp}_{uuid.uuid4().hex}.db"
+    )
+    temporary_path = final_path.with_suffix(".tmp")
+    primary_error: BaseException | None = None
+    try:
+        with (
+            database.transaction() as source,
+            closing(sqlite3.connect(temporary_path)) as target,
+        ):
+            source.backup(target)
+        if os.name != "nt":
+            temporary_path.chmod(0o600)
+        with closing(sqlite3.connect(temporary_path)) as copied:
+            register_database_collations(copied)
+            _validate_schema_definition(
+                copied,
+                UPGRADABLE_SCHEMA_VERSION,
+                _SCHEMA_13_DEFINITIONS,
+            )
+            _validate_storage(copied)
+            validate_current_data(copied)
+        with temporary_path.open("r+b") as file:
+            os.fsync(file.fileno())
+        os.replace(temporary_path, final_path)
+        _sync_upgrade_directory(destination)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as cleanup_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(
+                f"Temporary upgrade-backup cleanup failed: {cleanup_error}"
+            )
+    return final_path
+
+
+def _migrate_schema_13_to_14(database: sqlite3.Connection) -> None:
+    """Rebuild the three identity tables without changing any record IDs."""
+    for kind, name in _SCHEMA_13_DEFINITIONS:
+        if kind == "trigger":
+            database.execute(f'DROP TRIGGER "{name}"')
+        elif kind == "index":
+            database.execute(f'DROP INDEX "{name}"')
+
+    for table in ("pc_parts", "sale_items", "expenses", "assembled_pcs", "sales"):
+        database.execute(f'ALTER TABLE "{table}" RENAME TO "{table}_v13"')
+
+    for (kind, _name), statement in SCHEMA_DEFINITIONS.items():
+        if kind == "table":
+            database.execute(statement)
+
+    database.execute(
+        """INSERT INTO expenses (id,name,item_type,price_cents,purchase_date)
+           SELECT id,name,item_type,price_cents,purchase_date FROM expenses_v13"""
+    )
+    database.execute(
+        """INSERT INTO pc_parts (pc_id,expense_id,position)
+           SELECT pc_id,expense_id,position FROM pc_parts_v13"""
+    )
+    database.execute(
+        """INSERT INTO sale_items (sale_id,expense_id,position)
+           SELECT sale_id,expense_id,position FROM sale_items_v13"""
+    )
+    database.execute(
+        """INSERT INTO assembled_pcs (id,name)
+           SELECT id,name FROM assembled_pcs_v13"""
+    )
+    database.execute(
+        """INSERT INTO sales (id,name,kind,selling_price_cents,sale_date)
+           SELECT id,name,kind,selling_price_cents,sale_date FROM sales_v13"""
+    )
+
+    for table in ("pc_parts", "sale_items", "assembled_pcs", "sales", "expenses"):
+        database.execute(f'DROP TABLE "{table}_v13"')
+
+    for (kind, _name), statement in SCHEMA_DEFINITIONS.items():
+        if kind != "table":
+            database.execute(statement)
+    database.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
 def _initialize_database(database: Database) -> None:
-    """Create the current schema, or reject any incompatible existing schema."""
+    """Create the current schema or upgrade the exact preceding rewrite schema."""
     with closing(database.connect(create=True)) as setup_connection:
         journal_mode = setup_connection.execute("PRAGMA journal_mode = WAL").fetchone()[
             0
@@ -355,29 +514,26 @@ def _initialize_database(database: Database) -> None:
             raise DatabaseIntegrityError(
                 f"Database could not enable WAL journaling (got {journal_mode})."
             )
-    with database.transaction(write=True) as connection:
-        objects_exist = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1"
-        ).fetchone()
-        if objects_exist:
-            validate_schema(connection)
-            integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-            if integrity != "ok":
-                raise DatabaseIntegrityError(
-                    f"Database integrity check failed: {integrity}"
-                )
-            foreign_key_violations = connection.execute(
-                "PRAGMA foreign_key_check"
-            ).fetchall()
-            if foreign_key_violations:
-                table, row_id, referenced_table, _ = foreign_key_violations[0]
-                raise DatabaseIntegrityError(
-                    f"Database foreign-key check failed at {table} row {row_id} "
-                    f"(missing {referenced_table} record)."
-                )
+    state = _inspect_database(database)
+    if state == "current":
+        return
+    if state == "upgrade":
+        _create_pre_upgrade_backup(database)
+        with database.transaction(write=True) as connection:
+            _validate_schema_definition(
+                connection,
+                UPGRADABLE_SCHEMA_VERSION,
+                _SCHEMA_13_DEFINITIONS,
+            )
+            _validate_storage(connection)
             validate_current_data(connection)
-            return
+            _migrate_schema_13_to_14(connection)
+            validate_schema(connection)
+            _validate_storage(connection)
+            validate_current_data(connection)
+        return
 
+    with database.transaction(write=True) as connection:
         for statement in SCHEMA_DEFINITIONS.values():
             connection.execute(statement)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -386,5 +542,5 @@ def _initialize_database(database: Database) -> None:
 
 def initialize_database(database: Database) -> None:
     """Initialize while excluding live operations and database replacement."""
-    with database.gate.exclusive():
+    with database.gate.maintenance(), database.gate.exclusive():
         _initialize_database(database)

@@ -4,7 +4,7 @@ PC Inventory Management Software is a cross-platform PySide6/Qt desktop
 application for purchases, component inventory, assembled PCs, sales, profit,
 and verified SQLite backups.
 
-The PySide6 rewrite is currently available as a `2.0.0b1` prerelease. Beta
+The PySide6 rewrite is currently available as a `2.0.0b2` prerelease. Beta
 builds use the current normalized database format and deliberately do not open
 databases created by the former Tkinter application.
 
@@ -71,9 +71,10 @@ Manual backup and restore controls are available under Settings.
 ## Database policy
 
 The Qt rewrite uses one normalized schema with integer cents and ID-based
-relationships. Runtime migration and compatibility with pre-rewrite schemas
-are intentionally not included. An incompatible database is rejected without
-being modified; use a current-format backup or a new database path.
+relationships. An exact schema-v13 rewrite database is automatically backed up
+and upgraded to schema v14 without changing its records. Tkinter-era, modified,
+and otherwise unknown schemas remain unsupported and are rejected without being
+modified; use a compatible backup or a new database path.
 
 ## Development checks
 
@@ -100,9 +101,9 @@ generated desktop entry.
 Preview releases contain native, smoke-tested PyInstaller packages built from
 the hash-locked packaging environment:
 
-- Windows x64 portable ZIP
-- macOS Apple Silicon application ZIP
-- Linux x86_64 portable tarball
+- `PCIMS-2.0.0b2-Windows-x64.zip`
+- `PCIMS-2.0.0b2-macOS-arm64.zip`
+- `PCIMS-2.0.0b2-Linux-x86_64.tar.gz`
 
 These beta packages are not code-signed, so Windows SmartScreen or macOS
 Gatekeeper may show a warning. The reproducible wheel remains the authoritative

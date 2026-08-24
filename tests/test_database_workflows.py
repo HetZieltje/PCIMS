@@ -28,7 +28,12 @@ from pcims.db.errors import (
 from pcims.db.expense_commands import add_expenses
 from pcims.db.gate import gate_for
 from pcims.db.reads import ReadQueries
-from pcims.db.schema import SCHEMA_DEFINITIONS, SCHEMA_VERSION, initialize_database
+from pcims.db.schema import (
+    SCHEMA_DEFINITIONS,
+    SCHEMA_VERSION,
+    UPGRADABLE_SCHEMA_VERSION,
+    initialize_database,
+)
 from pcims.domain import NewExpense, SaleTerms
 from pcims.money import MAX_MONEY_CENTS
 from pcims.services import ApplicationServices
@@ -368,6 +373,23 @@ class DatabaseWorkflowTests(unittest.TestCase):
             [NewExpense.create(name, item_type, price, purchase_date)]
         )[0]
 
+    def create_schema_13_database(self, name="schema-13.db"):
+        path = Path(self.temporary_directory.name) / name
+        database = Database.at(path)
+        definitions = tuple(
+            statement.replace(
+                "INTEGER PRIMARY KEY AUTOINCREMENT", "INTEGER PRIMARY KEY"
+            )
+            for statement in SCHEMA_DEFINITIONS.values()
+        )
+        with closing(database.connect(create=True)) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            for statement in definitions:
+                connection.execute(statement)
+            connection.execute(f"PRAGMA user_version={UPGRADABLE_SCHEMA_VERSION}")
+            connection.commit()
+        return database
+
     def test_schema_contains_only_authoritative_current_tables_and_columns(self):
         with self.database.transaction() as database:
             self.assertEqual(
@@ -534,6 +556,86 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 [row[1] for row in database.execute("PRAGMA table_info(expenses)")],
                 ["id", "price"],
             )
+
+    def test_exact_schema_13_is_backed_up_and_upgraded_without_data_loss(self):
+        database = self.create_schema_13_database()
+        with database.transaction(write=True) as connection:
+            connection.executemany(
+                """INSERT INTO expenses
+                   (id,name,item_type,price_cents,purchase_date)
+                   VALUES (?,?,?,?,?)""",
+                (
+                    (7, "Available", "Extra", 1_000, TEST_DATE.isoformat()),
+                    (8, "PC part", "CPU", 2_000, TEST_DATE.isoformat()),
+                    (9, "Sold", "RAM", 3_000, TEST_DATE.isoformat()),
+                ),
+            )
+            connection.execute(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (4,8,0)"
+            )
+            connection.execute(
+                "INSERT INTO assembled_pcs (id,name) VALUES (4,'Existing PC')"
+            )
+            connection.execute(
+                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (5,9,0)"
+            )
+            connection.execute(
+                """INSERT INTO sales
+                   (id,name,kind,selling_price_cents,sale_date)
+                   VALUES (5,'Sold','item',4000,?)""",
+                (TEST_DATE.isoformat(),),
+            )
+
+        initialize_database(database)
+        validate_database(database.path)
+        services = ApplicationServices(database)
+
+        self.assertEqual([item.id for item in services.list_expenses()], [7, 8, 9])
+        self.assertEqual(services.list_pcs()[0].parts[0].id, 8)
+        self.assertEqual(services.list_sales()[0].items[0].id, 9)
+        new_id = services.add_expenses(
+            [NewExpense.create("New", "Extra", 1, TEST_DATE)]
+        )[0]
+        self.assertEqual(new_id, 10)
+
+        backups = list(database.path.parent.glob("backups/*_pre_v14_*.db"))
+        self.assertEqual(len(backups), 1)
+        with closing(Database.at(backups[0]).connect()) as backup:
+            self.assertEqual(
+                backup.execute("PRAGMA user_version").fetchone()[0],
+                UPGRADABLE_SCHEMA_VERSION,
+            )
+            self.assertEqual(
+                backup.execute("PRAGMA integrity_check").fetchone()[0], "ok"
+            )
+
+    def test_failed_schema_13_upgrade_rolls_back_the_live_database(self):
+        database = self.create_schema_13_database("failed-upgrade.db")
+        broken = dict(SCHEMA_DEFINITIONS)
+        broken[("trigger", "sale_item_must_not_be_in_pc")] = (
+            "CREATE TRIGGER broken nonsense"
+        )
+
+        with (
+            patch("pcims.db.schema.SCHEMA_DEFINITIONS", broken),
+            self.assertRaises(sqlite3.OperationalError),
+        ):
+            initialize_database(database)
+
+        with closing(database.connect()) as connection:
+            self.assertEqual(
+                connection.execute("PRAGMA user_version").fetchone()[0],
+                UPGRADABLE_SCHEMA_VERSION,
+            )
+            self.assertNotIn(
+                "AUTOINCREMENT",
+                connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE name='expenses'"
+                ).fetchone()[0],
+            )
+        self.assertEqual(
+            len(list(database.path.parent.glob("backups/*_pre_v14_*.db"))), 1
+        )
 
     def test_failed_first_run_schema_creation_rolls_back_completely(self):
         partial_path = Path(self.temporary_directory.name) / "partial.db"
