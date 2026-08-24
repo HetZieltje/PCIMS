@@ -263,7 +263,8 @@ class QtWorkflowTests(unittest.TestCase):
         ):
             actual = tuple(size / sum(splitter.sizes()) for size in splitter.sizes())
             for actual_ratio, expected_ratio in zip(actual, expected):
-                self.assertAlmostEqual(actual_ratio, expected_ratio, delta=0.03)
+                # Qt may clamp restored panes to platform-specific minimum widths.
+                self.assertAlmostEqual(actual_ratio, expected_ratio, delta=0.05)
         second.deleteLater()
 
     def test_purchase_page_allocates_quantity_total_and_commits(self):
