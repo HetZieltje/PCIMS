@@ -19,7 +19,6 @@ from pcims.db.assembly_commands import (
     disassemble_pc,
     update_pc,
 )
-from pcims.db.backup import create_backup, restore_backup
 from pcims.db.connection import Database, default_database
 from pcims.db.expense_commands import (
     add_expenses,
@@ -178,6 +177,8 @@ class ApplicationServices:
         destination_directory: str | os.PathLike[str] | None = None,
         keep: int = 14,
     ) -> BackupResult:
+        from pcims.db.backup import create_backup
+
         return create_backup(destination_directory, keep, database=self.database)
 
     def restore_backup(
@@ -185,6 +186,8 @@ class ApplicationServices:
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
     ) -> RestoreResult:
+        from pcims.db.backup import restore_backup
+
         return restore_backup(
             backup_path, pre_restore_directory, database=self.database
         )

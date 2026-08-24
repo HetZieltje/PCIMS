@@ -1,10 +1,7 @@
-"""Runtime version derived from installed distribution metadata."""
+"""Single source of truth for the application and distribution version."""
 
-from importlib.metadata import PackageNotFoundError, version
+__version__ = "2.0.0b3.dev0"
 
 
 def application_version() -> str:
-    try:
-        return version("pcims")
-    except PackageNotFoundError:
-        return "development"
+    return __version__

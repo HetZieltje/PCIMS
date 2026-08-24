@@ -32,6 +32,8 @@ class MainWindow(QMainWindow):
         self._closing_after_backup = False
         self._close_requested = False
         self._close_backup_running = False
+        self._data_generation = 0
+        self._backed_up_generation: int | None = None
         self.tasks = TaskManager(self)
         self.tasks.became_idle.connect(self._continue_close)
 
@@ -104,14 +106,16 @@ class MainWindow(QMainWindow):
 
     def create_startup_backup(self) -> None:
         self.statusBar().showMessage("Creating startup backup…")
+        generation = self._data_generation
         self._startup_backup_task = self.tasks.run(
             self.services.create_backup,
-            self._startup_backup_finished,
+            lambda backup: self._startup_backup_finished(generation, backup),
             self._startup_backup_failed,
             owner=self,
         )
 
-    def _startup_backup_finished(self, backup: BackupResult) -> None:
+    def _startup_backup_finished(self, generation: int, backup: BackupResult) -> None:
+        self._backed_up_generation = generation
         self.statusBar().showMessage("Startup backup complete", 2500)
         if backup.has_warnings:
             QMessageBox.warning(
@@ -144,9 +148,10 @@ class MainWindow(QMainWindow):
 
     def refresh_all(self) -> None:
         self.refreshes.refresh_all()
-        self.statusBar().showMessage("Refreshing dataâ€¦")
+        self.statusBar().showMessage("Refreshing data…")
 
     def _on_data_changed(self) -> None:
+        self._data_generation += 1
         self.refreshes.invalidate_all(self.tabs.currentWidget())
         self.statusBar().showMessage("Data updated", 2500)
 
@@ -215,6 +220,12 @@ class MainWindow(QMainWindow):
             return
         if self.tasks.active:
             self.statusBar().showMessage("Waiting for background work to finish…")
+            return
+        if self._backed_up_generation == self._data_generation:
+            self._closing_after_backup = True
+            self._close_requested = False
+            self.setEnabled(True)
+            self.close()
             return
         self._close_backup_running = True
         self.statusBar().showMessage("Backing up before closing…")

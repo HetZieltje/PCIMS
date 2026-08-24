@@ -369,8 +369,10 @@ def validate_current_data(database: sqlite3.Connection) -> None:
     _validate_relationships(database)
 
 
-def _validate_storage(database: sqlite3.Connection) -> None:
-    integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
+def _validate_storage(database: sqlite3.Connection, *, thorough: bool = True) -> None:
+    """Validate storage, using the faster safe-open check on current databases."""
+    statement = "PRAGMA integrity_check" if thorough else "PRAGMA quick_check"
+    integrity = database.execute(statement).fetchone()[0]
     if integrity != "ok":
         raise DatabaseIntegrityError(f"Database integrity check failed: {integrity}")
     foreign_key_violations = database.execute("PRAGMA foreign_key_check").fetchall()
@@ -397,7 +399,7 @@ def _inspect_database(database: Database) -> Literal["empty", "current", "upgrad
         else:
             validate_schema(connection)
             state = "current"
-        _validate_storage(connection)
+        _validate_storage(connection, thorough=state == "upgrade")
         validate_current_data(connection)
         return state
 

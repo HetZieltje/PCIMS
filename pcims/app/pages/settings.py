@@ -112,7 +112,9 @@ class SettingsPage(QWidget):
                 f"Backup warnings:\n{backup.warning_text}",
             )
             return
-        QMessageBox.information(self, "Backup complete", f"Backup saved to:\n{backup}")
+        QMessageBox.information(
+            self, "Backup complete", f"Backup saved to:\n{backup.path}"
+        )
 
     def _backup_failed(self, error: Exception) -> None:
         self.backup_button.setEnabled(True)

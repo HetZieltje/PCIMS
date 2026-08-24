@@ -313,13 +313,16 @@ class ArchitectureTests(unittest.TestCase):
             encoding="utf-8"
         )
         version = (root / "pcims" / "version.py").read_text(encoding="utf-8")
+        project = (root / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn("create: bool = False", connection)
         self.assertIn("mode=rw", connection)
         self.assertIn("ensure_private_directory(get_data_dir())", connection)
         self.assertIn('if OPERATING_SYSTEM == "nt"', connection)
         self.assertIn("must be an absolute path", connection)
         self.assertIn("setApplicationVersion(application_version())", application)
-        self.assertIn('version("pcims")', version)
+        self.assertIn('__version__ = "2.0.0b3.dev0"', version)
+        self.assertIn('version = {attr = "pcims.version.__version__"}', project)
+        self.assertNotIn("importlib.metadata", version)
         self.assertNotIn("1.0.0", version)
 
 

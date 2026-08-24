@@ -6,7 +6,6 @@ import threading
 import time
 import unittest
 from datetime import date, timedelta
-from importlib.metadata import version
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -46,6 +45,7 @@ from pcims.db.connection import Database
 from pcims.db.errors import ValidationError
 from pcims.domain import NewExpense, SaleTerms
 from pcims.services import ApplicationServices
+from pcims.version import application_version
 
 TEST_DATE = date(2026, 8, 14)
 
@@ -139,8 +139,8 @@ class QtWorkflowTests(unittest.TestCase):
         self.wait_for_window(window)
         window.deleteLater()
 
-    def test_qt_application_version_matches_installed_distribution(self):
-        self.assertEqual(self.application.applicationVersion(), version("pcims"))
+    def test_qt_application_version_matches_application_source(self):
+        self.assertEqual(self.application.applicationVersion(), application_version())
 
     def test_page_construction_performs_no_database_io(self):
         services = MagicMock(spec=ApplicationServices)
@@ -383,6 +383,30 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertTrue(window.isEnabled())
         warning.assert_called_once()
         question.assert_not_called()
+        window.deleteLater()
+
+    def test_close_skips_duplicate_backup_after_unchanged_startup_backup(self):
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        outcome = BackupResult(
+            Path(self.temporary_directory.name) / "startup-verified.db"
+        )
+        with (
+            patch.object(
+                ApplicationServices,
+                "create_backup",
+                autospec=True,
+                return_value=outcome,
+            ) as create_backup,
+            patch.object(window, "close") as close,
+        ):
+            window.create_startup_backup()
+            self.wait_until(lambda: not window.tasks.active)
+            window.closeEvent(QCloseEvent())
+            self.wait_until(lambda: close.called)
+
+        create_backup.assert_called_once()
+        self.assertTrue(window._closing_after_backup)
         window.deleteLater()
 
     def test_failed_close_backup_returns_control_when_close_is_declined(self):
@@ -821,8 +845,10 @@ class QtWorkflowTests(unittest.TestCase):
         page = window.settings_page
         loop = QEventLoop()
         original_finished = page._backup_finished
+        finished_backups = []
 
         def finished(backup):
+            finished_backups.append(backup)
             original_finished(backup)
             loop.quit()
 
@@ -839,6 +865,10 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertTrue(page.backup_button.isEnabled())
         self.assertEqual(page.backup_button.text(), "Create backup now")
         information.assert_called_once()
+        self.assertEqual(
+            information.call_args.args[2],
+            f"Backup saved to:\n{finished_backups[0].path}",
+        )
         window.deleteLater()
 
     def test_page_uses_injected_services_not_process_database(self):
