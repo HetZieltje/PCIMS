@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
         )
 
     def _startup_backup_finished(self, generation: int, backup: BackupResult) -> None:
-        self._backed_up_generation = generation
+        self._backed_up_generation = generation if backup.durable else None
         self.statusBar().showMessage("Startup backup complete", 2500)
         if backup.has_warnings:
             QMessageBox.warning(

@@ -1394,6 +1394,16 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(source.path.is_file())
         self.assertLessEqual(len(list(backup_directory.glob("pcims_*.db"))), 15)
 
+    def test_invalid_backup_retention_is_rejected_before_writing(self):
+        backup_directory = Path(self.temporary_directory.name) / "invalid-retention"
+        for keep in (0, -1, True, 1.5, "2"):
+            with (
+                self.subTest(keep=keep),
+                self.assertRaisesRegex(ValueError, "positive integer"),
+            ):
+                create_backup(backup_directory, keep=keep, database=self.database)
+        self.assertFalse(backup_directory.exists())
+
     def test_restore_retention_never_prunes_the_selected_source(self):
         self.buy("Protected source", "CPU", 10)
         source = create_backup(keep=20, database=self.database)

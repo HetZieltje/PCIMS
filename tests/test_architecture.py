@@ -265,6 +265,8 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertNotIn("actions/checkout@v", workflow)
         self.assertNotIn("actions/setup-python@v", workflow)
+        self.assertIn("actions/checkout@3d3c42e5", workflow)
+        self.assertIn("actions/setup-python@5fda3b95", workflow)
         for runner in ("windows-latest", "ubuntu-22.04", "macos-15"):
             self.assertIn(runner, package_workflow)
         for artifact in (
@@ -280,6 +282,9 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("actions/checkout@v", package_workflow)
         self.assertNotIn("actions/setup-python@v", package_workflow)
         self.assertNotIn("actions/upload-artifact@v", package_workflow)
+        self.assertIn("actions/checkout@3d3c42e5", package_workflow)
+        self.assertIn("actions/setup-python@5fda3b95", package_workflow)
+        self.assertIn("actions/upload-artifact@043fb46d", package_workflow)
 
     def test_purchase_staging_uses_immutable_domain_records(self):
         purchases = (

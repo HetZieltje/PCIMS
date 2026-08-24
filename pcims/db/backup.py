@@ -145,8 +145,8 @@ def _create_backup(
     database: Database,
     protected_paths: tuple[Path, ...] = (),
 ) -> BackupResult:
-    if keep < 1:
-        raise ValueError("At least one backup must be retained.")
+    if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
+        raise ValueError("Backup retention must be a positive integer.")
     destination = (
         Path(destination_directory or database.path.parent / "backups")
         .expanduser()

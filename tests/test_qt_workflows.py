@@ -409,6 +409,36 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertTrue(window._closing_after_backup)
         window.deleteLater()
 
+    def test_close_retries_after_non_durable_startup_backup(self):
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        startup = BackupResult(
+            Path(self.temporary_directory.name) / "startup-warning.db",
+            ("directory flush failed",),
+            durable=False,
+        )
+        closing = BackupResult(
+            Path(self.temporary_directory.name) / "closing-verified.db"
+        )
+        with (
+            patch.object(
+                ApplicationServices,
+                "create_backup",
+                autospec=True,
+                side_effect=(startup, closing),
+            ) as create_backup,
+            patch("pcims.app.main_window.QMessageBox.warning"),
+            patch.object(window, "close") as close,
+        ):
+            window.create_startup_backup()
+            self.wait_until(lambda: not window.tasks.active)
+            window.closeEvent(QCloseEvent())
+            self.wait_until(lambda: close.called)
+
+        self.assertEqual(create_backup.call_count, 2)
+        self.assertTrue(window._closing_after_backup)
+        window.deleteLater()
+
     def test_failed_close_backup_returns_control_when_close_is_declined(self):
         window = MainWindow(self.services)
         self.wait_for_window(window)
