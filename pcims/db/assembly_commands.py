@@ -48,15 +48,48 @@ def disassemble_pc(pc_id: int, *, database: Database) -> None:
             raise NotFoundError(f"PC {pc_id} does not exist.")
 
 
-def rename_pc(pc_id: int, new_name: str, *, database: Database) -> None:
+def update_pc(
+    pc_id: int,
+    new_name: str,
+    expense_ids: Iterable[int],
+    *,
+    database: Database,
+) -> None:
+    """Replace a PC name and ordered membership atomically, retaining its ID."""
     pc_id = positive_command_id(pc_id, "PC ID")
     name = normalized_command_text(new_name, "New PC name")
+    ids = unique_command_ids(expense_ids, "Expense ID")
     with database.transaction(write=True) as connection:
+        pc = connection.execute(
+            "SELECT id FROM assembled_pcs WHERE id=?", (pc_id,)
+        ).fetchone()
+        if pc is None:
+            raise NotFoundError(f"PC {pc_id} does not exist.")
         collision = find_pc_name_collision(connection, name, exclude_id=pc_id)
         if collision:
             raise ValidationError(f"A PC named '{collision['name']}' already exists.")
-        result = connection.execute(
-            "UPDATE assembled_pcs SET name=? WHERE id=?", (name, pc_id)
+        rows = select_expense_rows(connection, ids)
+        if len(rows) != len(ids):
+            raise NotFoundError("One or more selected expenses no longer exist.")
+        rows_by_id = {int(row["id"]): row for row in rows}
+        for expense_id in ids:
+            row = rows_by_id[expense_id]
+            assigned_pc_id = row["pc_id"]
+            if row["sale_id"] is not None:
+                raise ValidationError(f"'{row['name']}' has already been sold.")
+            if assigned_pc_id is not None and int(assigned_pc_id) != pc_id:
+                raise ValidationError(
+                    f"'{row['name']}' belongs to PC '{row['pc_name']}'."
+                )
+        bounded_cents_total(
+            (int(rows_by_id[expense_id]["price_cents"]) for expense_id in ids),
+            "Combined PC cost",
         )
-        if result.rowcount != 1:
-            raise NotFoundError(f"PC {pc_id} does not exist.")
+        connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
+        connection.executemany(
+            "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
+            ((pc_id, expense_id, position) for position, expense_id in enumerate(ids)),
+        )
+        connection.execute(
+            "INSERT INTO assembled_pcs (id,name) VALUES (?,?)", (pc_id, name)
+        )

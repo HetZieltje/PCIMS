@@ -58,7 +58,11 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("database: Database", reads)
         self.assertIn("def sell_pc", commands)
         self.assertIn("def assemble_pc", commands)
+        self.assertIn("def update_pc", commands)
+        self.assertIn("def update_expense", commands)
         self.assertIn("def add_expenses", commands)
+        self.assertNotIn("def rename_pc", commands)
+        self.assertNotIn("def rename_expenses", commands)
         self.assertNotIn("class ReadQueries", commands)
         self.assertIn("def expense_from_row", records)
         self.assertNotIn("CREATE TABLE", reads + commands + records)
@@ -264,9 +268,9 @@ class ArchitectureTests(unittest.TestCase):
         for runner in ("windows-latest", "ubuntu-22.04", "macos-15"):
             self.assertIn(runner, package_workflow)
         for artifact in (
-            "PCIMS-2.0.0b2-Windows-x64.zip",
-            "PCIMS-2.0.0b2-macOS-arm64.zip",
-            "PCIMS-2.0.0b2-Linux-x86_64.tar.gz",
+            "PCIMS-2.0.0b3.dev0-Windows-x64.zip",
+            "PCIMS-2.0.0b3.dev0-macOS-arm64.zip",
+            "PCIMS-2.0.0b3.dev0-Linux-x86_64.tar.gz",
         ):
             self.assertIn(artifact, package_workflow)
         self.assertIn("requirements-package.lock", package_workflow)

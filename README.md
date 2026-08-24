@@ -76,6 +76,11 @@ and upgraded to schema v14 without changing its records. Tkinter-era, modified,
 and otherwise unknown schemas remain unsupported and are rejected without being
 modified; use a compatible backup or a new database path.
 
+Unsold components can be edited in place, including while assigned to a PC.
+Editing an assembled PC atomically replaces its name and complete ordered parts
+list, and each component is tracked by its own ID so multiple parts of the same
+category remain distinct. Completed sale history stays immutable.
+
 ## Development checks
 
 ```powershell

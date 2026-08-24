@@ -3,13 +3,13 @@
 from collections.abc import Iterable
 
 from pcims.db.command_support import (
-    id_batches,
-    normalized_command_text,
+    bounded_cents_total,
+    positive_command_id,
     select_expense_rows,
     unique_command_ids,
 )
 from pcims.db.connection import Database
-from pcims.db.errors import NotFoundError, ValidationError
+from pcims.db.errors import DatabaseIntegrityError, NotFoundError, ValidationError
 from pcims.db.records import inserted_id
 from pcims.domain import NewExpense
 
@@ -59,24 +59,73 @@ def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:
         )
 
 
-def rename_expenses(
-    expense_ids: Iterable[int], new_name: str, *, database: Database
+def update_expense(
+    expense_id: int,
+    replacement: NewExpense,
+    *,
+    database: Database,
 ) -> None:
-    ids = unique_command_ids(expense_ids, "Expense ID")
-    name = normalized_command_text(new_name, "New item name")
+    """Replace every editable field while preserving the expense identity."""
+    expense_id = positive_command_id(expense_id, "Expense ID")
     with database.transaction(write=True) as connection:
-        rows = select_expense_rows(connection, ids)
-        if len(rows) != len(ids):
-            raise NotFoundError("One or more selected expenses no longer exist.")
-        sold = next((row for row in rows if row["sale_id"] is not None), None)
-        if sold is not None:
+        rows = select_expense_rows(connection, [expense_id])
+        if not rows:
+            raise NotFoundError(f"Expense {expense_id} does not exist.")
+        row = rows[0]
+        if row["sale_id"] is not None:
             raise ValidationError(
-                f"Expense {sold['id']} has sale history and cannot be renamed."
+                f"Expense {expense_id} has sale history and cannot be edited."
             )
-        for batch in id_batches(ids):
-            placeholders = ",".join("?" for _ in batch)
+
+        pc_id = int(row["pc_id"]) if row["pc_id"] is not None else None
+        pc_name = str(row["pc_name"]) if row["pc_name"] is not None else None
+        pc_expense_ids: tuple[int, ...] = ()
+        if pc_id is not None:
+            if pc_name is None:
+                raise DatabaseIntegrityError(
+                    f"Expense {expense_id} has an invalid PC relationship."
+                )
+            membership = connection.execute(
+                """SELECT pp.expense_id,e.price_cents
+                     FROM pc_parts pp JOIN expenses e ON e.id=pp.expense_id
+                    WHERE pp.pc_id=? ORDER BY pp.position""",
+                (pc_id,),
+            ).fetchall()
+            pc_expense_ids = tuple(int(part["expense_id"]) for part in membership)
+            bounded_cents_total(
+                (
+                    replacement.price_cents
+                    if int(part["expense_id"]) == expense_id
+                    else int(part["price_cents"])
+                    for part in membership
+                ),
+                "Combined PC cost",
+            )
+            connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
+
+        result = connection.execute(
+            """UPDATE expenses
+                  SET name=?,item_type=?,price_cents=?,purchase_date=?
+                WHERE id=?""",
+            (
+                replacement.name,
+                replacement.item_type,
+                replacement.price_cents,
+                replacement.purchase_date.isoformat(),
+                expense_id,
+            ),
+        )
+        if result.rowcount != 1:
+            raise NotFoundError(f"Expense {expense_id} does not exist.")
+
+        if pc_id is not None:
+            connection.executemany(
+                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
+                (
+                    (pc_id, part_id, position)
+                    for position, part_id in enumerate(pc_expense_ids)
+                ),
+            )
             connection.execute(
-                # IDs and name are bound; only the validated batch width varies.
-                f"UPDATE expenses SET name=? WHERE id IN ({placeholders})",  # nosec B608
-                [name, *batch],
+                "INSERT INTO assembled_pcs (id,name) VALUES (?,?)", (pc_id, pc_name)
             )

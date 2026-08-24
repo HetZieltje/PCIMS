@@ -60,6 +60,18 @@ class AssemblyTreeModel(QAbstractItemModel):
         }
         self.endResetModel()
 
+    def set_checked_ids(self, expense_ids: tuple[int, ...]) -> None:
+        """Replace the checked identities without collapsing component groups."""
+        available_ids = {
+            expense.id for group in self._groups for expense in group.expenses
+        }
+        requested_ids = set(expense_ids)
+        if not requested_ids <= available_ids:
+            raise ValueError("Checked expenses must exist in the assembly model.")
+        self.beginResetModel()
+        self._checked_ids = requested_ids
+        self.endResetModel()
+
     def index(
         self,
         row: int,

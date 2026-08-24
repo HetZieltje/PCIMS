@@ -5,20 +5,29 @@ import tempfile
 import threading
 import time
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from importlib.metadata import version
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QLockFile, QSettings, Qt, QThreadPool, QTimer
+from PySide6.QtCore import (
+    QDate,
+    QEventLoop,
+    QLockFile,
+    QSettings,
+    Qt,
+    QThreadPool,
+    QTimer,
+)
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox, QTableView, QWidget
 from shiboken6 import delete as delete_qt_object
 
 from pcims.app.application import acquire_instance_lock, create_application, main
 from pcims.app.assembly_model import AssemblyTreeModel
+from pcims.app.dialogs import ExpenseEditDialog, PCEditDialog
 from pcims.app.errors import install_exception_hook, log_exception
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
@@ -665,6 +674,56 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(model.checked_ids, (cpu_id,))
         self.assertNotIn(ram_id, model.checked_ids)
 
+    def test_edit_dialogs_expose_all_fields_and_same_type_pc_membership(self):
+        first_ram = self.purchase("RAM A", "RAM", 40)
+        second_ram = self.purchase("RAM B", "RAM", 45)
+        added_ram = self.purchase("RAM C", "RAM", 50)
+        pc_id = self.services.assemble_pc("Original PC", [first_ram, second_ram])
+        snapshot = self.services.inventory_snapshot()
+        pc = next(pc for pc in snapshot.pcs if pc.id == pc_id)
+
+        component_dialog = ExpenseEditDialog(pc.parts[0])
+        component_dialog.name.setText("Edited RAM")
+        component_dialog.item_type.setCurrentText("GPU")
+        component_dialog.amount.setText("123.45")
+        edited_date = TEST_DATE - timedelta(days=2)
+        component_dialog.purchase_date.setDate(
+            QDate(edited_date.year, edited_date.month, edited_date.day)
+        )
+        component_dialog._validate()
+        self.assertEqual(
+            component_dialog._replacement,
+            NewExpense.create(
+                "Edited RAM", "GPU", "123.45", TEST_DATE - timedelta(days=2)
+            ),
+        )
+
+        candidates = tuple(
+            part
+            for part in snapshot.inventory
+            if part.is_available or part.pc_id == pc_id
+        )
+        pc_dialog = PCEditDialog(pc, candidates)
+        self.assertEqual(pc_dialog.tree_model.checked_ids, (first_ram, second_ram))
+        self.assertEqual(pc_dialog.tree_model.rowCount(), 1)
+        ram_group = pc_dialog.tree_model.index(0, 0)
+        self.assertEqual(pc_dialog.tree_model.rowCount(ram_group), 3)
+        third_ram = pc_dialog.tree_model.index(2, 0, ram_group)
+        self.assertEqual(third_ram.data(Qt.ItemDataRole.UserRole), added_ram)
+        pc_dialog.tree_model.setData(
+            third_ram,
+            Qt.CheckState.Checked,
+            Qt.ItemDataRole.CheckStateRole,
+        )
+        pc_dialog.name.setText("Three RAM PC")
+        pc_dialog._validate()
+        self.assertEqual(
+            pc_dialog._result,
+            ("Three RAM PC", (first_ram, second_ram, added_ram)),
+        )
+        component_dialog.deleteLater()
+        pc_dialog.deleteLater()
+
     def test_database_lock_allows_only_one_application_instance(self):
         database_path = Path(self.temporary_directory.name) / "locked.db"
         first = acquire_instance_lock(database_path)
@@ -1235,7 +1294,7 @@ class QtWorkflowTests(unittest.TestCase):
         inventory.deleteLater()
         sales.deleteLater()
 
-    def test_inventory_rename_delete_and_disassemble_actions(self):
+    def test_inventory_full_edit_delete_and_disassemble_actions(self):
         cpu_id = self.purchase("CPU", "CPU", 100)
         spare_id = self.purchase("Spare cable", "Extra", 5)
 
@@ -1243,12 +1302,18 @@ class QtWorkflowTests(unittest.TestCase):
         inventory.refresh()
         inventory.parts_table.selectRow(0)
         with patch(
-            "pcims.app.pages.inventory.QInputDialog.getText",
-            return_value=("Renamed CPU", True),
+            "pcims.app.pages.inventory.ExpenseEditDialog.get_expense",
+            return_value=NewExpense.create(
+                "Edited GPU", "GPU", 125, TEST_DATE - timedelta(days=1)
+            ),
         ):
-            inventory.rename_selected_parts()
+            inventory.edit_selected_part()
         self.wait_for_page(inventory)
-        self.assertEqual(self.services.list_expenses()[0].name, "Renamed CPU")
+        edited = self.services.list_expenses()[0]
+        self.assertEqual(
+            (edited.name, edited.item_type, edited.price_cents, edited.purchase_date),
+            ("Edited GPU", "GPU", 12_500, TEST_DATE - timedelta(days=1)),
+        )
 
         inventory.refresh()
         spare_row = next(
@@ -1269,15 +1334,22 @@ class QtWorkflowTests(unittest.TestCase):
         assemble.assemble()
         self.wait_for_page(assemble)
 
+        first_ram = self.purchase("RAM A", "RAM", 40)
+        second_ram = self.purchase("RAM B", "RAM", 45)
         inventory.refresh()
         inventory.pc_table.selectRow(0)
         with patch(
-            "pcims.app.pages.inventory.QInputDialog.getText",
-            return_value=("Renamed PC", True),
+            "pcims.app.pages.inventory.PCEditDialog.get_pc",
+            return_value=("Edited PC", (cpu_id, first_ram, second_ram)),
         ):
-            inventory.rename_selected_pc()
+            inventory.edit_selected_pc()
         self.wait_for_page(inventory)
-        self.assertEqual(self.services.list_pcs()[0].name, "Renamed PC")
+        pc = self.services.list_pcs()[0]
+        self.assertEqual(pc.name, "Edited PC")
+        self.assertEqual(
+            tuple(part.id for part in pc.parts), (cpu_id, first_ram, second_ram)
+        )
+        self.assertEqual([part.item_type for part in pc.parts], ["GPU", "RAM", "RAM"])
 
         inventory.refresh()
         inventory.pc_table.selectRow(0)
@@ -1285,7 +1357,9 @@ class QtWorkflowTests(unittest.TestCase):
             inventory.disassemble_selected_pc()
         self.wait_for_page(inventory)
         self.assertEqual(self.services.list_pcs(), ())
-        self.assertTrue(self.services.list_expenses()[0].is_available)
+        self.assertTrue(
+            all(part.is_available for part in self.services.list_expenses())
+        )
         assemble.deleteLater()
         inventory.deleteLater()
 

@@ -71,17 +71,17 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts
-          Compress-Archive -Path "dist/PCIMS" -DestinationPath "artifacts/PCIMS-2.0.0b2-Windows-x64.zip"
+          Compress-Archive -Path "dist/PCIMS" -DestinationPath "artifacts/PCIMS-2.0.0b3.dev0-Windows-x64.zip"
       - name: Archive Linux application
         if: runner.os == 'Linux'
         run: |
           mkdir artifacts
-          tar -C dist -czf artifacts/PCIMS-2.0.0b2-Linux-x86_64.tar.gz PCIMS
+          tar -C dist -czf artifacts/PCIMS-2.0.0b3.dev0-Linux-x86_64.tar.gz PCIMS
       - name: Archive macOS application
         if: runner.os == 'macOS'
         run: |
           mkdir artifacts
-          ditto -c -k --sequesterRsrc --keepParent dist/PCIMS.app artifacts/PCIMS-2.0.0b2-macOS-arm64.zip
+          ditto -c -k --sequesterRsrc --keepParent dist/PCIMS.app artifacts/PCIMS-2.0.0b3.dev0-macOS-arm64.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact-name }}

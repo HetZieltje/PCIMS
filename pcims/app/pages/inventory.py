@@ -3,7 +3,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -16,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.common import ask_confirmation
-from pcims.app.dialogs import SaleDialog
+from pcims.app.dialogs import ExpenseEditDialog, PCEditDialog, SaleDialog
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import (
     Column,
@@ -109,7 +108,7 @@ class InventoryPage(AsyncCommandPage):
         part_buttons = QHBoxLayout()
         for text, callback in (
             ("Sell selected", self.sell_selected_parts),
-            ("Rename", self.rename_selected_parts),
+            ("Edit component", self.edit_selected_part),
             ("Delete", self.delete_selected_parts),
         ):
             button = QPushButton(text)
@@ -144,7 +143,7 @@ class InventoryPage(AsyncCommandPage):
         pc_buttons = QHBoxLayout()
         for text, callback in (
             ("Sell PC", self.sell_selected_pc),
-            ("Rename", self.rename_selected_pc),
+            ("Edit PC", self.edit_selected_pc),
             ("Disassemble", self.disassemble_selected_pc),
         ):
             button = QPushButton(text)
@@ -204,6 +203,15 @@ class InventoryPage(AsyncCommandPage):
         parts = [self._parts[item_id] for item_id in ids if item_id in self._parts]
         return parts if len(parts) == len(ids) else []
 
+    def _selected_part(self) -> Expense | None:
+        parts = self._selected_parts()
+        if len(parts) != 1:
+            QMessageBox.information(
+                self, "Select one component", "Select exactly one component to edit."
+            )
+            return None
+        return parts[0]
+
     def _selected_pc(self) -> AssembledPC | None:
         ids = selected_ids(self.pc_table)
         if len(ids) != 1:
@@ -242,23 +250,17 @@ class InventoryPage(AsyncCommandPage):
             "Unable to sell items",
         )
 
-    def rename_selected_parts(self) -> None:
-        parts = self._selected_parts()
-        if not parts:
-            QMessageBox.information(
-                self, "Nothing selected", "Select one or more items to rename."
-            )
+    def edit_selected_part(self) -> None:
+        part = self._selected_part()
+        if part is None:
             return
-        initial = parts[0].name if len({part.name for part in parts}) == 1 else ""
-        name, accepted = QInputDialog.getText(
-            self, "Rename items", "New name", text=initial
-        )
-        if not accepted:
+        replacement = ExpenseEditDialog.get_expense(part, self)
+        if replacement is None:
             return
         self.run_command(
-            lambda: self.services.rename_expenses([part.id for part in parts], name),
+            lambda: self.services.update_expense(part.id, replacement),
             self.data_changed.emit,
-            "Unable to rename items",
+            "Unable to edit component",
         )
 
     def delete_selected_parts(self) -> None:
@@ -293,19 +295,21 @@ class InventoryPage(AsyncCommandPage):
             "Unable to sell PC",
         )
 
-    def rename_selected_pc(self) -> None:
+    def edit_selected_pc(self) -> None:
         pc = self._selected_pc()
         if pc is None:
             return
-        name, accepted = QInputDialog.getText(
-            self, "Rename PC", "New name", text=pc.name
+        candidates = tuple(
+            part for part in self._all_parts if part.is_available or part.pc_id == pc.id
         )
-        if not accepted:
+        values = PCEditDialog.get_pc(pc, candidates, self)
+        if values is None:
             return
+        name, expense_ids = values
         self.run_command(
-            lambda: self.services.rename_pc(pc.id, name),
+            lambda: self.services.update_pc(pc.id, name, expense_ids),
             self.data_changed.emit,
-            "Unable to rename PC",
+            "Unable to edit PC",
         )
 
     def disassemble_selected_pc(self) -> None:

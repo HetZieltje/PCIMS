@@ -17,14 +17,14 @@ from pcims.contracts import (
 from pcims.db.assembly_commands import (
     assemble_pc,
     disassemble_pc,
-    rename_pc,
+    update_pc,
 )
 from pcims.db.backup import create_backup, restore_backup
 from pcims.db.connection import Database, default_database
 from pcims.db.expense_commands import (
     add_expenses,
     delete_expenses,
-    rename_expenses,
+    update_expense,
 )
 from pcims.db.reads import ReadQueries
 from pcims.db.sale_commands import (
@@ -132,8 +132,8 @@ class ApplicationServices:
     def delete_expenses(self, expense_ids: Iterable[int]) -> None:
         delete_expenses(expense_ids, database=self.database)
 
-    def rename_expenses(self, expense_ids: Iterable[int], new_name: str) -> None:
-        rename_expenses(expense_ids, new_name, database=self.database)
+    def update_expense(self, expense_id: int, replacement: NewExpense) -> None:
+        update_expense(expense_id, replacement, database=self.database)
 
     def assemble_pc(self, name: str, expense_ids: Iterable[int]) -> int:
         return assemble_pc(name, expense_ids, database=self.database)
@@ -145,8 +145,8 @@ class ApplicationServices:
     def disassemble_pc(self, pc_id: int) -> None:
         disassemble_pc(pc_id, database=self.database)
 
-    def rename_pc(self, pc_id: int, new_name: str) -> None:
-        rename_pc(pc_id, new_name, database=self.database)
+    def update_pc(self, pc_id: int, name: str, expense_ids: Iterable[int]) -> None:
+        update_pc(pc_id, name, expense_ids, database=self.database)
 
     def sell_items(
         self,

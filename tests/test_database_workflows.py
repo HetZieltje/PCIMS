@@ -994,7 +994,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.services.sell_items([item_id], SaleTerms.create(50))
 
         with self.assertRaisesRegex(ValidationError, "sale history"):
-            self.services.rename_expenses([item_id], "Rewritten CPU")
+            self.services.update_expense(
+                item_id,
+                NewExpense.create("Rewritten CPU", "GPU", 40, TEST_DATE),
+            )
 
         sale = self.services.list_sales()[0]
         self.assertEqual(sale.items[0].name, "Historical CPU")
@@ -1190,7 +1193,15 @@ class DatabaseWorkflowTests(unittest.TestCase):
         ):
             database.execute("DELETE FROM sale_items WHERE sale_id=?", (sale_id,))
 
-        self.services.rename_expenses([item_id], "Renamed linked item")
+        self.services.update_expense(
+            item_id,
+            NewExpense.create(
+                "Renamed linked item",
+                "GPU",
+                12,
+                TEST_DATE - timedelta(days=1),
+            ),
+        )
         self.services.disassemble_pc(pc_id)
         self.services.undo_sale(sale_id)
         self.assertEqual(self.services.list_pcs(), ())
@@ -1198,6 +1209,78 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertIn(
             "Renamed linked item",
             {item.name for item in self.services.list_expenses()},
+        )
+
+    def test_component_edit_replaces_every_field_inside_an_assembled_pc(self):
+        first_ram = self.buy("RAM A", "RAM", 40)
+        second_ram = self.buy("RAM B", "RAM", 45)
+        pc_id = self.services.assemble_pc("Dual RAM PC", [first_ram, second_ram])
+        replacement_date = TEST_DATE - timedelta(days=10)
+
+        self.services.update_expense(
+            first_ram,
+            NewExpense.create("Primary GPU", "GPU", 125, replacement_date),
+        )
+
+        pc = self.services.list_pcs()[0]
+        edited = next(part for part in pc.parts if part.id == first_ram)
+        self.assertEqual(pc.id, pc_id)
+        self.assertEqual(pc.name, "Dual RAM PC")
+        self.assertEqual(tuple(part.id for part in pc.parts), (first_ram, second_ram))
+        self.assertEqual(edited.name, "Primary GPU")
+        self.assertEqual(edited.item_type, "GPU")
+        self.assertEqual(edited.price_cents, 12_500)
+        self.assertEqual(edited.purchase_date, replacement_date)
+        self.assertEqual(pc.cost_cents, 17_000)
+
+    def test_pc_edit_replaces_name_and_membership_with_duplicate_types(self):
+        first_ram = self.buy("RAM A", "RAM", 40)
+        removed_ram = self.buy("RAM B", "RAM", 45)
+        added_ram = self.buy("RAM C", "RAM", 50)
+        other_part = self.buy("Other PC CPU", "CPU", 80)
+        pc_id = self.services.assemble_pc("Original PC", [first_ram, removed_ram])
+        other_pc_id = self.services.assemble_pc("Other PC", [other_part])
+
+        self.services.update_pc(
+            pc_id,
+            "Three-stick PC",
+            [first_ram, added_ram, removed_ram],
+        )
+
+        pc = next(pc for pc in self.services.list_pcs() if pc.id == pc_id)
+        self.assertEqual(pc.name, "Three-stick PC")
+        self.assertEqual(
+            tuple(part.id for part in pc.parts),
+            (first_ram, added_ram, removed_ram),
+        )
+        self.assertEqual([part.item_type for part in pc.parts], ["RAM", "RAM", "RAM"])
+        with self.database.transaction() as connection:
+            memberships = connection.execute(
+                """SELECT expense_id,position FROM pc_parts
+                    WHERE pc_id=? ORDER BY position""",
+                (pc_id,),
+            ).fetchall()
+        self.assertEqual(
+            [(row["expense_id"], row["position"]) for row in memberships],
+            [(first_ram, 0), (added_ram, 1), (removed_ram, 2)],
+        )
+
+        with self.assertRaisesRegex(ValidationError, "Other PC"):
+            self.services.update_pc(pc_id, "Invalid", [first_ram, other_part])
+        self.assertEqual(
+            tuple(
+                part.id
+                for part in next(
+                    pc for pc in self.services.list_pcs() if pc.id == pc_id
+                ).parts
+            ),
+            (first_ram, added_ram, removed_ram),
+        )
+        self.assertEqual(
+            next(pc for pc in self.services.list_pcs() if pc.id == other_pc_id)
+            .parts[0]
+            .id,
+            other_part,
         )
 
     def test_pc_names_and_undo_collisions_are_case_insensitive(self):
@@ -1239,12 +1322,12 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.services.list_sales(), ())
         self.assertEqual({item.id for item in self.services.list_inventory()}, set(ids))
 
-    def test_delete_and_rename_groups_are_atomic(self):
+    def test_component_edit_and_group_delete_are_atomic(self):
         ids = [self.buy("Cable", "Extra", 5), self.buy("Cable", "Extra", 6)]
-        self.services.rename_expenses(ids, "Power Cable")
-        self.assertEqual(
-            {item.name for item in self.services.list_expenses()}, {"Power Cable"}
+        self.services.update_expense(
+            ids[0], NewExpense.create("Power Cable", "Extra", 7, TEST_DATE)
         )
+        self.assertEqual(self.services.list_expenses()[0].name, "Power Cable")
 
         self.services.assemble_pc("PC 1", [ids[1]])
         with self.assertRaises(ValidationError):
@@ -1264,7 +1347,6 @@ class DatabaseWorkflowTests(unittest.TestCase):
             patch.object(Database, "connect", new=limited_connect),
             patch("pcims.db.command_support.SQLITE_ID_BATCH_SIZE", 2),
         ):
-            self.services.rename_expenses(ids, "Batched")
             pc_id = self.services.assemble_pc("Batched PC", ids)
             self.services.disassemble_pc(pc_id)
             sale_id = self.services.sell_items(ids, SaleTerms.create(12))
@@ -1273,10 +1355,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(self.services.list_expenses(), ())
 
-    def test_renaming_pc_does_not_rewrite_parts(self):
+    def test_updating_pc_name_does_not_rewrite_parts(self):
         item_id = self.buy("CPU", "CPU", 100)
         pc_id = self.services.assemble_pc("PC 1", [item_id])
-        self.services.rename_pc(pc_id, "Workstation")
+        self.services.update_pc(pc_id, "Workstation", [item_id])
 
         pc = self.services.list_pcs()[0]
         self.assertEqual(pc.name, "Workstation")
