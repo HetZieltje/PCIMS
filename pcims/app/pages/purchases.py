@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.common import show_error
+from pcims.app.dialogs import ProofEditDialog
 from pcims.app.formatting import (
     allocate_cents,
     format_cents,
@@ -37,12 +38,14 @@ from pcims.app.table_model import (
 from pcims.app.tasks import TaskManager
 from pcims.contracts import PurchaseOperations, PurchasesSnapshot
 from pcims.domain import ITEM_TYPES, ItemType, NewExpense
+from pcims.proofs import NewProof
 
 
 @dataclass(frozen=True, slots=True)
 class StagedPurchase:
     staged_id: int
     expense: NewExpense
+    proofs: tuple[NewProof, ...] = ()
 
 
 class PurchasesPage(AsyncCommandPage):
@@ -59,6 +62,7 @@ class PurchasesPage(AsyncCommandPage):
         self.services = services
         self._staged: list[StagedPurchase] = []
         self._next_staged_id = 1
+        self._pending_proofs: tuple[NewProof, ...] = ()
 
         self.name = QLineEdit()
         self.type = QComboBox()
@@ -73,6 +77,14 @@ class PurchasesPage(AsyncCommandPage):
         self.purchase_date = QDateEdit(QDate.currentDate())
         self.purchase_date.setCalendarPopup(True)
         self.purchase_date.setDisplayFormat("yyyy-MM-dd")
+        self.proof_label = QLabel("No proofs selected")
+        proof_button = QPushButton("Choose proofs…")
+        proof_button.clicked.connect(self.choose_proofs)
+        proof_row = QHBoxLayout()
+        proof_row.addWidget(proof_button)
+        proof_row.addWidget(self.proof_label, 1)
+        proof_widget = QWidget()
+        proof_widget.setLayout(proof_row)
 
         self._completion_model = QStringListModel(self)
         completer = QCompleter(self._completion_model, self)
@@ -87,6 +99,7 @@ class PurchasesPage(AsyncCommandPage):
         form.addRow("Price", self.price)
         form.addRow("", self.total_for_quantity)
         form.addRow("Purchase date", self.purchase_date)
+        form.addRow("Proofs of purchase", proof_widget)
         add_button = QPushButton("Add to purchase")
         add_button.clicked.connect(self.add_line)
         form.addRow("", add_button)
@@ -119,6 +132,11 @@ class PurchasesPage(AsyncCommandPage):
                     "Purchase date",
                     lambda item: item.expense.purchase_date.isoformat(),
                     lambda item: item.expense.purchase_date.toordinal(),
+                ),
+                Column(
+                    "Proofs",
+                    lambda item: str(len(item.proofs)),
+                    lambda item: len(item.proofs),
                 ),
             ),
             lambda item: item.staged_id,
@@ -157,12 +175,21 @@ class PurchasesPage(AsyncCommandPage):
 
     @property
     def has_staged_items(self) -> bool:
-        return bool(self._staged)
+        return bool(self._staged or self._pending_proofs)
 
     def discard_staged(self) -> None:
         """Discard purchase lines that have not been written to the database."""
         self._staged.clear()
+        self._pending_proofs = ()
+        self._render_pending_proofs()
         self._render_staged()
+
+    def choose_proofs(self) -> None:
+        proofs = ProofEditDialog.get_new_proofs(self._pending_proofs, self)
+        if proofs is None:
+            return
+        self._pending_proofs = proofs
+        self._render_pending_proofs()
 
     def add_line(self) -> None:
         name = self.name.text().strip()
@@ -191,12 +218,15 @@ class PurchasesPage(AsyncCommandPage):
                         price_cents,
                         purchase_date,
                     ),
+                    self._pending_proofs,
                 )
             )
             self._next_staged_id += 1
         self.name.clear()
         self.price.clear()
         self.quantity.setValue(1)
+        self._pending_proofs = ()
+        self._render_pending_proofs()
         self.name.setFocus()
         self._render_staged()
 
@@ -212,9 +242,15 @@ class PurchasesPage(AsyncCommandPage):
             )
             return
         items = [item.expense for item in self._staged]
+        proofs = [item.proofs for item in self._staged]
         count = len(items)
+        operation = (
+            (lambda: self.services.add_expenses(items, proofs))
+            if any(proofs)
+            else (lambda: self.services.add_expenses(items))
+        )
         self.run_command(
-            lambda: self.services.add_expenses(items),
+            operation,
             lambda: self._purchase_recorded(count),
             "Unable to record purchase",
         )
@@ -232,3 +268,9 @@ class PurchasesPage(AsyncCommandPage):
             f"{format_cents(sum(item.expense.price_cents for item in self._staged))}"
         )
         self.commit_button.setEnabled(bool(self._staged))
+
+    def _render_pending_proofs(self) -> None:
+        count = len(self._pending_proofs)
+        self.proof_label.setText(
+            "No proofs selected" if count == 0 else f"{count} proof(s) selected"
+        )

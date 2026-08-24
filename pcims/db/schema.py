@@ -1,5 +1,6 @@
 """Exact schema definition, creation, and semantic integrity checks."""
 
+import hashlib
 import os
 import sqlite3
 import uuid
@@ -16,9 +17,10 @@ from pcims.db.connection import (
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES, MAX_NAME_LENGTH
 from pcims.money import MAX_MONEY_CENTS
+from pcims.proofs import MAX_PROOF_BYTES, MAX_PROOFS_PER_ITEM, NewProof
 
-SCHEMA_VERSION = 14
-UPGRADABLE_SCHEMA_VERSION = 13
+SCHEMA_VERSION = 15
+UPGRADABLE_SCHEMA_VERSION = 14
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND instr(name,char(0))=0
@@ -213,10 +215,79 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         END""",
 }
 
-_SCHEMA_13_DEFINITIONS = {
-    key: definition.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "INTEGER PRIMARY KEY")
-    for key, definition in SCHEMA_DEFINITIONS.items()
-}
+UPGRADABLE_SCHEMA_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+_VALID_PROOF_NAME_SQL = _VALID_NAME_SQL.replace("name", "file_name")
+SCHEMA_DEFINITIONS.update(
+    {
+        ("table", "proof_files"): f"""CREATE TABLE proof_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_name TEXT NOT NULL CHECK ({_VALID_PROOF_NAME_SQL}),
+            media_type TEXT NOT NULL CHECK (media_type IN
+                ('application/pdf','image/png','image/jpeg','image/webp')),
+            content BLOB NOT NULL CHECK (
+                length(content) BETWEEN 1 AND {MAX_PROOF_BYTES}),
+            sha256 TEXT NOT NULL CHECK (
+                length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+            UNIQUE (sha256,file_name)
+        ) STRICT""",
+        ("table", "expense_proofs"): """CREATE TABLE expense_proofs (
+            expense_id INTEGER NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+            proof_id INTEGER NOT NULL REFERENCES proof_files(id) ON DELETE RESTRICT,
+            position INTEGER NOT NULL CHECK (position >= 0),
+            PRIMARY KEY (expense_id, proof_id),
+            UNIQUE (expense_id, position)
+        ) STRICT""",
+        (
+            "index",
+            "expense_proofs_by_file",
+        ): """CREATE INDEX expense_proofs_by_file ON expense_proofs(proof_id)""",
+        (
+            "trigger",
+            "proof_link_delete_removes_orphan",
+        ): """CREATE TRIGGER proof_link_delete_removes_orphan
+            AFTER DELETE ON expense_proofs
+            WHEN NOT EXISTS (
+                SELECT 1 FROM expense_proofs WHERE proof_id=OLD.proof_id)
+            BEGIN
+                DELETE FROM proof_files WHERE id=OLD.proof_id;
+            END""",
+        (
+            "trigger",
+            "linked_proof_file_is_immutable",
+        ): """CREATE TRIGGER linked_proof_file_is_immutable
+            BEFORE UPDATE ON proof_files
+            WHEN EXISTS (
+                SELECT 1 FROM expense_proofs WHERE proof_id=OLD.id)
+            BEGIN
+                SELECT RAISE(ABORT, 'linked proof file is immutable');
+            END""",
+        # The only interpolated value is the source-controlled integer limit.
+        (
+            "trigger",
+            "expense_proof_count_limit",
+        ): f"""CREATE TRIGGER expense_proof_count_limit
+            BEFORE INSERT ON expense_proofs
+            WHEN (SELECT COUNT(*) FROM expense_proofs
+                   WHERE expense_id=NEW.expense_id) >= {MAX_PROOFS_PER_ITEM}
+            BEGIN
+                SELECT RAISE(ABORT, 'too many proofs for expense');
+            END""",  # nosec B608
+        (
+            "trigger",
+            "expense_proof_name_unique",
+        ): """CREATE TRIGGER expense_proof_name_unique
+            BEFORE INSERT ON expense_proofs
+            WHEN EXISTS (
+                SELECT 1 FROM expense_proofs ep
+                JOIN proof_files existing ON existing.id=ep.proof_id
+                JOIN proof_files added ON added.id=NEW.proof_id
+                WHERE ep.expense_id=NEW.expense_id
+                  AND existing.file_name=added.file_name COLLATE PCIMS_NOCASE)
+            BEGIN
+                SELECT RAISE(ABORT, 'duplicate proof file name for expense');
+            END""",
+    }
+)
 
 for _money_trigger in (
     "pc_part_cost_limit",
@@ -361,12 +432,50 @@ def _validate_relationships(database: sqlite3.Connection) -> None:
             f"Sale {invalid_sale[0]} has inconsistent items, cost, or dates."
         )
 
+    has_proof_storage = database.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='proof_files'"
+    ).fetchone()
+    if has_proof_storage:
+        orphaned_proof = database.execute(
+            """SELECT pf.id FROM proof_files pf
+               LEFT JOIN expense_proofs ep ON ep.proof_id=pf.id
+               WHERE ep.proof_id IS NULL LIMIT 1"""
+        ).fetchone()
+        if orphaned_proof:
+            raise DatabaseIntegrityError(
+                f"Proof file {orphaned_proof[0]} is not attached to an expense."
+            )
+
 
 def validate_current_data(database: sqlite3.Connection) -> None:
     """Reject structurally valid databases with invalid business records."""
     _validate_dates(database)
     _validate_money(database)
     _validate_relationships(database)
+
+
+def validate_proof_files(database: sqlite3.Connection) -> None:
+    """Fully verify proof metadata, signatures, and stored content hashes."""
+    for (
+        proof_id,
+        file_name,
+        media_type,
+        stored_content,
+        stored_hash,
+    ) in database.execute(
+        "SELECT id,file_name,media_type,content,sha256 FROM proof_files"
+    ):
+        content = bytes(stored_content)
+        try:
+            NewProof(file_name, media_type, content)
+        except (TypeError, ValueError) as error:
+            raise DatabaseIntegrityError(
+                f"Proof file {proof_id} has invalid metadata or content."
+            ) from error
+        if hashlib.sha256(content).hexdigest() != stored_hash:
+            raise DatabaseIntegrityError(
+                f"Proof file {proof_id} failed its content hash check."
+            )
 
 
 def _validate_storage(database: sqlite3.Connection, *, thorough: bool = True) -> None:
@@ -393,7 +502,7 @@ def _inspect_database(database: Database) -> Literal["empty", "current", "upgrad
             _validate_schema_definition(
                 connection,
                 UPGRADABLE_SCHEMA_VERSION,
-                _SCHEMA_13_DEFINITIONS,
+                UPGRADABLE_SCHEMA_DEFINITIONS,
             )
             state: Literal["current", "upgrade"] = "upgrade"
         else:
@@ -415,11 +524,11 @@ def _sync_upgrade_directory(path: Path) -> None:
 
 
 def _create_pre_upgrade_backup(database: Database) -> Path:
-    """Publish a verified v13 copy before the one supported forward upgrade."""
+    """Publish a verified v14 copy before the one supported forward upgrade."""
     destination = ensure_private_directory(database.path.parent / "backups")
     stamp = datetime.now(UTC).astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
     final_path = destination / (
-        f"{database.path.stem}_pre_v14_{stamp}_{uuid.uuid4().hex}.db"
+        f"{database.path.stem}_pre_v15_{stamp}_{uuid.uuid4().hex}.db"
     )
     temporary_path = final_path.with_suffix(".tmp")
     primary_error: BaseException | None = None
@@ -436,7 +545,7 @@ def _create_pre_upgrade_backup(database: Database) -> Path:
             _validate_schema_definition(
                 copied,
                 UPGRADABLE_SCHEMA_VERSION,
-                _SCHEMA_13_DEFINITIONS,
+                UPGRADABLE_SCHEMA_DEFINITIONS,
             )
             _validate_storage(copied)
             validate_current_data(copied)
@@ -461,47 +570,10 @@ def _create_pre_upgrade_backup(database: Database) -> Path:
     return final_path
 
 
-def _migrate_schema_13_to_14(database: sqlite3.Connection) -> None:
-    """Rebuild the three identity tables without changing any record IDs."""
-    for kind, name in _SCHEMA_13_DEFINITIONS:
-        if kind == "trigger":
-            database.execute(f'DROP TRIGGER "{name}"')
-        elif kind == "index":
-            database.execute(f'DROP INDEX "{name}"')
-
-    for table in ("pc_parts", "sale_items", "expenses", "assembled_pcs", "sales"):
-        database.execute(f'ALTER TABLE "{table}" RENAME TO "{table}_v13"')
-
-    for (kind, _name), statement in SCHEMA_DEFINITIONS.items():
-        if kind == "table":
-            database.execute(statement)
-
-    database.execute(
-        """INSERT INTO expenses (id,name,item_type,price_cents,purchase_date)
-           SELECT id,name,item_type,price_cents,purchase_date FROM expenses_v13"""
-    )
-    database.execute(
-        """INSERT INTO pc_parts (pc_id,expense_id,position)
-           SELECT pc_id,expense_id,position FROM pc_parts_v13"""
-    )
-    database.execute(
-        """INSERT INTO sale_items (sale_id,expense_id,position)
-           SELECT sale_id,expense_id,position FROM sale_items_v13"""
-    )
-    database.execute(
-        """INSERT INTO assembled_pcs (id,name)
-           SELECT id,name FROM assembled_pcs_v13"""
-    )
-    database.execute(
-        """INSERT INTO sales (id,name,kind,selling_price_cents,sale_date)
-           SELECT id,name,kind,selling_price_cents,sale_date FROM sales_v13"""
-    )
-
-    for table in ("pc_parts", "sale_items", "assembled_pcs", "sales", "expenses"):
-        database.execute(f'DROP TABLE "{table}_v13"')
-
-    for (kind, _name), statement in SCHEMA_DEFINITIONS.items():
-        if kind != "table":
+def _migrate_schema_14_to_15(database: sqlite3.Connection) -> None:
+    """Add proof storage without rewriting current inventory or history rows."""
+    for key, statement in SCHEMA_DEFINITIONS.items():
+        if key not in UPGRADABLE_SCHEMA_DEFINITIONS:
             database.execute(statement)
     database.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -525,11 +597,11 @@ def _initialize_database(database: Database) -> None:
             _validate_schema_definition(
                 connection,
                 UPGRADABLE_SCHEMA_VERSION,
-                _SCHEMA_13_DEFINITIONS,
+                UPGRADABLE_SCHEMA_DEFINITIONS,
             )
             _validate_storage(connection)
             validate_current_data(connection)
-            _migrate_schema_13_to_14(connection)
+            _migrate_schema_14_to_15(connection)
             validate_schema(connection)
             _validate_storage(connection)
             validate_current_data(connection)

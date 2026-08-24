@@ -23,6 +23,7 @@ from pcims.db.connection import Database, default_database
 from pcims.db.expense_commands import (
     add_expenses,
     delete_expenses,
+    replace_expense_proofs,
     update_expense,
 )
 from pcims.db.reads import ReadQueries
@@ -34,6 +35,7 @@ from pcims.db.sale_commands import (
 from pcims.db.schema import initialize_database
 from pcims.domain import ItemType, NewExpense, SaleTerms
 from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
+from pcims.proofs import NewProof
 
 MAX_HISTORY_PAGE_SIZE = 1_000
 
@@ -115,8 +117,12 @@ class ApplicationServices:
             records = queries.list_sale_item_page(sale_id, offset, page_size)
         return HistoryPage(records, offset, total, page_size)
 
-    def add_expenses(self, items: Iterable[NewExpense]) -> list[int]:
-        return add_expenses(items, database=self.database)
+    def add_expenses(
+        self,
+        items: Iterable[NewExpense],
+        proofs_by_item: Iterable[Iterable[NewProof]] | None = None,
+    ) -> list[int]:
+        return add_expenses(items, proofs_by_item, database=self.database)
 
     def list_expenses(self) -> tuple[Expense, ...]:
         with self.database.transaction() as connection:
@@ -133,6 +139,23 @@ class ApplicationServices:
 
     def update_expense(self, expense_id: int, replacement: NewExpense) -> None:
         update_expense(expense_id, replacement, database=self.database)
+
+    def replace_expense_proofs(
+        self,
+        expense_id: int,
+        retained_proof_ids: Iterable[int],
+        new_proofs: Iterable[NewProof],
+    ) -> None:
+        replace_expense_proofs(
+            expense_id,
+            retained_proof_ids,
+            new_proofs,
+            database=self.database,
+        )
+
+    def proof_file(self, expense_id: int, proof_id: int) -> NewProof:
+        with self.database.transaction() as connection:
+            return ReadQueries(connection).proof_file(expense_id, proof_id)
 
     def assemble_pc(self, name: str, expense_ids: Iterable[int]) -> int:
         return assemble_pc(name, expense_ids, database=self.database)

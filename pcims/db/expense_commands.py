@@ -1,5 +1,7 @@
 """Atomic purchase and expense write workflows."""
 
+import hashlib
+import sqlite3
 from collections.abc import Iterable
 
 from pcims.db.command_support import (
@@ -12,16 +14,83 @@ from pcims.db.connection import Database
 from pcims.db.errors import DatabaseIntegrityError, NotFoundError, ValidationError
 from pcims.db.records import inserted_id
 from pcims.domain import NewExpense
+from pcims.proofs import MAX_PROOFS_PER_ITEM, NewProof, validate_proof_collection
 
 
-def add_expenses(items: Iterable[NewExpense], *, database: Database) -> list[int]:
+def _proof_id(
+    connection: sqlite3.Connection,
+    proof: NewProof,
+    cache: dict[int, int],
+) -> int:
+    cached = cache.get(id(proof))
+    if cached is not None:
+        return cached
+    digest = hashlib.sha256(proof.content).hexdigest()
+    existing = connection.execute(
+        "SELECT id FROM proof_files WHERE sha256=? AND file_name=?",
+        (digest, proof.file_name),
+    ).fetchone()
+    if existing is not None:
+        proof_id = int(existing["id"])
+    else:
+        proof_id = inserted_id(
+            connection.execute(
+                """INSERT INTO proof_files (file_name,media_type,content,sha256)
+                   VALUES (?,?,?,?)""",
+                (proof.file_name, proof.media_type, proof.content, digest),
+            )
+        )
+    cache[id(proof)] = proof_id
+    return proof_id
+
+
+def _link_new_proofs(
+    connection: sqlite3.Connection,
+    expense_id: int,
+    proofs: tuple[NewProof, ...],
+    start_position: int = 0,
+    proof_id_cache: dict[int, int] | None = None,
+) -> None:
+    cache = {} if proof_id_cache is None else proof_id_cache
+    proof_ids = tuple(_proof_id(connection, proof, cache) for proof in proofs)
+    if len(proof_ids) != len(set(proof_ids)):
+        raise ValidationError("The same proof file cannot be attached twice.")
+    connection.executemany(
+        "INSERT INTO expense_proofs (expense_id,proof_id,position) VALUES (?,?,?)",
+        (
+            (expense_id, proof_id, start_position + position)
+            for position, proof_id in enumerate(proof_ids)
+        ),
+    )
+
+
+def add_expenses(
+    items: Iterable[NewExpense],
+    proofs_by_item: Iterable[Iterable[NewProof]] | None = None,
+    *,
+    database: Database,
+) -> list[int]:
     """Record one or more purchased items atomically."""
     expenses = tuple(items)
     if not expenses:
         raise ValidationError("At least one purchase item is required.")
+    proof_groups = (
+        tuple(() for _expense in expenses)
+        if proofs_by_item is None
+        else tuple(tuple(proofs) for proofs in proofs_by_item)
+    )
+    if len(proof_groups) != len(expenses):
+        raise ValidationError("Every purchase item must have one proof collection.")
+    try:
+        for proofs in proof_groups:
+            validate_proof_collection(proofs)
+    except (TypeError, ValueError) as error:
+        raise ValidationError(str(error)) from error
     with database.transaction(write=True) as connection:
-        return [
-            inserted_id(
+        identifiers: list[int] = []
+        proof_id_cache: dict[int, int] = {}
+        for expense, proofs in zip(expenses, proof_groups, strict=True):
+            expense_id = inserted_id(
                 connection.execute(
                     "INSERT INTO expenses "
                     "(name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
@@ -33,8 +102,79 @@ def add_expenses(items: Iterable[NewExpense], *, database: Database) -> list[int
                     ),
                 )
             )
-            for expense in expenses
+            _link_new_proofs(
+                connection,
+                expense_id,
+                proofs,
+                proof_id_cache=proof_id_cache,
+            )
+            identifiers.append(expense_id)
+        return identifiers
+
+
+def replace_expense_proofs(
+    expense_id: int,
+    retained_proof_ids: Iterable[int],
+    new_proofs: Iterable[NewProof],
+    *,
+    database: Database,
+) -> None:
+    """Replace one item's proof collection without changing purchase history."""
+    expense_id = positive_command_id(expense_id, "Expense ID")
+    retained = tuple(
+        positive_command_id(proof_id, "Proof ID") for proof_id in retained_proof_ids
+    )
+    if len(retained) != len(set(retained)):
+        raise ValidationError("Duplicate proof IDs are not allowed.")
+    additions = tuple(new_proofs)
+    try:
+        validate_proof_collection(additions)
+    except (TypeError, ValueError) as error:
+        raise ValidationError(str(error)) from error
+    if len(retained) + len(additions) > MAX_PROOFS_PER_ITEM:
+        raise ValidationError(f"An item can have at most {MAX_PROOFS_PER_ITEM} proofs.")
+
+    with database.transaction(write=True) as connection:
+        exists = connection.execute(
+            "SELECT 1 FROM expenses WHERE id=?", (expense_id,)
+        ).fetchone()
+        if exists is None:
+            raise NotFoundError(f"Expense {expense_id} does not exist.")
+        current_rows = connection.execute(
+            """SELECT ep.proof_id,ep.position,pf.file_name
+                 FROM expense_proofs ep
+                 JOIN proof_files pf ON pf.id=ep.proof_id
+                WHERE ep.expense_id=? ORDER BY ep.position""",
+            (expense_id,),
+        ).fetchall()
+        current = {int(row["proof_id"]): row for row in current_rows}
+        missing = next(
+            (proof_id for proof_id in retained if proof_id not in current), None
+        )
+        if missing is not None:
+            raise ValidationError(
+                f"Proof {missing} is not attached to expense {expense_id}."
+            )
+        names = [
+            str(current[proof_id]["file_name"]).casefold() for proof_id in retained
         ]
+        names.extend(proof.file_name.casefold() for proof in additions)
+        if len(names) != len(set(names)):
+            raise ValidationError("Proof file names must be unique for each item.")
+
+        removed = tuple(proof_id for proof_id in current if proof_id not in retained)
+        connection.executemany(
+            "DELETE FROM expense_proofs WHERE expense_id=? AND proof_id=?",
+            ((expense_id, proof_id) for proof_id in removed),
+        )
+        next_position = (
+            max(
+                (int(current[proof_id]["position"]) for proof_id in retained),
+                default=-1,
+            )
+            + 1
+        )
+        _link_new_proofs(connection, expense_id, additions, next_position)
 
 
 def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:

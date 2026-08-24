@@ -26,7 +26,7 @@ from shiboken6 import delete as delete_qt_object
 
 from pcims.app.application import acquire_instance_lock, create_application, main
 from pcims.app.assembly_model import AssemblyTreeModel
-from pcims.app.dialogs import ExpenseEditDialog, PCEditDialog
+from pcims.app.dialogs import ExpenseEditDialog, PCEditDialog, ProofEditDialog
 from pcims.app.errors import install_exception_hook, log_exception
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
@@ -44,6 +44,7 @@ from pcims.contracts import BackupResult
 from pcims.db.connection import Database
 from pcims.db.errors import ValidationError
 from pcims.domain import NewExpense, SaleTerms
+from pcims.proofs import NewProof
 from pcims.services import ApplicationServices
 from pcims.version import application_version
 
@@ -289,6 +290,29 @@ class QtWorkflowTests(unittest.TestCase):
             [item.price_cents for item in self.services.list_expenses()],
             [334, 333, 333],
         )
+        page.deleteLater()
+
+    def test_purchase_page_attaches_selected_proofs_to_every_quantity_item(self):
+        proof = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.4\nreceipt")
+        page = PurchasesPage(self.services, tasks=self.tasks)
+        page.refresh()
+        with patch.object(ProofEditDialog, "get_new_proofs", return_value=(proof,)):
+            page.choose_proofs()
+        page.name.setText("RAM kit")
+        page.type.setCurrentText("RAM")
+        page.quantity.setValue(2)
+        page.price.setText("50.00")
+        page.add_line()
+
+        self.assertEqual([item.proofs for item in page._staged], [(proof,), (proof,)])
+        self.assertEqual(page.proof_label.text(), "No proofs selected")
+        with patch("pcims.app.pages.purchases.QMessageBox.information"):
+            page.commit_purchase()
+            self.wait_for_page(page)
+
+        expenses = self.services.list_expenses()
+        self.assertEqual([len(item.proofs) for item in expenses], [1, 1])
+        self.assertEqual(expenses[0].proofs[0].id, expenses[1].proofs[0].id)
         page.deleteLater()
 
     def test_purchase_page_reports_database_failure_without_losing_staged_work(self):
@@ -1423,6 +1447,45 @@ class QtWorkflowTests(unittest.TestCase):
         )
         assemble.deleteLater()
         inventory.deleteLater()
+
+    def test_proofs_can_be_changed_from_inventory_and_sold_history(self):
+        original = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.4\nreceipt")
+        replacement = NewProof("payment.png", "image/png", b"\x89PNG\r\n\x1a\npayment")
+        expense_id = self.services.add_expenses(
+            [NewExpense.create("GPU", "GPU", 100, TEST_DATE)],
+            [(original,)],
+        )[0]
+
+        inventory = InventoryPage(self.services, tasks=self.tasks)
+        inventory.refresh()
+        inventory.parts_table.selectRow(0)
+        with patch.object(
+            ProofEditDialog,
+            "get_update",
+            return_value=((), (replacement,)),
+        ):
+            inventory.edit_selected_proofs()
+        self.wait_for_page(inventory)
+        self.assertEqual(
+            [proof.file_name for proof in self.services.list_expenses()[0].proofs],
+            ["payment.png"],
+        )
+
+        self.services.sell_items([expense_id], SaleTerms.create(125, TEST_DATE))
+        sales = SalesPage(self.services, tasks=self.tasks)
+        sales.refresh()
+        sales.expense_table.selectRow(0)
+        with patch.object(
+            ProofEditDialog,
+            "get_update",
+            return_value=((), (original,)),
+        ):
+            sales.edit_selected_expense_proofs()
+        self.wait_for_page(sales)
+        sold = self.services.list_expenses()[0]
+        self.assertEqual([proof.file_name for proof in sold.proofs], ["receipt.pdf"])
+        inventory.deleteLater()
+        sales.deleteLater()
 
     def test_pc_sale_and_undo_through_qt_pages(self):
         ids = [self.purchase("CPU", "CPU", 100), self.purchase("RAM", "RAM", 50)]

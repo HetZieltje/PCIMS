@@ -6,6 +6,7 @@ from typing import cast
 
 from pcims.domain import ItemType
 from pcims.models import Expense
+from pcims.proofs import ProofSummary
 
 EXPENSE_SELECT = """
     SELECT e.id,e.name,e.item_type,e.price_cents,e.purchase_date,
@@ -17,7 +18,9 @@ EXPENSE_SELECT = """
 """
 
 
-def expense_from_row(row: sqlite3.Row) -> Expense:
+def expense_from_row(
+    row: sqlite3.Row, proofs: tuple[ProofSummary, ...] = ()
+) -> Expense:
     return Expense(
         id=row["id"],
         name=row["name"],
@@ -27,6 +30,7 @@ def expense_from_row(row: sqlite3.Row) -> Expense:
         pc_id=row["pc_id"],
         pc_name=row["pc_name"],
         sale_id=row["sale_id"],
+        proofs=proofs,
     )
 
 

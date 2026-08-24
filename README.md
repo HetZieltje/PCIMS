@@ -66,13 +66,15 @@ and tests. Both must be absolute paths so a desktop launch cannot select a
 different database merely because its working directory changed.
 
 The application creates verified backups at startup and normal shutdown.
-Manual backup and restore controls are available under Settings.
+Manual backup and restore controls are available under Settings. Proofs of
+purchase are stored inside the database, so verified backups and restores
+include them automatically.
 
 ## Database policy
 
 The Qt rewrite uses one normalized schema with integer cents and ID-based
-relationships. An exact schema-v13 rewrite database is automatically backed up
-and upgraded to schema v14 without changing its records. Tkinter-era, modified,
+relationships. An exact schema-v14 rewrite database is automatically backed up
+and upgraded to schema v15 without changing its records. Tkinter-era, modified,
 and otherwise unknown schemas remain unsupported and are rejected without being
 modified; use a compatible backup or a new database path.
 
@@ -80,6 +82,12 @@ Unsold components can be edited in place, including while assigned to a PC.
 Editing an assembled PC atomically replaces its name and complete ordered parts
 list, and each component is tracked by its own ID so multiple parts of the same
 category remain distinct. Completed sale history stays immutable.
+
+Each individual item can have up to 20 proofs of purchase in PDF, PNG, JPEG, or
+WebP format, with a 20 MiB limit per file. Proofs can be selected while staging
+a purchase or managed later from Inventory and purchase history, including for
+sold items. When one proof is applied to multiple units in a quantity purchase,
+its file data is stored once and linked to every unit.
 
 ## Development checks
 

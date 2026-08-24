@@ -1,19 +1,27 @@
 """Reusable Qt dialogs for PCIMS workflows."""
 
+from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDateEdit,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -23,6 +31,165 @@ from pcims.app.assembly_model import AssemblyTreeModel
 from pcims.app.formatting import parse_money_cents
 from pcims.domain import ITEM_TYPES, ItemType, NewExpense, SaleTerms, normalized_text
 from pcims.models import AssembledPC, Expense
+from pcims.proofs import PROOF_FILE_FILTER, NewProof, ProofSummary
+
+
+class ProofEditDialog(QDialog):
+    """Manage persisted and newly selected proofs without loading all blobs."""
+
+    def __init__(
+        self,
+        proofs: tuple[ProofSummary, ...] = (),
+        new_proofs: tuple[NewProof, ...] = (),
+        proof_loader: Callable[[int], NewProof] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Proofs of purchase")
+        self.setModal(True)
+        self.resize(620, 420)
+        self._proof_loader = proof_loader
+        self._retained_ids: tuple[int, ...] = ()
+        self._new_proofs: tuple[NewProof, ...] = ()
+        self.list = QListWidget()
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        for summary in proofs:
+            self._append(summary)
+        for new_proof in new_proofs:
+            self._append(new_proof)
+
+        add_button = QPushButton("Add files…")
+        add_button.clicked.connect(self._add_files)
+        remove_button = QPushButton("Remove selected")
+        remove_button.clicked.connect(self._remove_selected)
+        save_button = QPushButton("Save a copy…")
+        save_button.clicked.connect(self._save_copy)
+        actions = QHBoxLayout()
+        actions.addWidget(add_button)
+        actions.addWidget(remove_button)
+        actions.addWidget(save_button)
+        actions.addStretch()
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._accept_changes)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(
+            QLabel("Attach PDF or image receipts. Each file may be up to 20 MiB.")
+        )
+        layout.addWidget(self.list)
+        layout.addLayout(actions)
+        layout.addWidget(buttons)
+
+    def _append(self, proof: ProofSummary | NewProof) -> None:
+        size = (
+            proof.size_bytes if isinstance(proof, ProofSummary) else len(proof.content)
+        )
+        item = QListWidgetItem(f"{proof.file_name}  ({size / 1024:.1f} KiB)")
+        item.setData(Qt.ItemDataRole.UserRole, proof)
+        self.list.addItem(item)
+
+    def _entries(self) -> tuple[ProofSummary | NewProof, ...]:
+        return tuple(
+            self.list.item(row).data(Qt.ItemDataRole.UserRole)
+            for row in range(self.list.count())
+        )
+
+    def _add_files(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select proofs of purchase", "", PROOF_FILE_FILTER
+        )
+        existing_names = {proof.file_name.casefold() for proof in self._entries()}
+        errors: list[str] = []
+        for path in paths:
+            try:
+                proof = NewProof.from_path(path)
+                if proof.file_name.casefold() in existing_names:
+                    raise ValueError(f"{proof.file_name} is already attached.")
+                self._append(proof)
+                existing_names.add(proof.file_name.casefold())
+            except (OSError, TypeError, ValueError) as error:
+                errors.append(str(error))
+        if errors:
+            QMessageBox.warning(self, "Some proofs were not added", "\n".join(errors))
+
+    def _remove_selected(self) -> None:
+        for item in self.list.selectedItems():
+            self.list.takeItem(self.list.row(item))
+
+    def _selected_proof(self) -> ProofSummary | NewProof | None:
+        selected = self.list.selectedItems()
+        if len(selected) != 1:
+            QMessageBox.information(
+                self, "Select one proof", "Select exactly one proof to save."
+            )
+            return None
+        return cast(
+            ProofSummary | NewProof,
+            selected[0].data(Qt.ItemDataRole.UserRole),
+        )
+
+    def _save_copy(self) -> None:
+        selected = self._selected_proof()
+        if selected is None:
+            return
+        if isinstance(selected, ProofSummary):
+            if self._proof_loader is None:
+                QMessageBox.warning(
+                    self, "Proof unavailable", "This proof cannot be loaded here."
+                )
+                return
+            try:
+                proof = self._proof_loader(selected.id)
+            except Exception as error:  # noqa: BLE001 - user-triggered file boundary
+                QMessageBox.warning(self, "Unable to load proof", str(error))
+                return
+        else:
+            proof = selected
+        destination, _ = QFileDialog.getSaveFileName(
+            self, "Save proof copy", proof.file_name, "All files (*)"
+        )
+        if not destination:
+            return
+        try:
+            Path(destination).write_bytes(proof.content)
+        except OSError as error:
+            QMessageBox.warning(self, "Unable to save proof", str(error))
+
+    def _accept_changes(self) -> None:
+        entries = self._entries()
+        self._retained_ids = tuple(
+            proof.id for proof in entries if isinstance(proof, ProofSummary)
+        )
+        self._new_proofs = tuple(
+            proof for proof in entries if isinstance(proof, NewProof)
+        )
+        self.accept()
+
+    @classmethod
+    def get_update(
+        cls,
+        proofs: tuple[ProofSummary, ...],
+        proof_loader: Callable[[int], NewProof],
+        parent: QWidget | None = None,
+    ) -> tuple[tuple[int, ...], tuple[NewProof, ...]] | None:
+        dialog = cls(proofs, proof_loader=proof_loader, parent=parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog._retained_ids, dialog._new_proofs
+
+    @classmethod
+    def get_new_proofs(
+        cls,
+        proofs: tuple[NewProof, ...] = (),
+        parent: QWidget | None = None,
+    ) -> tuple[NewProof, ...] | None:
+        dialog = cls(new_proofs=proofs, parent=parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog._new_proofs
 
 
 class ExpenseEditDialog(QDialog):

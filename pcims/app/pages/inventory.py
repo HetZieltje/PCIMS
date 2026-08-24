@@ -15,7 +15,12 @@ from PySide6.QtWidgets import (
 
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.common import ask_confirmation
-from pcims.app.dialogs import ExpenseEditDialog, PCEditDialog, SaleDialog
+from pcims.app.dialogs import (
+    ExpenseEditDialog,
+    PCEditDialog,
+    ProofEditDialog,
+    SaleDialog,
+)
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import (
     Column,
@@ -100,6 +105,11 @@ class InventoryPage(AsyncCommandPage):
                     lambda item: item.pc_name or "Available",
                     lambda item: (item.pc_name or "Available").casefold(),
                 ),
+                Column(
+                    "Proofs",
+                    lambda item: str(len(item.proofs)),
+                    lambda item: len(item.proofs),
+                ),
             ),
             lambda item: item.id,
         )
@@ -109,6 +119,7 @@ class InventoryPage(AsyncCommandPage):
         for text, callback in (
             ("Sell selected", self.sell_selected_parts),
             ("Edit component", self.edit_selected_part),
+            ("Proofs…", self.edit_selected_proofs),
             ("Delete", self.delete_selected_parts),
         ):
             button = QPushButton(text)
@@ -261,6 +272,28 @@ class InventoryPage(AsyncCommandPage):
             lambda: self.services.update_expense(part.id, replacement),
             self.data_changed.emit,
             "Unable to edit component",
+        )
+
+    def edit_selected_proofs(self) -> None:
+        part = self._selected_part()
+        if part is None:
+            return
+        update = ProofEditDialog.get_update(
+            part.proofs,
+            lambda proof_id: self.services.proof_file(part.id, proof_id),
+            self,
+        )
+        if update is None:
+            return
+        retained_ids, new_proofs = update
+        if retained_ids == tuple(proof.id for proof in part.proofs) and not new_proofs:
+            return
+        self.run_command(
+            lambda: self.services.replace_expense_proofs(
+                part.id, retained_ids, new_proofs
+            ),
+            self.data_changed.emit,
+            "Unable to update proofs",
         )
 
     def delete_selected_parts(self) -> None:

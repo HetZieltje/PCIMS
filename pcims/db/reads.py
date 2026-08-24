@@ -1,14 +1,17 @@
 """Read-only projections over the current PCIMS schema."""
 
+import hashlib
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
-from pcims.db.errors import NotFoundError
+from pcims.db.errors import DatabaseIntegrityError, NotFoundError
 from pcims.db.records import EXPENSE_SELECT, expense_from_row
 from pcims.domain import ItemType, SaleKind
 from pcims.models import AssembledPC, Expense, FinancialSummary, Sale, SaleSummary
+from pcims.proofs import NewProof, ProofSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,9 +20,49 @@ class ReadQueries:
 
     connection: sqlite3.Connection
 
+    def _proofs_by_expense(
+        self, expense_ids: tuple[int, ...]
+    ) -> dict[int, tuple[ProofSummary, ...]]:
+        grouped: dict[int, list[ProofSummary]] = {
+            expense_id: [] for expense_id in expense_ids
+        }
+        for start in range(0, len(expense_ids), 900):
+            chunk = expense_ids[start : start + 900]
+            if not chunk:
+                continue
+            placeholders = ",".join("?" for _ in chunk)
+            rows = self.connection.execute(
+                # Only the internally generated placeholder count changes SQL.
+                f"""SELECT ep.expense_id,pf.id,pf.file_name,pf.media_type,
+                           length(pf.content) AS size_bytes
+                      FROM expense_proofs ep
+                      JOIN proof_files pf ON pf.id=ep.proof_id
+                     WHERE ep.expense_id IN ({placeholders})
+                     ORDER BY ep.expense_id,ep.position""",  # nosec B608
+                chunk,
+            )
+            for row in rows:
+                grouped[int(row["expense_id"])].append(
+                    ProofSummary(
+                        id=row["id"],
+                        file_name=row["file_name"],
+                        media_type=row["media_type"],
+                        size_bytes=row["size_bytes"],
+                    )
+                )
+        return {expense_id: tuple(proofs) for expense_id, proofs in grouped.items()}
+
+    def _expenses_from_rows(self, rows: Iterable[sqlite3.Row]) -> tuple[Expense, ...]:
+        materialized: tuple[sqlite3.Row, ...] = tuple(rows)
+        proofs = self._proofs_by_expense(tuple(int(row["id"]) for row in materialized))
+        return tuple(
+            expense_from_row(row, proofs.get(int(row["id"]), ()))
+            for row in materialized
+        )
+
     def list_expenses(self) -> tuple[Expense, ...]:
         rows = self.connection.execute(EXPENSE_SELECT + " ORDER BY e.id").fetchall()
-        return tuple(expense_from_row(row) for row in rows)
+        return self._expenses_from_rows(rows)
 
     def count_expenses(self) -> int:
         return int(
@@ -31,7 +74,7 @@ class ReadQueries:
             EXPENSE_SELECT + " ORDER BY e.id DESC LIMIT ? OFFSET ?",
             (limit, offset),
         )
-        return tuple(expense_from_row(row) for row in rows)
+        return self._expenses_from_rows(rows)
 
     def list_expense_names(self) -> tuple[str, ...]:
         rows = self.connection.execute(
@@ -56,7 +99,7 @@ class ReadQueries:
             + " ORDER BY e.item_type,e.name COLLATE PCIMS_NOCASE,e.id"
         )
         rows = self.connection.execute(sql, parameters).fetchall()
-        return tuple(expense_from_row(row) for row in rows)
+        return self._expenses_from_rows(rows)
 
     def list_pcs(self) -> tuple[AssembledPC, ...]:
         pcs = self.connection.execute(
@@ -66,8 +109,9 @@ class ReadQueries:
             EXPENSE_SELECT + " WHERE p.id IS NOT NULL ORDER BY p.id,pp.position"
         ).fetchall()
         parts_by_pc: dict[int, list[Expense]] = {int(pc["id"]): [] for pc in pcs}
-        for row in rows:
-            parts_by_pc[int(row["pc_id"])].append(expense_from_row(row))
+        for expense in self._expenses_from_rows(rows):
+            if expense.pc_id is not None:
+                parts_by_pc[expense.pc_id].append(expense)
         return tuple(
             AssembledPC(pc["id"], pc["name"], tuple(parts_by_pc[pc["id"]]))
             for pc in pcs
@@ -84,8 +128,9 @@ class ReadQueries:
             EXPENSE_SELECT
             + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
         )
-        for row in rows:
-            items_by_sale[int(row["sale_id"])].append(expense_from_row(row))
+        for expense in self._expenses_from_rows(rows):
+            if expense.sale_id is not None:
+                items_by_sale[expense.sale_id].append(expense)
         return tuple(
             Sale(
                 id=sale["id"],
@@ -154,7 +199,29 @@ class ReadQueries:
             + " WHERE si.sale_id=? ORDER BY si.position LIMIT ? OFFSET ?",
             (sale_id, limit, offset),
         )
-        return tuple(expense_from_row(row) for row in rows)
+        return self._expenses_from_rows(rows)
+
+    def proof_file(self, expense_id: int, proof_id: int) -> NewProof:
+        row = self.connection.execute(
+            """SELECT pf.file_name,pf.media_type,pf.content,pf.sha256
+                 FROM expense_proofs ep
+                 JOIN proof_files pf ON pf.id=ep.proof_id
+                WHERE ep.expense_id=? AND ep.proof_id=?""",
+            (expense_id, proof_id),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(
+                f"Proof {proof_id} is not attached to expense {expense_id}."
+            )
+        content = bytes(row["content"])
+        if hashlib.sha256(content).hexdigest() != row["sha256"]:
+            raise DatabaseIntegrityError(
+                f"Proof {proof_id} failed its content hash check."
+            )
+        try:
+            return NewProof(row["file_name"], row["media_type"], content)
+        except (TypeError, ValueError) as error:
+            raise DatabaseIntegrityError(f"Proof {proof_id} is invalid.") from error
 
     def financial_summary(self) -> FinancialSummary:
         expense_cents, income_cents, cost_cents, inventory_cents = (

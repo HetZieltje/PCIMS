@@ -31,11 +31,13 @@ from pcims.db.reads import ReadQueries
 from pcims.db.schema import (
     SCHEMA_DEFINITIONS,
     SCHEMA_VERSION,
+    UPGRADABLE_SCHEMA_DEFINITIONS,
     UPGRADABLE_SCHEMA_VERSION,
     initialize_database,
 )
 from pcims.domain import NewExpense, SaleTerms
 from pcims.money import MAX_MONEY_CENTS
+from pcims.proofs import NewProof
 from pcims.services import ApplicationServices
 
 TEST_DATE = date(2026, 8, 14)
@@ -373,15 +375,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
             [NewExpense.create(name, item_type, price, purchase_date)]
         )[0]
 
-    def create_schema_13_database(self, name="schema-13.db"):
+    def create_schema_14_database(self, name="schema-14.db"):
         path = Path(self.temporary_directory.name) / name
         database = Database.at(path)
-        definitions = tuple(
-            statement.replace(
-                "INTEGER PRIMARY KEY AUTOINCREMENT", "INTEGER PRIMARY KEY"
-            )
-            for statement in SCHEMA_DEFINITIONS.values()
-        )
+        definitions = tuple(UPGRADABLE_SCHEMA_DEFINITIONS.values())
         with closing(database.connect(create=True)) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             for statement in definitions:
@@ -412,7 +409,16 @@ class DatabaseWorkflowTests(unittest.TestCase):
             ]
 
         self.assertEqual(
-            tables, {"expenses", "assembled_pcs", "pc_parts", "sales", "sale_items"}
+            tables,
+            {
+                "expenses",
+                "assembled_pcs",
+                "pc_parts",
+                "sales",
+                "sale_items",
+                "proof_files",
+                "expense_proofs",
+            },
         )
         self.assertEqual(
             expense_columns, ["id", "name", "item_type", "price_cents", "purchase_date"]
@@ -557,8 +563,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 ["id", "price"],
             )
 
-    def test_exact_schema_13_is_backed_up_and_upgraded_without_data_loss(self):
-        database = self.create_schema_13_database()
+    def test_exact_schema_14_is_backed_up_and_upgraded_without_data_loss(self):
+        database = self.create_schema_14_database()
         with database.transaction(write=True) as connection:
             connection.executemany(
                 """INSERT INTO expenses
@@ -598,7 +604,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         )[0]
         self.assertEqual(new_id, 10)
 
-        backups = list(database.path.parent.glob("backups/*_pre_v14_*.db"))
+        backups = list(database.path.parent.glob("backups/*_pre_v15_*.db"))
         self.assertEqual(len(backups), 1)
         with closing(Database.at(backups[0]).connect()) as backup:
             self.assertEqual(
@@ -609,10 +615,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 backup.execute("PRAGMA integrity_check").fetchone()[0], "ok"
             )
 
-    def test_failed_schema_13_upgrade_rolls_back_the_live_database(self):
-        database = self.create_schema_13_database("failed-upgrade.db")
+    def test_failed_schema_14_upgrade_rolls_back_the_live_database(self):
+        database = self.create_schema_14_database("failed-upgrade.db")
         broken = dict(SCHEMA_DEFINITIONS)
-        broken[("trigger", "sale_item_must_not_be_in_pc")] = (
+        broken[("trigger", "expense_proof_count_limit")] = (
             "CREATE TRIGGER broken nonsense"
         )
 
@@ -627,14 +633,14 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 connection.execute("PRAGMA user_version").fetchone()[0],
                 UPGRADABLE_SCHEMA_VERSION,
             )
-            self.assertNotIn(
+            self.assertIn(
                 "AUTOINCREMENT",
                 connection.execute(
                     "SELECT sql FROM sqlite_master WHERE name='expenses'"
                 ).fetchone()[0],
             )
         self.assertEqual(
-            len(list(database.path.parent.glob("backups/*_pre_v14_*.db"))), 1
+            len(list(database.path.parent.glob("backups/*_pre_v15_*.db"))), 1
         )
 
     def test_failed_first_run_schema_creation_rolls_back_completely(self):
@@ -753,6 +759,102 @@ class DatabaseWorkflowTests(unittest.TestCase):
             )
         self.assertEqual(self.services.list_expenses(), ())
 
+    def test_purchase_proof_is_shared_without_duplicate_blob_storage(self):
+        proof = NewProof(
+            "receipt.pdf",
+            "application/pdf",
+            b"%PDF-1.7\nPCIMS test receipt",
+        )
+        items = [
+            NewExpense.create(f"RAM {index}", "RAM", 20, TEST_DATE)
+            for index in range(3)
+        ]
+
+        identifiers = self.services.add_expenses(items, [(proof,)] * 3)
+        expenses = self.services.list_expenses()
+
+        self.assertEqual([item.id for item in expenses], identifiers)
+        self.assertTrue(all(len(item.proofs) == 1 for item in expenses))
+        self.assertEqual({item.proofs[0].id for item in expenses}, {1})
+        self.assertEqual(self.services.proof_file(identifiers[0], 1), proof)
+        with self.database.transaction() as database:
+            self.assertEqual(
+                database.execute("SELECT COUNT(*) FROM proof_files").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                database.execute("SELECT COUNT(*) FROM expense_proofs").fetchone()[0],
+                3,
+            )
+        self.services.delete_expenses(identifiers)
+        with self.database.transaction() as database:
+            self.assertEqual(
+                database.execute("SELECT COUNT(*) FROM proof_files").fetchone()[0],
+                0,
+            )
+
+    def test_proofs_can_be_replaced_after_sale_and_orphans_are_removed(self):
+        pdf = NewProof("invoice.pdf", "application/pdf", b"%PDF-1.4\ninvoice")
+        png = NewProof(
+            "payment.png",
+            "image/png",
+            b"\x89PNG\r\n\x1a\nproof bytes",
+        )
+        first, second = self.services.add_expenses(
+            [
+                NewExpense.create("CPU", "CPU", 50, TEST_DATE),
+                NewExpense.create("GPU", "GPU", 100, TEST_DATE),
+            ],
+            [(pdf,), (pdf,)],
+        )
+        self.services.sell_items([first], SaleTerms.create(75, TEST_DATE))
+
+        self.services.replace_expense_proofs(first, (), (png,))
+        self.assertEqual(
+            [proof.file_name for proof in self.services.list_expenses()[0].proofs],
+            ["payment.png"],
+        )
+        self.services.replace_expense_proofs(second, (), ())
+
+        with self.database.transaction() as database:
+            names = [
+                row[0]
+                for row in database.execute(
+                    "SELECT file_name FROM proof_files ORDER BY file_name"
+                )
+            ]
+        self.assertEqual(names, ["payment.png"])
+
+    def test_purchase_proof_mapping_is_validated_before_any_write(self):
+        proof = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.4\nreceipt")
+        with self.assertRaisesRegex(ValidationError, "proof collection"):
+            self.services.add_expenses(
+                [
+                    NewExpense.create("CPU", "CPU", 50, TEST_DATE),
+                    NewExpense.create("RAM", "RAM", 20, TEST_DATE),
+                ],
+                [(proof,)],
+            )
+        self.assertEqual(self.services.list_expenses(), ())
+
+    def test_verified_backup_and_restore_preserve_proof_content(self):
+        proof = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.5\nreceipt")
+        expense_id = self.services.add_expenses(
+            [NewExpense.create("PSU", "PSU", 60, TEST_DATE)],
+            [(proof,)],
+        )[0]
+        backup = self.services.create_backup()
+
+        self.services.replace_expense_proofs(expense_id, (), ())
+        self.assertEqual(self.services.list_expenses()[0].proofs, ())
+        self.services.restore_backup(backup.path)
+
+        restored = self.services.list_expenses()[0]
+        self.assertEqual([item.file_name for item in restored.proofs], ["receipt.pdf"])
+        self.assertEqual(
+            self.services.proof_file(expense_id, restored.proofs[0].id), proof
+        )
+
     def test_assembly_uses_expense_ids_as_its_only_membership_source(self):
         ids = [self.buy("RAM", "RAM", 40), self.buy("RAM", "RAM", 45)]
         pc_id = self.services.assemble_pc("PC 1", ids)
@@ -834,7 +936,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 for statement in statements
                 if statement.lstrip().upper().startswith("SELECT")
             ]
-            self.assertEqual(len(selects), 2)
+            self.assertEqual(len(selects), 3)
 
     def test_all_read_projections_agree_on_a_mixed_inventory_state(self):
         available = self.buy("Available", "Extra", 10)

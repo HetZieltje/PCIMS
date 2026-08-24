@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.common import ask_confirmation, show_error
+from pcims.app.dialogs import ProofEditDialog
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import (
     Column,
@@ -44,6 +45,7 @@ class SalesPage(AsyncCommandPage):
     ) -> None:
         super().__init__(tasks, parent)
         self.services = services
+        self._expenses: dict[int, Expense] = {}
         self._sales: dict[int, SaleSummary] = {}
         self._expense_page = HistoryPage[Expense]((), 0, 0, 500)
         self._sale_page = HistoryPage[SaleSummary]((), 0, 0, 500)
@@ -93,6 +95,11 @@ class SalesPage(AsyncCommandPage):
                     _expense_status,
                     lambda item: _expense_status(item).casefold(),
                 ),
+                Column(
+                    "Proofs",
+                    lambda item: str(len(item.proofs)),
+                    lambda item: len(item.proofs),
+                ),
             ),
             lambda item: item.id,
         )
@@ -109,6 +116,9 @@ class SalesPage(AsyncCommandPage):
         expense_navigation.addWidget(self.expense_page_label)
         expense_navigation.addWidget(self.expense_older)
         expense_navigation.addStretch()
+        expense_proofs = QPushButton("Proofs…")
+        expense_proofs.clicked.connect(self.edit_selected_expense_proofs)
+        expense_navigation.addWidget(expense_proofs)
         expense_box = QGroupBox("Purchase history")
         expense_layout = QVBoxLayout(expense_box)
         expense_layout.addWidget(self.expense_table)
@@ -253,6 +263,7 @@ class SalesPage(AsyncCommandPage):
             self.summary_labels[key].setText(format_cents(cents))
 
         self._expense_page = snapshot.expenses
+        self._expenses = {item.id: item for item in snapshot.expenses.records}
         self.expense_model.set_records(snapshot.expenses.records)
         self.expense_page_label.setText(self._page_label(snapshot.expenses))
         self.expense_newer.setEnabled(snapshot.expenses.has_previous)
@@ -283,6 +294,35 @@ class SalesPage(AsyncCommandPage):
             0, self._expense_page.offset + direction * self._expense_page.limit
         )
         self._load_page(offset, self._sale_page.offset)
+
+    def edit_selected_expense_proofs(self) -> None:
+        ids = selected_ids(self.expense_table)
+        if len(ids) != 1 or ids[0] not in self._expenses:
+            QMessageBox.information(
+                self, "Select one item", "Select exactly one purchase-history item."
+            )
+            return
+        expense = self._expenses[ids[0]]
+        update = ProofEditDialog.get_update(
+            expense.proofs,
+            lambda proof_id: self.services.proof_file(expense.id, proof_id),
+            self,
+        )
+        if update is None:
+            return
+        retained_ids, new_proofs = update
+        if (
+            retained_ids == tuple(proof.id for proof in expense.proofs)
+            and not new_proofs
+        ):
+            return
+        self.run_command(
+            lambda: self.services.replace_expense_proofs(
+                expense.id, retained_ids, new_proofs
+            ),
+            self.data_changed.emit,
+            "Unable to update proofs",
+        )
 
     def _change_sale_page(self, direction: int) -> None:
         offset = max(0, self._sale_page.offset + direction * self._sale_page.limit)

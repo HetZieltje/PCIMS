@@ -13,7 +13,7 @@ from pathlib import Path
 from pcims.contracts import BackupResult, RestoreResult
 from pcims.db.connection import Database, register_database_collations
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
-from pcims.db.schema import validate_current_data, validate_schema
+from pcims.db.schema import validate_current_data, validate_proof_files, validate_schema
 
 
 def _sync_file(path: Path) -> None:
@@ -134,6 +134,7 @@ def validate_database(path: str | os.PathLike[str]) -> None:
         try:
             validate_schema(database)
             validate_current_data(database)
+            validate_proof_files(database)
         except (DatabaseIntegrityError, SchemaVersionError) as error:
             raise sqlite3.DatabaseError(str(error)) from error
 

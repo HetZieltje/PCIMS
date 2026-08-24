@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from pcims.domain import ItemType, SaleKind
+from pcims.proofs import ProofSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +17,7 @@ class Expense:
     pc_id: int | None = None
     pc_name: str | None = None
     sale_id: int | None = None
+    proofs: tuple[ProofSummary, ...] = ()
 
     @property
     def is_available(self) -> bool:
