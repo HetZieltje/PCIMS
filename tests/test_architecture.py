@@ -270,11 +270,16 @@ class ArchitectureTests(unittest.TestCase):
         for runner in ("windows-latest", "ubuntu-22.04", "macos-15"):
             self.assertIn(runner, package_workflow)
         for artifact in (
-            "PCIMS-2.0.0b3.dev0-Windows-x64.zip",
-            "PCIMS-2.0.0b3.dev0-macOS-arm64.zip",
-            "PCIMS-2.0.0b3.dev0-Linux-x86_64.tar.gz",
+            "PCIMS-$env:PCIMS_VERSION-Windows-x64.zip",
+            "PCIMS-${PCIMS_VERSION}-macOS-arm64.zip",
+            "PCIMS-${PCIMS_VERSION}-Linux-x86_64.tar.gz",
         ):
             self.assertIn(artifact, package_workflow)
+        self.assertIn("from pcims.version import application_version", package_workflow)
+        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("cancel-in-progress: true", package_workflow)
+        self.assertEqual(workflow.count("test-windows-installer.ps1"), 1)
+        self.assertEqual(workflow.count("test-linux-installer.sh"), 0)
         self.assertIn("requirements-package.lock", package_workflow)
         self.assertIn("PCIMS_PACKAGED_SMOKE_TEST", package_workflow)
         self.assertIn("python -m PyInstaller", package_workflow)

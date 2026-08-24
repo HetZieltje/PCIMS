@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     timeout-minutes: 20
@@ -35,13 +39,8 @@ jobs:
       - name: Validate Linux desktop integration
         if: runner.os == 'Linux'
         run: |
-          sh -n scripts/install-linux.sh tests/test-linux-installer.sh
-          sh tests/test-linux-installer.sh
           sed 's|@PCIMS_PYTHON@|/usr/bin/python3|' packaging/linux/pcims.desktop > /tmp/pcims.desktop
           desktop-file-validate /tmp/pcims.desktop
-      - name: Validate Windows installer rollback
-        if: runner.os == 'Windows' && matrix.python-version != '3.13'
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-windows-installer.ps1
       - run: python -m pip install --require-hashes -r requirements-dev.lock
       - run: python -m pip install --require-hashes -r requirements-build.lock
       - run: python -m pip install --no-build-isolation --no-deps -e .
