@@ -1,6 +1,8 @@
 name: Package preview
 
 on:
+  push:
+    branches: [pyside6-rewrite]
   workflow_dispatch:
 
 permissions:
