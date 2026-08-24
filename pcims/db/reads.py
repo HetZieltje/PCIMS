@@ -1,14 +1,14 @@
 """Read-only projections over the current PCIMS schema."""
 
 import sqlite3
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
+from pcims.db.errors import NotFoundError
 from pcims.db.records import EXPENSE_SELECT, expense_from_row
 from pcims.domain import ItemType, SaleKind
-from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
+from pcims.models import AssembledPC, Expense, FinancialSummary, Sale, SaleSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,30 +73,19 @@ class ReadQueries:
             for pc in pcs
         )
 
-    def list_sales(
-        self, expenses_by_id: Mapping[int, Expense] | None = None
-    ) -> tuple[Sale, ...]:
+    def list_sales(self) -> tuple[Sale, ...]:
         sales = self.connection.execute(
             "SELECT id,name,kind,selling_price_cents,sale_date FROM sales ORDER BY id"
         ).fetchall()
         items_by_sale: dict[int, list[Expense]] = {
             int(sale["id"]): [] for sale in sales
         }
-        if expenses_by_id is None:
-            rows = self.connection.execute(
-                EXPENSE_SELECT
-                + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
-            )
-            for row in rows:
-                items_by_sale[int(row["sale_id"])].append(expense_from_row(row))
-        else:
-            memberships = self.connection.execute(
-                "SELECT sale_id,expense_id FROM sale_items ORDER BY sale_id,position"
-            )
-            for membership in memberships:
-                items_by_sale[int(membership["sale_id"])].append(
-                    expenses_by_id[int(membership["expense_id"])]
-                )
+        rows = self.connection.execute(
+            EXPENSE_SELECT
+            + " WHERE si.sale_id IS NOT NULL ORDER BY si.sale_id,si.position"
+        )
+        for row in rows:
+            items_by_sale[int(row["sale_id"])].append(expense_from_row(row))
         return tuple(
             Sale(
                 id=sale["id"],
@@ -117,45 +106,55 @@ class ReadQueries:
         self,
         offset: int,
         limit: int,
-        expenses_by_id: Mapping[int, Expense] | None = None,
-    ) -> tuple[Sale, ...]:
+    ) -> tuple[SaleSummary, ...]:
         sales = self.connection.execute(
-            "SELECT id,name,kind,selling_price_cents,sale_date "
-            "FROM sales ORDER BY id DESC LIMIT ? OFFSET ?",
+            """WITH page AS (
+                   SELECT id,name,kind,selling_price_cents,sale_date
+                     FROM sales ORDER BY id DESC LIMIT ? OFFSET ?
+               )
+               SELECT p.id,p.name,p.kind,p.selling_price_cents,p.sale_date,
+                      COUNT(si.expense_id) AS item_count,
+                      COALESCE(SUM(e.price_cents),0) AS cost_cents
+                 FROM page p
+                 JOIN sale_items si ON si.sale_id=p.id
+                 JOIN expenses e ON e.id=si.expense_id
+                GROUP BY p.id,p.name,p.kind,p.selling_price_cents,p.sale_date
+                ORDER BY p.id DESC""",
             (limit, offset),
-        ).fetchall()
-        if not sales:
-            return ()
-        sale_ids = [int(sale["id"]) for sale in sales]
-        placeholders = ",".join("?" for _ in sale_ids)
-        rows = self.connection.execute(
-            EXPENSE_SELECT + f" WHERE si.sale_id IN ({placeholders}) "  # nosec B608
-            "ORDER BY si.sale_id,si.position",
-            sale_ids,
         )
-        items_by_sale: dict[int, list[Expense]] = {
-            int(sale["id"]): [] for sale in sales
-        }
-        for row in rows:
-            expense_id = int(row["id"])
-            expense = (
-                expenses_by_id.get(expense_id) if expenses_by_id is not None else None
-            )
-            items_by_sale[int(row["sale_id"])].append(
-                expense if expense is not None else expense_from_row(row)
-            )
         return tuple(
-            Sale(
+            SaleSummary(
                 id=sale["id"],
                 name=sale["name"],
                 kind=cast(SaleKind, sale["kind"]),
-                cost_cents=sum(item.price_cents for item in items_by_sale[sale["id"]]),
+                cost_cents=sale["cost_cents"],
                 selling_price_cents=sale["selling_price_cents"],
                 sale_date=date.fromisoformat(sale["sale_date"]),
-                items=tuple(items_by_sale[sale["id"]]),
+                item_count=sale["item_count"],
             )
             for sale in sales
         )
+
+    def count_sale_items(self, sale_id: int) -> int:
+        row = self.connection.execute(
+            """SELECT COUNT(si.expense_id)
+                 FROM sales s LEFT JOIN sale_items si ON si.sale_id=s.id
+                WHERE s.id=? GROUP BY s.id""",
+            (sale_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"Sale {sale_id} does not exist.")
+        return int(row[0])
+
+    def list_sale_item_page(
+        self, sale_id: int, offset: int, limit: int
+    ) -> tuple[Expense, ...]:
+        rows = self.connection.execute(
+            EXPENSE_SELECT
+            + " WHERE si.sale_id=? ORDER BY si.position LIMIT ? OFFSET ?",
+            (sale_id, limit, offset),
+        )
+        return tuple(expense_from_row(row) for row in rows)
 
     def financial_summary(self) -> FinancialSummary:
         expense_cents, income_cents, cost_cents, inventory_cents = (

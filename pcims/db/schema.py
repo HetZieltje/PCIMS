@@ -9,14 +9,14 @@ from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_TYPES, MAX_NAME_LENGTH
 from pcims.money import MAX_MONEY_CENTS
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND instr(name,char(0))=0
         AND name NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')"""
 SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
     ("table", "expenses"): f"""CREATE TABLE expenses (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL CHECK ({_VALID_NAME_SQL}),
         item_type TEXT NOT NULL CHECK (item_type IN ({_ALLOWED_TYPES_SQL})),
         price_cents INTEGER NOT NULL
@@ -26,7 +26,7 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
                    AND COALESCE(strftime('%Y-%m-%d',purchase_date)=purchase_date,0))
     ) STRICT""",
     ("table", "assembled_pcs"): f"""CREATE TABLE assembled_pcs (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL COLLATE PCIMS_NOCASE UNIQUE
             CHECK ({_VALID_NAME_SQL})
     ) STRICT""",
@@ -39,7 +39,7 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         UNIQUE (pc_id, position)
     ) STRICT""",
     ("table", "sales"): f"""CREATE TABLE sales (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL CHECK ({_VALID_NAME_SQL}),
         kind TEXT NOT NULL CHECK (kind IN ('item', 'pc')),
         selling_price_cents INTEGER NOT NULL

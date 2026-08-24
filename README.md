@@ -4,10 +4,14 @@ PC Inventory Management Software is a cross-platform PySide6/Qt desktop
 application for purchases, component inventory, assembled PCs, sales, profit,
 and verified SQLite backups.
 
+The PySide6 rewrite is currently available as a `2.0.0b1` prerelease. Beta
+builds use the current normalized database format and deliberately do not open
+databases created by the former Tkinter application.
+
 ## Platforms
 
-PCIMS uses Qt and supports Windows and Linux. Build and test distributable
-packages on each target operating system.
+PCIMS uses Qt and supports Windows, macOS, and Linux. Native preview packages
+are built and smoke-tested on each target operating system.
 
 ## Install and run
 
@@ -53,6 +57,7 @@ after the same clean-wheel manifest verification succeeds.
 Application data follows platform conventions:
 
 - Windows: `%LOCALAPPDATA%\PCIMS`
+- macOS: `~/Library/Application Support/PCIMS`
 - Linux with `XDG_DATA_HOME`: `$XDG_DATA_HOME/pcims`
 - Other Linux environments: `~/.local/share/pcims`
 
@@ -78,9 +83,9 @@ being modified; use a current-format backup or a new database path.
 .venv\Scripts\python scripts\verify.py
 ```
 
-Regenerate the runtime, development, and build lock files deliberately whenever
-dependency ranges are changed; never hand-edit hashes independently of the
-resolved package versions.
+Regenerate the runtime, development, build, and packaging lock files
+deliberately whenever dependency ranges are changed; never hand-edit hashes
+independently of the resolved package versions.
 
 Tests configure temporary SQLite files and the Qt offscreen platform. They do
 not open or delete the application database. `scripts/verify.py` stops at the
@@ -92,13 +97,15 @@ generated desktop entry.
 
 ## Release artifacts
 
-The reproducible wheel is the authoritative cross-platform release artifact.
-On Linux, `scripts/install-linux.sh` turns the checked-out release into a
-transactional, user-scoped desktop installation. Windows has the equivalent
-`scripts/install-windows.ps1` path. Both installers are exercised with real
-locked environments and installed Qt smoke tests in CI.
+Preview releases contain native, smoke-tested PyInstaller packages built from
+the hash-locked packaging environment:
 
-Ad-hoc `pyside6-deploy` output is not treated as a release artifact because its
-Nuitka toolchain, platform libraries, signing, and installed-program smoke test
-are not yet locked into this repository. A native executable should only be
-published after that platform-specific pipeline is reproducible and verified.
+- Windows x64 portable ZIP
+- macOS Apple Silicon application ZIP
+- Linux x86_64 portable tarball
+
+These beta packages are not code-signed, so Windows SmartScreen or macOS
+Gatekeeper may show a warning. The reproducible wheel remains the authoritative
+Python package. The repository also retains transactional, user-scoped Windows
+and Linux installation scripts for source checkouts; both are exercised with
+real locked environments and installed Qt smoke tests in CI.

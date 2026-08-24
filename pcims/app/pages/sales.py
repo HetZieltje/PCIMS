@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from pcims.app.async_page import AsyncCommandPage
-from pcims.app.common import ask_confirmation
+from pcims.app.common import ask_confirmation, show_error
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import (
     Column,
@@ -23,7 +23,7 @@ from pcims.app.table_model import (
 )
 from pcims.app.tasks import TaskManager
 from pcims.contracts import HistoryPage, SalesOperations, SalesSnapshot
-from pcims.models import Expense, Sale
+from pcims.models import Expense, SaleSummary
 
 
 def _expense_status(item: Expense) -> str:
@@ -44,9 +44,12 @@ class SalesPage(AsyncCommandPage):
     ) -> None:
         super().__init__(tasks, parent)
         self.services = services
-        self._sales: dict[int, Sale] = {}
+        self._sales: dict[int, SaleSummary] = {}
         self._expense_page = HistoryPage[Expense]((), 0, 0, 500)
-        self._sale_page = HistoryPage[Sale]((), 0, 0, 500)
+        self._sale_page = HistoryPage[SaleSummary]((), 0, 0, 500)
+        self._detail_page = HistoryPage[Expense]((), 0, 0, 500)
+        self._detail_sale_id: int | None = None
+        self._detail_generation = 0
         self.summary_labels: dict[str, QLabel] = {}
         summary_box = QGroupBox("Financial summary")
         summary_layout = QGridLayout(summary_box)
@@ -111,7 +114,7 @@ class SalesPage(AsyncCommandPage):
         expense_layout.addWidget(self.expense_table)
         expense_layout.addLayout(expense_navigation)
 
-        self.sale_model = RecordTableModel[Sale](
+        self.sale_model = RecordTableModel[SaleSummary](
             (
                 Column("ID", lambda sale: str(sale.id), lambda sale: sale.id),
                 Column(
@@ -140,8 +143,8 @@ class SalesPage(AsyncCommandPage):
                 ),
                 Column(
                     "Items",
-                    lambda sale: str(len(sale.items)),
-                    lambda sale: len(sale.items),
+                    lambda sale: str(sale.item_count),
+                    lambda sale: sale.item_count,
                 ),
             ),
             lambda sale: sale.id,
@@ -198,9 +201,21 @@ class SalesPage(AsyncCommandPage):
         )
         self.detail_table = QTableView()
         configure_table_view(self.detail_table, self.detail_model)
+        self.detail_newer = QPushButton("Newer")
+        self.detail_newer.clicked.connect(lambda: self._change_detail_page(-1))
+        self.detail_page_label = QLabel("Select one sale")
+        self.detail_older = QPushButton("Older")
+        self.detail_older.clicked.connect(lambda: self._change_detail_page(1))
+        detail_navigation = QHBoxLayout()
+        detail_navigation.addWidget(self.detail_newer)
+        detail_navigation.addWidget(self.detail_page_label)
+        detail_navigation.addWidget(self.detail_older)
+        detail_navigation.addStretch()
         detail_box = QGroupBox("Selected sale items")
         detail_layout = QVBoxLayout(detail_box)
         detail_layout.addWidget(self.detail_table)
+        detail_layout.addLayout(detail_navigation)
+        self._clear_details()
 
         self.detail_splitter = QSplitter()
         self.detail_splitter.setOrientation(Qt.Orientation.Vertical)
@@ -250,10 +265,12 @@ class SalesPage(AsyncCommandPage):
         self.sale_page_label.setText(self._page_label(snapshot.sales))
         self.sale_newer.setEnabled(snapshot.sales.has_previous)
         self.sale_older.setEnabled(snapshot.sales.has_next)
-        self._render_details()
+        self._clear_details()
 
     @staticmethod
-    def _page_label(page: HistoryPage[Expense] | HistoryPage[Sale]) -> str:
+    def _page_label(
+        page: HistoryPage[Expense] | HistoryPage[SaleSummary],
+    ) -> str:
         if page.total == 0:
             return "0 records"
         return (
@@ -283,14 +300,72 @@ class SalesPage(AsyncCommandPage):
         )
 
     def _sale_selection_changed(self, *_: object) -> None:
-        self._render_details()
-
-    def _render_details(self) -> None:
         ids = selected_ids(self.sale_table)
-        items = (
-            self._sales[ids[0]].items if len(ids) == 1 and ids[0] in self._sales else ()
+        if len(ids) == 1 and ids[0] in self._sales:
+            self._load_detail_page(ids[0], 0)
+        else:
+            self._clear_details()
+
+    def _clear_details(self) -> None:
+        self._detail_generation += 1
+        self._detail_sale_id = None
+        self._detail_page = HistoryPage((), 0, 0, self._detail_page.limit)
+        self.detail_model.set_records(())
+        self.detail_page_label.setText("Select one sale")
+        self.detail_newer.setEnabled(False)
+        self.detail_older.setEnabled(False)
+
+    def _load_detail_page(self, sale_id: int, offset: int) -> None:
+        self._detail_generation += 1
+        generation = self._detail_generation
+        self._detail_sale_id = sale_id
+        self.detail_newer.setEnabled(False)
+        self.detail_older.setEnabled(False)
+        self.detail_page_label.setText("Loading...")
+        self.tasks.run(
+            lambda: self.services.sale_item_page(
+                sale_id,
+                offset,
+                self._detail_page.limit,
+            ),
+            lambda page: self._detail_loaded(generation, sale_id, page),
+            lambda error: self._detail_failed(generation, sale_id, error),
+            owner=self,
         )
-        self.detail_model.set_records(items)
+
+    def _detail_loaded(
+        self,
+        generation: int,
+        sale_id: int,
+        page: HistoryPage[Expense],
+    ) -> None:
+        if not self._current_detail_request(generation, sale_id):
+            return
+        self._detail_page = page
+        self.detail_model.set_records(page.records)
+        self.detail_page_label.setText(self._page_label(page))
+        self.detail_newer.setEnabled(page.has_previous)
+        self.detail_older.setEnabled(page.has_next)
+
+    def _detail_failed(self, generation: int, sale_id: int, error: Exception) -> None:
+        if not self._current_detail_request(generation, sale_id):
+            return
+        self._clear_details()
+        show_error(self, "Unable to load sale items", error)
+
+    def _current_detail_request(self, generation: int, sale_id: int) -> bool:
+        return (
+            self._detail_generation == generation
+            and self._detail_sale_id == sale_id
+            and selected_ids(self.sale_table) == [sale_id]
+            and sale_id in self._sales
+        )
+
+    def _change_detail_page(self, direction: int) -> None:
+        if self._detail_sale_id is None:
+            return
+        offset = max(0, self._detail_page.offset + direction * self._detail_page.limit)
+        self._load_detail_page(self._detail_sale_id, offset)
 
     def undo_selected(self) -> None:
         ids = selected_ids(self.sale_table)
@@ -309,6 +384,7 @@ class SalesPage(AsyncCommandPage):
             return
         if not ask_confirmation(self, "Undo sale", f"Undo the sale of '{sale.name}'?"):
             return
+        self._clear_details()
         self.run_command(
             lambda: self.services.undo_sale(sale.id),
             self.data_changed.emit,

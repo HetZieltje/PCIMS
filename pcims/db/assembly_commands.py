@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from pcims.db.command_support import (
     bounded_cents_total,
     find_pc_name_collision,
+    next_record_id,
     normalized_command_text,
     positive_command_id,
     select_expense_rows,
@@ -28,11 +29,7 @@ def assemble_pc(name: str, expense_ids: Iterable[int], *, database: Database) ->
             if row["pc_id"] is not None or row["sale_id"] is not None:
                 raise ValidationError(f"'{row['name']}' is not available for assembly.")
         bounded_cents_total((row["price_cents"] for row in rows), "Combined PC cost")
-        pc_id = int(
-            connection.execute(
-                "SELECT COALESCE(MAX(id),0)+1 FROM assembled_pcs"
-            ).fetchone()[0]
-        )
+        pc_id = next_record_id(connection, "assembled_pcs")
         connection.executemany(
             "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
             ((pc_id, expense_id, position) for position, expense_id in enumerate(ids)),

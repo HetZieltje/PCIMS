@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from pathlib import Path
 from pcims.db.gate import DatabaseGate, gate_for
 
 OPERATING_SYSTEM = os.name
+SYSTEM_PLATFORM = sys.platform
 
 
 def _environment_path(name: str) -> Path | None:
@@ -42,6 +44,8 @@ def get_data_dir() -> Path:
         local_app_data = _environment_path("LOCALAPPDATA")
         if local_app_data:
             return local_app_data / "PCIMS"
+    elif SYSTEM_PLATFORM == "darwin":
+        return (Path.home() / "Library" / "Application Support" / "PCIMS").resolve()
     else:
         xdg_data_home = _environment_path("XDG_DATA_HOME")
         if xdg_data_home:

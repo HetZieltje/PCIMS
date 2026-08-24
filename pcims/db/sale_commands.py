@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from pcims.db.command_support import (
     bounded_cents_total,
     find_pc_name_collision,
+    next_record_id,
     positive_command_id,
     select_expense_rows,
     unique_command_ids,
@@ -40,9 +41,7 @@ def sell_items(
         names = {row["name"] for row in rows}
         name = rows[0]["name"] if len(names) == 1 else f"{len(rows)} items"
         bounded_cents_total((row["price_cents"] for row in rows), "Combined item cost")
-        sale_id = int(
-            connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM sales").fetchone()[0]
-        )
+        sale_id = next_record_id(connection, "sales")
         connection.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
             (
@@ -77,9 +76,7 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
         bounded_cents_total((row["price_cents"] for row in rows), "Combined PC cost")
         expense_ids = [row["id"] for row in rows]
         connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
-        sale_id = int(
-            connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM sales").fetchone()[0]
-        )
+        sale_id = next_record_id(connection, "sales")
         connection.executemany(
             "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,?)",
             (
@@ -121,11 +118,7 @@ def undo_sale(sale_id: int, *, database: Database) -> None:
                     f"'{collision['name']}' exists."
                 )
             connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))
-            pc_id = int(
-                connection.execute(
-                    "SELECT COALESCE(MAX(id),0)+1 FROM assembled_pcs"
-                ).fetchone()[0]
-            )
+            pc_id = next_record_id(connection, "assembled_pcs")
             connection.executemany(
                 "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
                 (

@@ -2,7 +2,7 @@
 
 import sqlite3
 from collections.abc import Iterable
-from typing import cast
+from typing import Literal, cast
 
 from pcims.db.errors import ValidationError
 from pcims.db.records import EXPENSE_SELECT
@@ -10,6 +10,7 @@ from pcims.domain import normalized_id, normalized_ids, normalized_text
 from pcims.money import MAX_MONEY_CENTS
 
 SQLITE_ID_BATCH_SIZE = 500
+ParentTable = Literal["assembled_pcs", "sales"]
 
 
 def normalized_command_text(value: object, label: str) -> str:
@@ -38,6 +39,14 @@ def bounded_cents_total(values: Iterable[int], label: str) -> int:
     if total > MAX_MONEY_CENTS:
         raise ValidationError(f"{label} is too large.")
     return total
+
+
+def next_record_id(connection: sqlite3.Connection, table: ParentTable) -> int:
+    """Allocate a parent-last ID without reusing a published record identity."""
+    row = connection.execute(
+        "SELECT seq FROM sqlite_sequence WHERE name=?", (table,)
+    ).fetchone()
+    return (int(row[0]) if row is not None else 0) + 1
 
 
 def id_batches(identifiers: list[int]) -> Iterable[list[int]]:

@@ -74,6 +74,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.tasks = TaskManager()
 
     def tearDown(self):
+        self.wait_until(lambda: not self.tasks.active)
         self.application.processEvents()
         self.temporary_directory.cleanup()
 
@@ -1106,6 +1107,7 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(sales.summary_labels["cash"].text(), "€9.00")
         self.assertNotIn("assets", sales.summary_labels)
         sales.sale_table.selectRow(0)
+        self.wait_until(lambda: sales.detail_model.rowCount() == 2)
         with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):
             sales.undo_selected()
         self.wait_for_page(sales)
@@ -1138,6 +1140,71 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertIn("501–501 of 501", page.expense_page_label.text())
         page.deleteLater()
 
+    def test_sales_page_pages_large_selected_sale_details(self):
+        ids = self.services.add_expenses(
+            NewExpense.create(f"Bulk {index}", "Extra", 1, TEST_DATE)
+            for index in range(501)
+        )
+        self.services.sell_items(ids, SaleTerms.create(1_000, TEST_DATE))
+        page = SalesPage(self.services, tasks=self.tasks)
+        page.refresh()
+
+        self.assertEqual(page.sale_model.index(0, 7).data(), "501")
+        page.sale_table.selectRow(0)
+        self.wait_until(lambda: page.detail_model.rowCount() == 500)
+        self.assertTrue(page.detail_older.isEnabled())
+        page.detail_older.click()
+        self.wait_until(lambda: page._detail_page.offset == 500)
+
+        self.assertEqual(page.detail_model.rowCount(), 1)
+        self.assertEqual(page.detail_model.index(0, 0).data(), "501")
+        self.assertTrue(page.detail_newer.isEnabled())
+        self.assertFalse(page.detail_older.isEnabled())
+        page.deleteLater()
+
+    def test_stale_sale_detail_result_cannot_replace_newer_selection(self):
+        first_item = self.purchase("First", "Extra", 1)
+        second_item = self.purchase("Second", "Extra", 1)
+        first_sale = self.services.sell_items(
+            [first_item], SaleTerms.create(2, TEST_DATE)
+        )
+        second_sale = self.services.sell_items(
+            [second_item], SaleTerms.create(2, TEST_DATE)
+        )
+        page = SalesPage(self.services, tasks=self.tasks)
+        page.refresh()
+        slow_started = threading.Event()
+        release_slow = threading.Event()
+        original = ApplicationServices.sale_item_page
+
+        def delayed_details(services, sale_id, offset=0, page_size=500):
+            if sale_id == second_sale:
+                slow_started.set()
+                release_slow.wait(2)
+            return original(services, sale_id, offset, page_size)
+
+        try:
+            with patch.object(
+                ApplicationServices, "sale_item_page", new=delayed_details
+            ):
+                page.sale_table.selectRow(0)
+                self.assertTrue(slow_started.wait(1))
+                page.sale_table.selectRow(1)
+                self.wait_until(
+                    lambda: (
+                        page._detail_sale_id == first_sale
+                        and page.detail_model.rowCount() == 1
+                    )
+                )
+                release_slow.set()
+                self.wait_until(lambda: not self.tasks.active)
+        finally:
+            release_slow.set()
+
+        self.assertEqual(page._detail_sale_id, first_sale)
+        self.assertEqual(page.detail_model.index(0, 0).data(), str(first_item))
+        page.deleteLater()
+
     def test_stale_table_selections_fail_closed(self):
         expense_id = self.purchase("Cable", "Extra", 5)
         inventory = InventoryPage(self.services, tasks=self.tasks)
@@ -1157,6 +1224,7 @@ class QtWorkflowTests(unittest.TestCase):
         sales = SalesPage(self.services, tasks=self.tasks)
         sales.refresh()
         sales.sale_table.selectRow(0)
+        self.wait_until(lambda: not self.tasks.active)
         sales._sales.clear()
 
         with patch("pcims.app.pages.sales.QMessageBox.information") as information:

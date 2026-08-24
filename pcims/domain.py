@@ -105,7 +105,7 @@ class NewExpense:
             or not 0 <= self.price_cents <= MAX_MONEY_CENTS
         ):
             raise ValueError("Price must be integer cents within the supported range.")
-        if not isinstance(self.purchase_date, date):
+        if type(self.purchase_date) is not date:
             raise TypeError("Purchase date must be a date.")
 
     @classmethod
@@ -138,7 +138,7 @@ class SaleTerms:
             raise ValueError(
                 "Selling price must be integer cents within the supported range."
             )
-        if not isinstance(self.sale_date, date):
+        if type(self.sale_date) is not date:
             raise TypeError("Sale date must be a date.")
 
     @classmethod

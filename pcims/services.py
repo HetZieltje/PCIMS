@@ -71,12 +71,9 @@ class ApplicationServices:
         sale_offset: int = 0,
         page_size: int = 500,
     ) -> SalesSnapshot:
-        if page_size < 1 or page_size > MAX_HISTORY_PAGE_SIZE:
-            raise ValueError(
-                f"History page size must be between 1 and {MAX_HISTORY_PAGE_SIZE}."
-            )
-        if expense_offset < 0 or sale_offset < 0:
-            raise ValueError("History offsets cannot be negative.")
+        page_size = _history_page_size(page_size)
+        expense_offset = _history_offset(expense_offset)
+        sale_offset = _history_offset(sale_offset)
         with self.database.transaction() as connection:
             queries = ReadQueries(connection)
             expense_total = queries.count_expenses()
@@ -95,16 +92,29 @@ class ApplicationServices:
                     page_size,
                 ),
                 HistoryPage(
-                    queries.list_sale_page(
-                        sale_offset,
-                        page_size,
-                        {expense.id: expense for expense in expenses},
-                    ),
+                    queries.list_sale_page(sale_offset, page_size),
                     sale_offset,
                     sale_total,
                     page_size,
                 ),
             )
+
+    def sale_item_page(
+        self,
+        sale_id: int,
+        offset: int = 0,
+        page_size: int = 500,
+    ) -> HistoryPage[Expense]:
+        if isinstance(sale_id, bool) or not isinstance(sale_id, int) or sale_id < 1:
+            raise ValueError("Sale ID must be positive.")
+        page_size = _history_page_size(page_size)
+        offset = _history_offset(offset)
+        with self.database.transaction() as connection:
+            queries = ReadQueries(connection)
+            total = queries.count_sale_items(sale_id)
+            offset = _clamped_page_offset(offset, total, page_size)
+            records = queries.list_sale_item_page(sale_id, offset, page_size)
+        return HistoryPage(records, offset, total, page_size)
 
     def add_expenses(self, items: Iterable[NewExpense]) -> list[int]:
         return add_expenses(items, database=self.database)
@@ -193,3 +203,21 @@ def _clamped_page_offset(offset: int, total: int, limit: int) -> int:
     if total == 0:
         return 0
     return min(offset, ((total - 1) // limit) * limit)
+
+
+def _history_page_size(value: int) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= MAX_HISTORY_PAGE_SIZE
+    ):
+        raise ValueError(
+            f"History page size must be between 1 and {MAX_HISTORY_PAGE_SIZE}."
+        )
+    return value
+
+
+def _history_offset(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("History offsets must be non-negative integers.")
+    return value

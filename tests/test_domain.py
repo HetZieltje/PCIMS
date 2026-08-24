@@ -1,6 +1,6 @@
 import unittest
 from dataclasses import FrozenInstanceError
-from datetime import date
+from datetime import UTC, date, datetime
 
 from pcims.domain import NewExpense, SaleTerms
 
@@ -27,6 +27,14 @@ class DomainValueTests(unittest.TestCase):
         )
         for factory in invalid_factories:
             with self.subTest(factory=factory), self.assertRaises(ValueError):
+                factory()
+        for factory in (
+            lambda: NewExpense(
+                "CPU", "CPU", 100, datetime(2026, 8, 14, 12, tzinfo=UTC)
+            ),
+            lambda: SaleTerms(100, datetime(2026, 8, 14, 12, tzinfo=UTC)),
+        ):
+            with self.subTest(factory=factory), self.assertRaises(TypeError):
                 factory()
 
     def test_sale_terms_hold_exact_cents_and_date(self):

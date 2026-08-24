@@ -216,9 +216,15 @@ class ArchitectureTests(unittest.TestCase):
         runtime_lock = (root / "requirements.lock").read_text(encoding="utf-8")
         development_lock = (root / "requirements-dev.lock").read_text(encoding="utf-8")
         build_lock = (root / "requirements-build.lock").read_text(encoding="utf-8")
+        packaging_lock = (root / "requirements-package.lock").read_text(
+            encoding="utf-8"
+        )
         workflow = (root / ".github" / "workflows" / "test.yml").read_text(
             encoding="utf-8"
         )
+        package_workflow = (
+            root / ".github" / "workflows" / "package-preview.yml"
+        ).read_text(encoding="utf-8")
         verification = (root / "scripts" / "verify.py").read_text(encoding="utf-8")
         artifact = (root / "scripts" / "release_artifact.py").read_text(
             encoding="utf-8"
@@ -228,6 +234,9 @@ class ArchitectureTests(unittest.TestCase):
             self.assertIn("pyside6==", lock)
         self.assertIn("setuptools==80.9.0", build_lock)
         self.assertIn("--hash=sha256:", build_lock)
+        self.assertIn("pyinstaller==6.22.2", packaging_lock)
+        self.assertIn("pyside6==6.11.1", packaging_lock)
+        self.assertIn("--hash=sha256:", packaging_lock)
         self.assertIn("--require-hashes -r requirements-dev.lock", workflow)
         self.assertIn("--require-hashes -r requirements-build.lock", workflow)
         self.assertIn("cache-dependency-path:", workflow)
@@ -252,6 +261,21 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertNotIn("actions/checkout@v", workflow)
         self.assertNotIn("actions/setup-python@v", workflow)
+        for runner in ("windows-latest", "ubuntu-22.04", "macos-15"):
+            self.assertIn(runner, package_workflow)
+        for artifact in (
+            "PCIMS-2.0.0b1-Windows-x64.zip",
+            "PCIMS-2.0.0b1-macOS-arm64.zip",
+            "PCIMS-2.0.0b1-Linux-x86_64.tar.gz",
+        ):
+            self.assertIn(artifact, package_workflow)
+        self.assertIn("requirements-package.lock", package_workflow)
+        self.assertIn("PCIMS_PACKAGED_SMOKE_TEST", package_workflow)
+        self.assertIn("python -m PyInstaller", package_workflow)
+        self.assertIn("permissions:\n  contents: read", package_workflow)
+        self.assertNotIn("actions/checkout@v", package_workflow)
+        self.assertNotIn("actions/setup-python@v", package_workflow)
+        self.assertNotIn("actions/upload-artifact@v", package_workflow)
 
     def test_purchase_staging_uses_immutable_domain_records(self):
         purchases = (

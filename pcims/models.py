@@ -49,6 +49,23 @@ class Sale:
 
 
 @dataclass(frozen=True, slots=True)
+class SaleSummary:
+    """One sale-list row without its potentially large item collection."""
+
+    id: int
+    name: str
+    kind: SaleKind
+    cost_cents: int
+    selling_price_cents: int
+    sale_date: date
+    item_count: int
+
+    @property
+    def profit_cents(self) -> int:
+        return self.selling_price_cents - self.cost_cents
+
+
+@dataclass(frozen=True, slots=True)
 class FinancialSummary:
     expense_cents: int
     income_cents: int

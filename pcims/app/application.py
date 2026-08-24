@@ -1,12 +1,13 @@
 """PCIMS Qt application bootstrap."""
 
+import os
 import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QLockFile
+from PySide6.QtCore import QLockFile, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QStyleFactory
 
 from pcims.app.errors import install_exception_hook
@@ -50,7 +51,12 @@ def acquire_instance_lock(database_path: Path) -> QLockFile | None:
     raise OSError(message)
 
 
-def _run_application(application: QApplication, services: ApplicationServices) -> int:
+def _run_application(
+    application: QApplication,
+    services: ApplicationServices,
+    *,
+    packaged_smoke_test: bool = False,
+) -> int:
     try:
         instance_lock = acquire_instance_lock(services.database_path)
     except OSError as error:
@@ -89,7 +95,14 @@ def _run_application(application: QApplication, services: ApplicationServices) -
             )
             return 2
         window.show()
-        window.create_startup_backup()
+        if packaged_smoke_test:
+            QTimer.singleShot(30_000, lambda: application.exit(4))
+            if window.tasks.active:
+                window.tasks.became_idle.connect(application.quit)
+            else:
+                QTimer.singleShot(0, application.quit)
+        else:
+            window.create_startup_backup()
         return application.exec()
     finally:
         instance_lock.unlock()
@@ -104,7 +117,11 @@ def main(
     try:
         try:
             active_services = services or default_services()
-            return _run_application(application, active_services)
+            return _run_application(
+                application,
+                active_services,
+                packaged_smoke_test=os.environ.get("PCIMS_PACKAGED_SMOKE_TEST") == "1",
+            )
         except Exception as error:  # noqa: BLE001 - application bootstrap boundary
             sys.excepthook(type(error), error, error.__traceback__)
             return 1

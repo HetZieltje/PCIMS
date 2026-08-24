@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Generic, Protocol, TypeVar
 
 from pcims.domain import NewExpense, SaleTerms
-from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
+from pcims.models import AssembledPC, Expense, FinancialSummary, SaleSummary
 
 RecordT = TypeVar("RecordT")
 
@@ -94,7 +94,7 @@ class AssembleSnapshot:
 class SalesSnapshot:
     summary: FinancialSummary
     expenses: HistoryPage[Expense]
-    sales: HistoryPage[Sale]
+    sales: HistoryPage[SaleSummary]
 
 
 class InventoryOperations(Protocol):
@@ -124,6 +124,12 @@ class SalesOperations(Protocol):
         sale_offset: int = 0,
         page_size: int = 500,
     ) -> SalesSnapshot: ...
+    def sale_item_page(
+        self,
+        sale_id: int,
+        offset: int = 0,
+        page_size: int = 500,
+    ) -> HistoryPage[Expense]: ...
     def undo_sale(self, sale_id: int) -> None: ...
 
 

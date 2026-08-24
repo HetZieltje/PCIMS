@@ -89,6 +89,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         with (
             patch.dict(os.environ, environment, clear=True),
             patch("pcims.db.connection.OPERATING_SYSTEM", "posix"),
+            patch("pcims.db.connection.SYSTEM_PLATFORM", "linux"),
         ):
             self.assertEqual(get_data_dir(), linux_root.resolve() / "pcims")
         with (
@@ -96,6 +97,23 @@ class DatabaseWorkflowTests(unittest.TestCase):
             patch("pcims.db.connection.OPERATING_SYSTEM", "nt"),
         ):
             self.assertEqual(get_data_dir(), windows_root.resolve() / "PCIMS")
+
+    def test_macos_uses_native_application_support_directory(self):
+        home = Path(self.temporary_directory.name) / "mac-home"
+        with (
+            patch.dict(
+                os.environ,
+                {"XDG_DATA_HOME": str(home / "xdg-should-not-be-used")},
+                clear=True,
+            ),
+            patch("pcims.db.connection.OPERATING_SYSTEM", "posix"),
+            patch("pcims.db.connection.SYSTEM_PLATFORM", "darwin"),
+            patch("pcims.db.connection.Path.home", return_value=home),
+        ):
+            self.assertEqual(
+                get_data_dir(),
+                (home / "Library" / "Application Support" / "PCIMS").resolve(),
+            )
 
     def test_relative_environment_database_paths_are_rejected(self):
         with (
@@ -345,6 +363,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.assertTrue(restore_started.is_set())
 
     def buy(self, name, item_type, price, purchase_date=None):
+        purchase_date = TEST_DATE if purchase_date is None else purchase_date
         return self.services.add_expenses(
             [NewExpense.create(name, item_type, price, purchase_date)]
         )[0]
@@ -663,6 +682,28 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 (pc_id, ids[1]),
             )
 
+    def test_published_record_ids_are_never_reused(self):
+        first_expense = self.buy("First expense", "Extra", 1)
+        self.services.delete_expenses([first_expense])
+        second_expense = self.buy("Second expense", "Extra", 1)
+
+        first_pc = self.services.assemble_pc("First PC", [second_expense])
+        self.services.disassemble_pc(first_pc)
+        second_pc = self.services.assemble_pc("Second PC", [second_expense])
+        self.services.disassemble_pc(second_pc)
+
+        first_sale = self.services.sell_items(
+            [second_expense], SaleTerms.create(2, TEST_DATE)
+        )
+        self.services.undo_sale(first_sale)
+        second_sale = self.services.sell_items(
+            [second_expense], SaleTerms.create(2, TEST_DATE)
+        )
+
+        self.assertGreater(second_expense, first_expense)
+        self.assertGreater(second_pc, first_pc)
+        self.assertGreater(second_sale, first_sale)
+
     def test_pc_and_sale_listing_use_constant_query_counts(self):
         pc_parts = [self.buy(f"PC part {index}", "Extra", 10) for index in range(4)]
         self.services.assemble_pc("PC 1", pc_parts[:2])
@@ -693,6 +734,52 @@ class DatabaseWorkflowTests(unittest.TestCase):
             ]
             self.assertEqual(len(selects), 2)
 
+    def test_all_read_projections_agree_on_a_mixed_inventory_state(self):
+        available = self.buy("Available", "Extra", 10)
+        current_parts = [
+            self.buy("Current CPU", "CPU", 20),
+            self.buy("Current RAM", "RAM", 30),
+        ]
+        sold_item = self.buy("Sold item", "Extra", 40)
+        sold_pc_parts = [
+            self.buy("Sold GPU", "GPU", 50),
+            self.buy("Sold PSU", "PSU", 60),
+        ]
+        current_pc = self.services.assemble_pc("Current PC", current_parts)
+        sold_pc = self.services.assemble_pc("Sold PC", sold_pc_parts)
+        item_sale = self.services.sell_items(
+            [sold_item], SaleTerms.create(45, TEST_DATE)
+        )
+        pc_sale = self.services.sell_pc(sold_pc, SaleTerms.create(120, TEST_DATE))
+
+        expenses = self.services.list_expenses()
+        inventory = self.services.list_inventory()
+        available_inventory = self.services.list_inventory(available_only=True)
+        pcs = self.services.list_pcs()
+        sales = self.services.list_sales()
+        snapshot = self.services.sales_snapshot(page_size=10)
+        summary = self.services.financial_summary()
+
+        self.assertEqual(len(expenses), 6)
+        self.assertEqual({item.id for item in inventory}, {available, *current_parts})
+        self.assertEqual([item.id for item in available_inventory], [available])
+        self.assertEqual([pc.id for pc in pcs], [current_pc])
+        self.assertEqual([part.id for part in pcs[0].parts], current_parts)
+        self.assertEqual([sale.id for sale in sales], [item_sale, pc_sale])
+        self.assertEqual(
+            [sale.id for sale in snapshot.sales.records], [pc_sale, item_sale]
+        )
+        self.assertEqual([sale.item_count for sale in snapshot.sales.records], [2, 1])
+        self.assertEqual(
+            [item.id for item in self.services.sale_item_page(pc_sale).records],
+            sold_pc_parts,
+        )
+        self.assertEqual(summary.expense_cents, 21_000)
+        self.assertEqual(summary.income_cents, 16_500)
+        self.assertEqual(summary.profit_cents, 1_500)
+        self.assertEqual(summary.inventory_cents, 6_000)
+        self.assertEqual(snapshot.summary, summary)
+
     def test_assembly_rolls_back_if_any_item_is_unavailable(self):
         item_id = self.buy("CPU", "CPU", 100)
         with self.assertRaises(NotFoundError):
@@ -717,14 +804,38 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.services.list_sales(), ())
         self.assertEqual({item.id for item in self.services.list_inventory()}, set(ids))
 
-    def test_sales_snapshot_reuses_purchase_history_records(self):
-        item_id = self.buy("Shared", "Extra", 5)
-        self.services.sell_items([item_id], SaleTerms.create(10))
+    def test_sale_summaries_and_item_details_are_independently_bounded(self):
+        ids = self.services.add_expenses(
+            NewExpense.create(f"Bulk item {index}", "Extra", 1, TEST_DATE)
+            for index in range(1_001)
+        )
+        sale_id = self.services.sell_items(ids, SaleTerms.create(2_000, TEST_DATE))
 
-        snapshot = self.services.sales_snapshot()
+        snapshot = self.services.sales_snapshot(page_size=1)
+        sale = snapshot.sales.records[0]
+        first = self.services.sale_item_page(sale_id, page_size=500)
+        last = self.services.sale_item_page(sale_id, 1_000, 500)
 
-        expense = next(item for item in snapshot.expenses.records if item.id == item_id)
-        self.assertIs(snapshot.sales.records[0].items[0], expense)
+        self.assertEqual(sale.item_count, 1_001)
+        self.assertEqual(sale.cost_cents, 100_100)
+        self.assertFalse(hasattr(sale, "items"))
+        self.assertEqual(len(first.records), 500)
+        self.assertTrue(first.has_next)
+        self.assertEqual(last.offset, 1_000)
+        self.assertEqual(len(last.records), 1)
+        self.assertFalse(last.has_next)
+
+        for arguments in (
+            (sale_id, 0, 0),
+            (0, 0, 500),
+            (sale_id, -1, 500),
+            (sale_id, 0, True),
+            (sale_id, 1.5, 500),
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                self.services.sale_item_page(*arguments)
+        with self.assertRaisesRegex(NotFoundError, "does not exist"):
+            self.services.sale_item_page(sale_id + 1)
 
     def test_sales_history_is_bounded_navigable_and_clamped(self):
         ids = [self.buy(f"History {index}", "Extra", 1) for index in range(7)]
@@ -747,7 +858,13 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual([item.id for item in clamped.expenses.records], [1])
         self.assertFalse(clamped.sales.has_next)
 
-        for arguments in ((0, 0, 0), (-1, 0, 3), (0, -1, 3)):
+        for arguments in (
+            (0, 0, 0),
+            (-1, 0, 3),
+            (0, -1, 3),
+            (0, 0, True),
+            (1.5, 0, 3),
+        ):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 self.services.sales_snapshot(*arguments)
 
