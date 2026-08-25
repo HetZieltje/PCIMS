@@ -8,6 +8,7 @@ from typing import cast
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QTreeView,
     QVBoxLayout,
@@ -29,7 +31,15 @@ from PySide6.QtWidgets import (
 
 from pcims.app.assembly_model import AssemblyTreeModel
 from pcims.app.formatting import parse_money_cents
-from pcims.domain import ITEM_TYPES, ItemType, NewExpense, SaleTerms, normalized_text
+from pcims.domain import (
+    ITEM_CONDITIONS,
+    ITEM_TYPES,
+    ItemDetails,
+    ItemType,
+    NewExpense,
+    SaleTerms,
+    normalized_text,
+)
 from pcims.models import AssembledPC, Expense
 from pcims.proofs import PROOF_FILE_FILTER, NewProof, ProofSummary
 
@@ -213,6 +223,35 @@ class ExpenseEditDialog(QDialog):
         )
         self.purchase_date.setCalendarPopup(True)
         self.purchase_date.setDisplayFormat("yyyy-MM-dd")
+        self.vendor = QLineEdit(expense.details.vendor)
+        self.serial_number = QLineEdit(expense.details.serial_number)
+        self.storage_location = QLineEdit(expense.details.storage_location)
+        self.condition = QComboBox()
+        self.condition.addItem("Not specified", None)
+        for condition in ITEM_CONDITIONS:
+            self.condition.addItem(condition, condition)
+        if expense.details.condition is not None:
+            self.condition.setCurrentText(expense.details.condition)
+        self.has_warranty = QCheckBox("Warranty end date")
+        warranty = expense.details.warranty_until
+        warranty_qdate = (
+            QDate(warranty.year, warranty.month, warranty.day)
+            if warranty is not None
+            else QDate.currentDate()
+        )
+        self.warranty_until = QDateEdit(warranty_qdate)
+        self.warranty_until.setCalendarPopup(True)
+        self.warranty_until.setDisplayFormat("yyyy-MM-dd")
+        self.has_warranty.setChecked(expense.details.warranty_until is not None)
+        self.warranty_until.setEnabled(self.has_warranty.isChecked())
+        self.has_warranty.toggled.connect(self.warranty_until.setEnabled)
+        warranty_row = QHBoxLayout()
+        warranty_row.addWidget(self.has_warranty)
+        warranty_row.addWidget(self.warranty_until)
+        warranty_widget = QWidget()
+        warranty_widget.setLayout(warranty_row)
+        self.notes = QPlainTextEdit(expense.details.notes)
+        self.notes.setMaximumHeight(100)
         self.error_label = QLabel()
         self.error_label.setStyleSheet("color: #c62828")
         self._replacement: NewExpense | None = None
@@ -222,6 +261,12 @@ class ExpenseEditDialog(QDialog):
         form.addRow("Component type", self.item_type)
         form.addRow("Purchase price", self.amount)
         form.addRow("Purchase date", self.purchase_date)
+        form.addRow("Vendor", self.vendor)
+        form.addRow("Serial number", self.serial_number)
+        form.addRow("Storage location", self.storage_location)
+        form.addRow("Condition", self.condition)
+        form.addRow("Warranty", warranty_widget)
+        form.addRow("Notes", self.notes)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
@@ -242,6 +287,18 @@ class ExpenseEditDialog(QDialog):
                 cast(ItemType, self.item_type.currentText()),
                 parse_money_cents(self.amount.text(), "Purchase price"),
                 cast(date, self.purchase_date.date().toPython()),
+                ItemDetails(
+                    vendor=self.vendor.text(),
+                    serial_number=self.serial_number.text(),
+                    storage_location=self.storage_location.text(),
+                    condition=self.condition.currentData(),
+                    warranty_until=(
+                        cast(date, self.warranty_until.date().toPython())
+                        if self.has_warranty.isChecked()
+                        else None
+                    ),
+                    notes=self.notes.toPlainText(),
+                ),
             )
         except (TypeError, ValueError) as error:
             self.error_label.setText(str(error))

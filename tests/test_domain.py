@@ -2,7 +2,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 from datetime import UTC, date, datetime
 
-from pcims.domain import NewExpense, SaleTerms
+from pcims.domain import ItemDetails, NewExpense, SaleTerms
 
 
 class DomainValueTests(unittest.TestCase):
@@ -42,6 +42,15 @@ class DomainValueTests(unittest.TestCase):
 
         self.assertEqual(terms.selling_price_cents, 123_456)
         self.assertEqual(terms.sale_date, date(2026, 8, 14))
+
+    def test_item_details_normalize_optional_metadata(self):
+        details = ItemDetails(
+            vendor="  Shop  ", serial_number="  123  ", notes="  line one\nline two  "
+        )
+
+        self.assertEqual(details.vendor, "Shop")
+        self.assertEqual(details.serial_number, "123")
+        self.assertEqual(details.notes, "line one\nline two")
 
 
 if __name__ == "__main__":

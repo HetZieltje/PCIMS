@@ -1,4 +1,5 @@
 import gc
+import hashlib
 import os
 import sqlite3
 import stat
@@ -29,13 +30,14 @@ from pcims.db.expense_commands import add_expenses
 from pcims.db.gate import gate_for
 from pcims.db.reads import ReadQueries
 from pcims.db.schema import (
+    SCHEMA_15_DEFINITIONS,
     SCHEMA_DEFINITIONS,
     SCHEMA_VERSION,
     UPGRADABLE_SCHEMA_DEFINITIONS,
     UPGRADABLE_SCHEMA_VERSION,
     initialize_database,
 )
-from pcims.domain import NewExpense, SaleTerms
+from pcims.domain import ItemDetails, NewExpense, SaleTerms
 from pcims.money import MAX_MONEY_CENTS
 from pcims.proofs import NewProof
 from pcims.services import ApplicationServices
@@ -387,6 +389,82 @@ class DatabaseWorkflowTests(unittest.TestCase):
             connection.commit()
         return database
 
+    def create_schema_15_database(self, name="schema-15.db"):
+        path = Path(self.temporary_directory.name) / name
+        database = Database.at(path)
+        with closing(database.connect(create=True)) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            for statement in SCHEMA_15_DEFINITIONS.values():
+                connection.execute(statement)
+            connection.execute("PRAGMA user_version=15")
+            connection.commit()
+        return database
+
+    def test_item_details_are_created_updated_and_searchable(self):
+        details = ItemDetails(
+            vendor="Retailer",
+            serial_number="SN-42",
+            storage_location="Shelf A",
+            condition="Used",
+            warranty_until=date(2028, 1, 2),
+            notes="Original box included.",
+        )
+        expense_id = self.services.add_expenses(
+            [NewExpense.create("GPU", "GPU", 250, TEST_DATE, details)]
+        )[0]
+
+        stored = self.services.list_expenses()[-1]
+        self.assertEqual(stored.details, details)
+        replacement_details = ItemDetails(serial_number="SN-43", condition="New")
+        self.services.update_expense(
+            expense_id,
+            NewExpense.create("GPU 2", "GPU", 260, TEST_DATE, replacement_details),
+        )
+        self.assertEqual(self.services.list_expenses()[-1].details, replacement_details)
+
+    def test_schema_15_upgrade_populates_details_and_keeps_proofs(self):
+        database = self.create_schema_15_database()
+        proof = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.4\n%%EOF")
+        services = ApplicationServices(database)
+        with database.transaction(write=True) as connection:
+            connection.execute(
+                """INSERT INTO expenses
+                   (id,name,item_type,price_cents,purchase_date)
+                   VALUES (1,'Existing','Extra',100,?)""",
+                (TEST_DATE.isoformat(),),
+            )
+            digest = hashlib.sha256(proof.content).hexdigest()
+            connection.execute(
+                """INSERT INTO proof_files
+                   (id,file_name,media_type,content,sha256) VALUES (1,?,?,?,?)""",
+                (proof.file_name, proof.media_type, proof.content, digest),
+            )
+            connection.execute(
+                "INSERT INTO expense_proofs (expense_id,proof_id,position) VALUES (1,1,0)"
+            )
+
+        services.initialize()
+
+        stored = services.list_expenses()[0]
+        self.assertTrue(stored.details.is_empty)
+        self.assertEqual(stored.proofs[0].file_name, "receipt.pdf")
+        self.assertEqual(
+            len(list(database.path.parent.glob("backups/*_pre_v16_*.db"))), 1
+        )
+
+    def test_activity_is_append_only_and_committed_with_changes(self):
+        expense_id = self.buy("Tracked", "Extra", 10)
+        self.services.update_expense(
+            expense_id, NewExpense.create("Tracked 2", "Extra", 11, TEST_DATE)
+        )
+        events = self.services.list_activity()
+        self.assertEqual([event.action for event in events[:2]], ["updated", "created"])
+        with (
+            self.database.transaction(write=True) as connection,
+            self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"),
+        ):
+            connection.execute("DELETE FROM audit_events")
+
     def test_schema_contains_only_authoritative_current_tables_and_columns(self):
         with self.database.transaction() as database:
             self.assertEqual(
@@ -418,6 +496,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 "sale_items",
                 "proof_files",
                 "expense_proofs",
+                "expense_details",
+                "audit_events",
             },
         )
         self.assertEqual(
@@ -604,7 +684,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         )[0]
         self.assertEqual(new_id, 10)
 
-        backups = list(database.path.parent.glob("backups/*_pre_v15_*.db"))
+        backups = list(database.path.parent.glob("backups/*_pre_v16_*.db"))
         self.assertEqual(len(backups), 1)
         with closing(Database.at(backups[0]).connect()) as backup:
             self.assertEqual(
@@ -617,13 +697,13 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
     def test_failed_schema_14_upgrade_rolls_back_the_live_database(self):
         database = self.create_schema_14_database("failed-upgrade.db")
-        broken = dict(SCHEMA_DEFINITIONS)
+        broken = dict(SCHEMA_15_DEFINITIONS)
         broken[("trigger", "expense_proof_count_limit")] = (
             "CREATE TRIGGER broken nonsense"
         )
 
         with (
-            patch("pcims.db.schema.SCHEMA_DEFINITIONS", broken),
+            patch("pcims.db.schema.SCHEMA_15_DEFINITIONS", broken),
             self.assertRaises(sqlite3.OperationalError),
         ):
             initialize_database(database)
@@ -640,7 +720,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 ).fetchone()[0],
             )
         self.assertEqual(
-            len(list(database.path.parent.glob("backups/*_pre_v15_*.db"))), 1
+            len(list(database.path.parent.glob("backups/*_pre_v16_*.db"))), 1
         )
 
     def test_failed_first_run_schema_creation_rolls_back_completely(self):

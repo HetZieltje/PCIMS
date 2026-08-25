@@ -1,9 +1,9 @@
 """Immutable application records independent from storage and presentation."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
-from pcims.domain import ItemType, SaleKind
+from pcims.domain import ItemDetails, ItemType, SaleKind
 from pcims.proofs import ProofSummary
 
 
@@ -18,10 +18,21 @@ class Expense:
     pc_name: str | None = None
     sale_id: int | None = None
     proofs: tuple[ProofSummary, ...] = ()
+    details: ItemDetails = field(default_factory=ItemDetails)
 
     @property
     def is_available(self) -> bool:
         return self.pc_id is None and self.sale_id is None
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEvent:
+    id: int
+    occurred_at: str
+    action: str
+    entity_type: str
+    entity_id: int | None
+    summary: str
 
 
 @dataclass(frozen=True, slots=True)

@@ -41,7 +41,7 @@ def main() -> None:
         while window.tasks.active and time.monotonic() < deadline:
             application.processEvents()
             time.sleep(0.005)
-        if window.tasks.active or window.tabs.count() != 5:
+        if window.tasks.active or window.tabs.count() != 6:
             raise RuntimeError("Installed Qt frontend did not initialize completely.")
         window.deleteLater()
         application.processEvents()

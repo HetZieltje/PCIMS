@@ -127,7 +127,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.show()
         self.wait_for_window(window)
 
-        self.assertEqual(window.tabs.count(), 5)
+        self.assertEqual(window.tabs.count(), 6)
         self.assertGreaterEqual(window.width(), 900)
         self.assertTrue(all(page.tasks is window.tasks for page in window.pages))
         for index in range(window.tabs.count()):

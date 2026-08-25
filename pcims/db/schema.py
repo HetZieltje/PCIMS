@@ -15,11 +15,11 @@ from pcims.db.connection import (
     register_database_collations,
 )
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
-from pcims.domain import ITEM_TYPES, MAX_NAME_LENGTH
+from pcims.domain import ITEM_CONDITIONS, ITEM_TYPES, MAX_NAME_LENGTH, MAX_NOTES_LENGTH
 from pcims.money import MAX_MONEY_CENTS
 from pcims.proofs import MAX_PROOF_BYTES, MAX_PROOFS_PER_ITEM, NewProof
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 UPGRADABLE_SCHEMA_VERSION = 14
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
@@ -215,7 +215,8 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         END""",
 }
 
-UPGRADABLE_SCHEMA_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+SCHEMA_14_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+UPGRADABLE_SCHEMA_DEFINITIONS = SCHEMA_14_DEFINITIONS
 _VALID_PROOF_NAME_SQL = _VALID_NAME_SQL.replace("name", "file_name")
 SCHEMA_DEFINITIONS.update(
     {
@@ -288,6 +289,73 @@ SCHEMA_DEFINITIONS.update(
             END""",
     }
 )
+
+SCHEMA_15_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+_ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
+SCHEMA_DEFINITIONS.update(
+    {
+        ("table", "expense_details"): f"""CREATE TABLE expense_details (
+            expense_id INTEGER PRIMARY KEY
+                REFERENCES expenses(id) ON DELETE CASCADE,
+            vendor TEXT NOT NULL DEFAULT ''
+                CHECK (length(vendor)<={MAX_NAME_LENGTH} AND instr(vendor,char(0))=0),
+            serial_number TEXT NOT NULL DEFAULT ''
+                CHECK (length(serial_number)<={MAX_NAME_LENGTH}
+                       AND instr(serial_number,char(0))=0),
+            storage_location TEXT NOT NULL DEFAULT ''
+                CHECK (length(storage_location)<={MAX_NAME_LENGTH}
+                       AND instr(storage_location,char(0))=0),
+            condition TEXT CHECK (condition IN ({_ALLOWED_CONDITIONS_SQL})),
+            warranty_until TEXT CHECK (
+                warranty_until IS NULL OR
+                (warranty_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                 AND COALESCE(strftime('%Y-%m-%d',warranty_until)=warranty_until,0))),
+            notes TEXT NOT NULL DEFAULT ''
+                CHECK (length(notes)<={MAX_NOTES_LENGTH} AND instr(notes,char(0))=0)
+        ) STRICT""",
+        ("table", "audit_events"): """CREATE TABLE audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            occurred_at TEXT NOT NULL,
+            action TEXT NOT NULL CHECK (length(trim(action)) BETWEEN 1 AND 200),
+            entity_type TEXT NOT NULL
+                CHECK (length(trim(entity_type)) BETWEEN 1 AND 200),
+            entity_id INTEGER CHECK (entity_id IS NULL OR entity_id>0),
+            summary TEXT NOT NULL CHECK (length(trim(summary)) BETWEEN 1 AND 1000)
+        ) STRICT""",
+        ("index", "audit_events_newest"): """CREATE INDEX audit_events_newest
+            ON audit_events(id DESC)""",
+        (
+            "trigger",
+            "expense_insert_creates_details",
+        ): """CREATE TRIGGER expense_insert_creates_details
+            AFTER INSERT ON expenses
+            BEGIN
+                INSERT INTO expense_details (expense_id) VALUES (NEW.id);
+            END""",
+        (
+            "trigger",
+            "audit_event_is_immutable_on_update",
+        ): """CREATE TRIGGER audit_event_is_immutable_on_update
+            BEFORE UPDATE ON audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'audit events are immutable');
+            END""",
+        (
+            "trigger",
+            "audit_event_is_immutable_on_delete",
+        ): """CREATE TRIGGER audit_event_is_immutable_on_delete
+            BEFORE DELETE ON audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'audit events are immutable');
+            END""",
+    }
+)
+
+SCHEMA_DEFINITIONS_BY_VERSION = {
+    14: SCHEMA_14_DEFINITIONS,
+    15: SCHEMA_15_DEFINITIONS,
+    16: SCHEMA_DEFINITIONS,
+}
 
 for _money_trigger in (
     "pc_part_cost_limit",
@@ -365,6 +433,21 @@ def _validate_dates(database: sqlite3.Connection) -> None:
                 raise DatabaseIntegrityError(
                     f"Database contains an invalid {label} in {table} row {row_id}."
                 ) from exc
+    has_details = database.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='expense_details'"
+    ).fetchone()
+    if has_details:
+        for expense_id, stored_date in database.execute(
+            "SELECT expense_id,warranty_until FROM expense_details "
+            "WHERE warranty_until IS NOT NULL"
+        ):
+            try:
+                date.fromisoformat(stored_date)
+            except (TypeError, ValueError) as exc:
+                raise DatabaseIntegrityError(
+                    "Database contains an invalid warranty date for expense "
+                    f"{expense_id}."
+                ) from exc
 
 
 def _validate_money(database: sqlite3.Connection) -> None:
@@ -389,6 +472,19 @@ def _validate_money(database: sqlite3.Connection) -> None:
 
 
 def _validate_relationships(database: sqlite3.Connection) -> None:
+    has_details = database.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='expense_details'"
+    ).fetchone()
+    if has_details:
+        missing_details = database.execute(
+            """SELECT e.id FROM expenses e
+               LEFT JOIN expense_details d ON d.expense_id=e.id
+               WHERE d.expense_id IS NULL LIMIT 1"""
+        ).fetchone()
+        if missing_details:
+            raise DatabaseIntegrityError(
+                f"Expense {missing_details[0]} has no item-details record."
+            )
     conflict = database.execute(
         """SELECT pp.expense_id FROM pc_parts pp
            JOIN sale_items si ON si.expense_id=pp.expense_id LIMIT 1"""
@@ -493,22 +589,23 @@ def _validate_storage(database: sqlite3.Connection, *, thorough: bool = True) ->
         )
 
 
-def _inspect_database(database: Database) -> Literal["empty", "current", "upgrade"]:
+def _inspect_database(database: Database) -> Literal["empty", "current"] | int:
     with database.transaction() as connection:
         if not _schema_objects(connection):
             return "empty"
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version == UPGRADABLE_SCHEMA_VERSION:
+        if version == SCHEMA_VERSION:
+            validate_schema(connection)
+            state: Literal["current"] | int = "current"
+        elif version in SCHEMA_DEFINITIONS_BY_VERSION:
             _validate_schema_definition(
-                connection,
-                UPGRADABLE_SCHEMA_VERSION,
-                UPGRADABLE_SCHEMA_DEFINITIONS,
+                connection, version, SCHEMA_DEFINITIONS_BY_VERSION[version]
             )
-            state: Literal["current", "upgrade"] = "upgrade"
+            state = version
         else:
             validate_schema(connection)
-            state = "current"
-        _validate_storage(connection, thorough=state == "upgrade")
+            raise AssertionError("unreachable")
+        _validate_storage(connection, thorough=state != "current")
         validate_current_data(connection)
         return state
 
@@ -523,12 +620,12 @@ def _sync_upgrade_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _create_pre_upgrade_backup(database: Database) -> Path:
-    """Publish a verified v14 copy before the one supported forward upgrade."""
+def _create_pre_upgrade_backup(database: Database, source_version: int) -> Path:
+    """Publish a verified source-format copy before a supported upgrade."""
     destination = ensure_private_directory(database.path.parent / "backups")
     stamp = datetime.now(UTC).astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
     final_path = destination / (
-        f"{database.path.stem}_pre_v15_{stamp}_{uuid.uuid4().hex}.db"
+        f"{database.path.stem}_pre_v{SCHEMA_VERSION}_{stamp}_{uuid.uuid4().hex}.db"
     )
     temporary_path = final_path.with_suffix(".tmp")
     primary_error: BaseException | None = None
@@ -544,8 +641,8 @@ def _create_pre_upgrade_backup(database: Database) -> Path:
             register_database_collations(copied)
             _validate_schema_definition(
                 copied,
-                UPGRADABLE_SCHEMA_VERSION,
-                UPGRADABLE_SCHEMA_DEFINITIONS,
+                source_version,
+                SCHEMA_DEFINITIONS_BY_VERSION[source_version],
             )
             _validate_storage(copied)
             validate_current_data(copied)
@@ -572,14 +669,29 @@ def _create_pre_upgrade_backup(database: Database) -> Path:
 
 def _migrate_schema_14_to_15(database: sqlite3.Connection) -> None:
     """Add proof storage without rewriting current inventory or history rows."""
-    for key, statement in SCHEMA_DEFINITIONS.items():
-        if key not in UPGRADABLE_SCHEMA_DEFINITIONS:
+    for key, statement in SCHEMA_15_DEFINITIONS.items():
+        if key not in SCHEMA_14_DEFINITIONS:
             database.execute(statement)
-    database.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    database.execute("PRAGMA user_version = 15")
+
+
+def _migrate_schema_15_to_16(database: sqlite3.Connection) -> None:
+    """Add optional item details and immutable application activity."""
+    for key, statement in SCHEMA_DEFINITIONS.items():
+        if key not in SCHEMA_15_DEFINITIONS:
+            database.execute(statement)
+    database.execute("INSERT INTO expense_details (expense_id) SELECT id FROM expenses")
+    database.execute("PRAGMA user_version = 16")
+
+
+MIGRATION_STEPS = {
+    14: _migrate_schema_14_to_15,
+    15: _migrate_schema_15_to_16,
+}
 
 
 def _initialize_database(database: Database) -> None:
-    """Create the current schema or upgrade the exact preceding rewrite schema."""
+    """Create the current schema or apply each verified forward migration."""
     with closing(database.connect(create=True)) as setup_connection:
         journal_mode = setup_connection.execute("PRAGMA journal_mode = WAL").fetchone()[
             0
@@ -591,17 +703,30 @@ def _initialize_database(database: Database) -> None:
     state = _inspect_database(database)
     if state == "current":
         return
-    if state == "upgrade":
-        _create_pre_upgrade_backup(database)
+    if isinstance(state, int):
+        _create_pre_upgrade_backup(database, state)
         with database.transaction(write=True) as connection:
             _validate_schema_definition(
                 connection,
-                UPGRADABLE_SCHEMA_VERSION,
-                UPGRADABLE_SCHEMA_DEFINITIONS,
+                state,
+                SCHEMA_DEFINITIONS_BY_VERSION[state],
             )
             _validate_storage(connection)
             validate_current_data(connection)
-            _migrate_schema_14_to_15(connection)
+            version = state
+            while version < SCHEMA_VERSION:
+                migration = MIGRATION_STEPS.get(version)
+                if migration is None:
+                    raise SchemaVersionError(
+                        f"No migration is available from database version {version}."
+                    )
+                migration(connection)
+                version += 1
+                _validate_schema_definition(
+                    connection,
+                    version,
+                    SCHEMA_DEFINITIONS_BY_VERSION[version],
+                )
             validate_schema(connection)
             _validate_storage(connection)
             validate_current_data(connection)

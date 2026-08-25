@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Generic, Protocol, TypeVar
 
 from pcims.domain import NewExpense, SaleTerms
-from pcims.models import AssembledPC, Expense, FinancialSummary, SaleSummary
+from pcims.models import AssembledPC, AuditEvent, Expense, FinancialSummary, SaleSummary
 from pcims.proofs import NewProof
 
 RecordT = TypeVar("RecordT")
@@ -150,6 +150,10 @@ class SalesOperations(Protocol):
         new_proofs: Iterable[NewProof],
     ) -> None: ...
     def proof_file(self, expense_id: int, proof_id: int) -> NewProof: ...
+
+
+class ActivityOperations(Protocol):
+    def list_activity(self, limit: int = 500) -> tuple[AuditEvent, ...]: ...
 
 
 class MaintenanceOperations(Protocol):

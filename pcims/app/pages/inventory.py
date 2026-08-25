@@ -101,6 +101,16 @@ class InventoryPage(AsyncCommandPage):
                     lambda item: item.purchase_date.toordinal(),
                 ),
                 Column(
+                    "Serial",
+                    lambda item: item.details.serial_number,
+                    lambda item: item.details.serial_number.casefold(),
+                ),
+                Column(
+                    "Location",
+                    lambda item: item.details.storage_location,
+                    lambda item: item.details.storage_location.casefold(),
+                ),
+                Column(
                     "Status",
                     lambda item: item.pc_name or "Available",
                     lambda item: (item.pc_name or "Available").casefold(),
@@ -197,7 +207,20 @@ class InventoryPage(AsyncCommandPage):
         if item_type is not None:
             parts = tuple(item for item in parts if item.item_type == item_type)
         if search:
-            parts = tuple(item for item in parts if search in item.name.casefold())
+            parts = tuple(
+                item
+                for item in parts
+                if any(
+                    search in value.casefold()
+                    for value in (
+                        item.name,
+                        item.details.vendor,
+                        item.details.serial_number,
+                        item.details.storage_location,
+                        item.details.notes,
+                    )
+                )
+            )
         if status == "available":
             parts = tuple(item for item in parts if item.is_available)
         elif status == "assigned":

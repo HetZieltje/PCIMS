@@ -10,7 +10,14 @@ from typing import cast
 from pcims.db.errors import DatabaseIntegrityError, NotFoundError
 from pcims.db.records import EXPENSE_SELECT, expense_from_row
 from pcims.domain import ItemType, SaleKind
-from pcims.models import AssembledPC, Expense, FinancialSummary, Sale, SaleSummary
+from pcims.models import (
+    AssembledPC,
+    AuditEvent,
+    Expense,
+    FinancialSummary,
+    Sale,
+    SaleSummary,
+)
 from pcims.proofs import NewProof, ProofSummary
 
 
@@ -81,6 +88,24 @@ class ReadQueries:
             "SELECT DISTINCT name FROM expenses ORDER BY name COLLATE PCIMS_NOCASE,name"
         )
         return tuple(str(row[0]) for row in rows)
+
+    def list_audit_events(self, limit: int = 500) -> tuple[AuditEvent, ...]:
+        rows = self.connection.execute(
+            """SELECT id,occurred_at,action,entity_type,entity_id,summary
+                 FROM audit_events ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        )
+        return tuple(
+            AuditEvent(
+                id=row["id"],
+                occurred_at=row["occurred_at"],
+                action=row["action"],
+                entity_type=row["entity_type"],
+                entity_id=row["entity_id"],
+                summary=row["summary"],
+            )
+            for row in rows
+        )
 
     def list_inventory(
         self, item_type: ItemType | None = None, available_only: bool = False

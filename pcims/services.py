@@ -34,7 +34,7 @@ from pcims.db.sale_commands import (
 )
 from pcims.db.schema import initialize_database
 from pcims.domain import ItemType, NewExpense, SaleTerms
-from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
+from pcims.models import AssembledPC, AuditEvent, Expense, FinancialSummary, Sale
 from pcims.proofs import NewProof
 
 MAX_HISTORY_PAGE_SIZE = 1_000
@@ -127,6 +127,16 @@ class ApplicationServices:
     def list_expenses(self) -> tuple[Expense, ...]:
         with self.database.transaction() as connection:
             return ReadQueries(connection).list_expenses()
+
+    def list_activity(self, limit: int = 500) -> tuple[AuditEvent, ...]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 1000
+        ):
+            raise ValueError("Activity limit must be between 1 and 1000.")
+        with self.database.transaction() as connection:
+            return ReadQueries(connection).list_audit_events(limit)
 
     def list_inventory(
         self, item_type: ItemType | None = None, available_only: bool = False

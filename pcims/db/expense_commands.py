@@ -4,6 +4,7 @@ import hashlib
 import sqlite3
 from collections.abc import Iterable
 
+from pcims.db.audit import record_audit_event
 from pcims.db.command_support import (
     bounded_cents_total,
     positive_command_id,
@@ -108,6 +109,30 @@ def add_expenses(
                 proofs,
                 proof_id_cache=proof_id_cache,
             )
+            connection.execute(
+                """UPDATE expense_details
+                      SET vendor=?,serial_number=?,storage_location=?,condition=?,
+                          warranty_until=?,notes=?
+                    WHERE expense_id=?""",
+                (
+                    expense.details.vendor,
+                    expense.details.serial_number,
+                    expense.details.storage_location,
+                    expense.details.condition,
+                    expense.details.warranty_until.isoformat()
+                    if expense.details.warranty_until
+                    else None,
+                    expense.details.notes,
+                    expense_id,
+                ),
+            )
+            record_audit_event(
+                connection,
+                "created",
+                "expense",
+                expense_id,
+                f"Added {expense.item_type} '{expense.name}'.",
+            )
             identifiers.append(expense_id)
         return identifiers
 
@@ -175,6 +200,13 @@ def replace_expense_proofs(
             + 1
         )
         _link_new_proofs(connection, expense_id, additions, next_position)
+        record_audit_event(
+            connection,
+            "proofs_updated",
+            "expense",
+            expense_id,
+            f"Updated proofs: {len(retained)} kept, {len(additions)} added.",
+        )
 
 
 def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:
@@ -194,9 +226,15 @@ def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:
                 raise ValidationError(
                     f"Expense {row['id']} has sale history. Undo the sale first."
                 )
-        connection.executemany(
-            "DELETE FROM expenses WHERE id=?", ((item_id,) for item_id in ids)
-        )
+        for row in rows:
+            record_audit_event(
+                connection,
+                "deleted",
+                "expense",
+                int(row["id"]),
+                f"Deleted {row['item_type']} '{row['name']}'.",
+            )
+        connection.executemany("DELETE FROM expenses WHERE id=?", ((i,) for i in ids))
 
 
 def update_expense(
@@ -258,6 +296,24 @@ def update_expense(
         if result.rowcount != 1:
             raise NotFoundError(f"Expense {expense_id} does not exist.")
 
+        connection.execute(
+            """UPDATE expense_details
+                  SET vendor=?,serial_number=?,storage_location=?,condition=?,
+                      warranty_until=?,notes=?
+                WHERE expense_id=?""",
+            (
+                replacement.details.vendor,
+                replacement.details.serial_number,
+                replacement.details.storage_location,
+                replacement.details.condition,
+                replacement.details.warranty_until.isoformat()
+                if replacement.details.warranty_until
+                else None,
+                replacement.details.notes,
+                expense_id,
+            ),
+        )
+
         if pc_id is not None:
             connection.executemany(
                 "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
@@ -269,3 +325,10 @@ def update_expense(
             connection.execute(
                 "INSERT INTO assembled_pcs (id,name) VALUES (?,?)", (pc_id, pc_name)
             )
+        record_audit_event(
+            connection,
+            "updated",
+            "expense",
+            expense_id,
+            f"Updated {replacement.item_type} '{replacement.name}'.",
+        )

@@ -3,6 +3,7 @@
 import sqlite3
 from collections.abc import Iterable
 
+from pcims.db.audit import record_audit_event
 from pcims.db.command_support import (
     bounded_cents_total,
     find_pc_name_collision,
@@ -55,6 +56,13 @@ def sell_items(
             "VALUES (?,?,'item',?,?)",
             (sale_id, name, terms.selling_price_cents, sale_day),
         )
+        record_audit_event(
+            connection,
+            "sold",
+            "sale",
+            sale_id,
+            f"Sold {len(ids)} item(s) as '{name}'.",
+        )
         return sale_id
 
 
@@ -89,6 +97,13 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
             "(id,name,kind,selling_price_cents,sale_date) "
             "VALUES (?,?,'pc',?,?)",
             (sale_id, pc["name"], terms.selling_price_cents, sale_day),
+        )
+        record_audit_event(
+            connection,
+            "sold",
+            "sale",
+            sale_id,
+            f"Sold PC '{pc['name']}'.",
         )
         return sale_id
 
@@ -132,3 +147,10 @@ def undo_sale(sale_id: int, *, database: Database) -> None:
             )
         else:
             connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))
+        record_audit_event(
+            connection,
+            "sale_undone",
+            "sale",
+            sale_id,
+            f"Undid sale '{sale['name']}'.",
+        )

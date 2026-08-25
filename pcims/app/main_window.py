@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 
 from pcims.app.appearance import apply_application_theme
 from pcims.app.common import show_error
+from pcims.app.pages.activity import ActivityPage
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
@@ -44,6 +45,7 @@ class MainWindow(QMainWindow):
         self.purchases_page = PurchasesPage(self.services, tasks=self.tasks)
         self.assemble_page = AssemblePage(self.services, tasks=self.tasks)
         self.sales_page = SalesPage(self.services, tasks=self.tasks)
+        self.activity_page = ActivityPage(self.services, tasks=self.tasks)
         self.settings_page = SettingsPage(
             self.services,
             theme=self.window_state.theme,
@@ -55,6 +57,7 @@ class MainWindow(QMainWindow):
             self.purchases_page,
             self.assemble_page,
             self.sales_page,
+            self.activity_page,
         )
         self.pages = (
             *self.data_pages,
@@ -81,6 +84,11 @@ class MainWindow(QMainWindow):
                 lambda: self.sales_page.load_snapshot(),
                 lambda snapshot: self.sales_page.apply_snapshot(snapshot),
             ),
+            bind_refresh(
+                self.activity_page,
+                lambda: self.activity_page.load_snapshot(),
+                lambda snapshot: self.activity_page.apply_snapshot(snapshot),
+            ),
         )
         self.refreshes = RefreshCoordinator(self.tasks, bindings, self)
         self.refreshes.refreshed.connect(
@@ -91,7 +99,14 @@ class MainWindow(QMainWindow):
         )
         for page, title in zip(
             self.pages,
-            ("Inventory", "Purchases", "Assemble", "Sales and History", "Settings"),
+            (
+                "Inventory",
+                "Purchases",
+                "Assemble",
+                "Sales and History",
+                "Activity",
+                "Settings",
+            ),
         ):
             self.tabs.addTab(page, title)
         for page in self.data_pages:

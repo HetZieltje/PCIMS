@@ -1,7 +1,7 @@
 """Validated, immutable domain values and closed-set vocabulary for PCIMS."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Literal, TypeAlias
 
@@ -21,7 +21,16 @@ ItemType: TypeAlias = Literal[
     "Extra",
 ]
 SaleKind: TypeAlias = Literal["item", "pc"]
+ItemCondition: TypeAlias = Literal["New", "Used", "Refurbished", "For parts"]
 MAX_NAME_LENGTH = 200
+MAX_NOTES_LENGTH = 4_000
+
+ITEM_CONDITIONS: tuple[ItemCondition, ...] = (
+    "New",
+    "Used",
+    "Refurbished",
+    "For parts",
+)
 
 ITEM_TYPES: tuple[ItemType, ...] = (
     "CPU",
@@ -89,12 +98,74 @@ def normalized_date(value: object | None) -> date:
         raise ValueError("Date must use the YYYY-MM-DD format.") from error
 
 
+def normalized_optional_text(value: object, label: str) -> str:
+    normalized = str(value).strip() if value is not None else ""
+    if not normalized:
+        return ""
+    return normalized_text(normalized, label)
+
+
+def normalized_notes(value: object) -> str:
+    notes = str(value).strip() if value is not None else ""
+    if len(notes) > MAX_NOTES_LENGTH:
+        raise ValueError(f"Notes cannot exceed {MAX_NOTES_LENGTH} characters.")
+    if any(
+        not character.isprintable() and character not in "\n\t" for character in notes
+    ):
+        raise ValueError("Notes contain unsupported control characters.")
+    return notes
+
+
+@dataclass(frozen=True, slots=True)
+class ItemDetails:
+    vendor: str = ""
+    serial_number: str = ""
+    storage_location: str = ""
+    condition: ItemCondition | None = None
+    warranty_until: date | None = None
+    notes: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "vendor", normalized_optional_text(self.vendor, "Vendor")
+        )
+        object.__setattr__(
+            self,
+            "serial_number",
+            normalized_optional_text(self.serial_number, "Serial number"),
+        )
+        object.__setattr__(
+            self,
+            "storage_location",
+            normalized_optional_text(self.storage_location, "Storage location"),
+        )
+        if self.condition is not None and self.condition not in ITEM_CONDITIONS:
+            raise ValueError(f"Condition must be one of: {', '.join(ITEM_CONDITIONS)}.")
+        if self.warranty_until is not None and type(self.warranty_until) is not date:
+            raise TypeError("Warranty date must be a date or omitted.")
+        object.__setattr__(self, "notes", normalized_notes(self.notes))
+
+    @property
+    def is_empty(self) -> bool:
+        return not any(
+            (
+                self.vendor,
+                self.serial_number,
+                self.storage_location,
+                self.condition,
+                self.warranty_until,
+                self.notes,
+            )
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class NewExpense:
     name: str
     item_type: ItemType
     price_cents: int
     purchase_date: date
+    details: ItemDetails = field(default_factory=ItemDetails)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", normalized_text(self.name, "Item name"))
@@ -107,6 +178,8 @@ class NewExpense:
             raise ValueError("Price must be integer cents within the supported range.")
         if type(self.purchase_date) is not date:
             raise TypeError("Purchase date must be a date.")
+        if not isinstance(self.details, ItemDetails):
+            raise TypeError("Item details must be validated item details.")
 
     @classmethod
     def create(
@@ -115,12 +188,14 @@ class NewExpense:
         item_type: object,
         price: object,
         purchase_date: object | None = None,
+        details: ItemDetails | None = None,
     ) -> "NewExpense":
         return cls(
             normalized_text(name, "Item name"),
             normalized_item_type(item_type),
             parse_money_cents(price, "Price"),
             normalized_date(purchase_date),
+            details or ItemDetails(),
         )
 
 

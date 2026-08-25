@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QTableView,
@@ -37,7 +38,7 @@ from pcims.app.table_model import (
 )
 from pcims.app.tasks import TaskManager
 from pcims.contracts import PurchaseOperations, PurchasesSnapshot
-from pcims.domain import ITEM_TYPES, ItemType, NewExpense
+from pcims.domain import ITEM_CONDITIONS, ITEM_TYPES, ItemDetails, ItemType, NewExpense
 from pcims.proofs import NewProof
 
 
@@ -77,6 +78,26 @@ class PurchasesPage(AsyncCommandPage):
         self.purchase_date = QDateEdit(QDate.currentDate())
         self.purchase_date.setCalendarPopup(True)
         self.purchase_date.setDisplayFormat("yyyy-MM-dd")
+        self.vendor = QLineEdit()
+        self.serial_number = QLineEdit()
+        self.storage_location = QLineEdit()
+        self.condition = QComboBox()
+        self.condition.addItem("Not specified", None)
+        for condition in ITEM_CONDITIONS:
+            self.condition.addItem(condition, condition)
+        self.has_warranty = QCheckBox("Warranty end date")
+        self.warranty_until = QDateEdit(QDate.currentDate())
+        self.warranty_until.setCalendarPopup(True)
+        self.warranty_until.setDisplayFormat("yyyy-MM-dd")
+        self.warranty_until.setEnabled(False)
+        self.has_warranty.toggled.connect(self.warranty_until.setEnabled)
+        warranty_row = QHBoxLayout()
+        warranty_row.addWidget(self.has_warranty)
+        warranty_row.addWidget(self.warranty_until)
+        warranty_widget = QWidget()
+        warranty_widget.setLayout(warranty_row)
+        self.notes = QPlainTextEdit()
+        self.notes.setMaximumHeight(80)
         self.proof_label = QLabel("No proofs selected")
         proof_button = QPushButton("Choose proofs…")
         proof_button.clicked.connect(self.choose_proofs)
@@ -99,6 +120,12 @@ class PurchasesPage(AsyncCommandPage):
         form.addRow("Price", self.price)
         form.addRow("", self.total_for_quantity)
         form.addRow("Purchase date", self.purchase_date)
+        form.addRow("Vendor", self.vendor)
+        form.addRow("Serial number", self.serial_number)
+        form.addRow("Storage location", self.storage_location)
+        form.addRow("Condition", self.condition)
+        form.addRow("Warranty", warranty_widget)
+        form.addRow("Notes", self.notes)
         form.addRow("Proofs of purchase", proof_widget)
         add_button = QPushButton("Add to purchase")
         add_button.clicked.connect(self.add_line)
@@ -208,6 +235,22 @@ class PurchasesPage(AsyncCommandPage):
             else [entered_cents] * quantity
         )
         purchase_date = cast(date, self.purchase_date.date().toPython())
+        try:
+            details = ItemDetails(
+                vendor=self.vendor.text(),
+                serial_number=self.serial_number.text(),
+                storage_location=self.storage_location.text(),
+                condition=self.condition.currentData(),
+                warranty_until=(
+                    cast(date, self.warranty_until.date().toPython())
+                    if self.has_warranty.isChecked()
+                    else None
+                ),
+                notes=self.notes.toPlainText(),
+            )
+        except (TypeError, ValueError) as error:
+            show_error(self, "Invalid item details", error)
+            return
         for price_cents in prices:
             self._staged.append(
                 StagedPurchase(
@@ -217,6 +260,7 @@ class PurchasesPage(AsyncCommandPage):
                         cast(ItemType, self.type.currentText()),
                         price_cents,
                         purchase_date,
+                        details,
                     ),
                     self._pending_proofs,
                 )
@@ -225,6 +269,12 @@ class PurchasesPage(AsyncCommandPage):
         self.name.clear()
         self.price.clear()
         self.quantity.setValue(1)
+        self.vendor.clear()
+        self.serial_number.clear()
+        self.storage_location.clear()
+        self.condition.setCurrentIndex(0)
+        self.has_warranty.setChecked(False)
+        self.notes.clear()
         self._pending_proofs = ()
         self._render_pending_proofs()
         self.name.setFocus()
