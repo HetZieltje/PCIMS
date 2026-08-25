@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.common import ask_confirmation, show_error
 from pcims.app.dialogs import ProofEditDialog
-from pcims.app.formatting import format_cents
+from pcims.app.formatting import format_cents, format_percentage_basis_points
 from pcims.app.table_model import (
     Column,
     RecordTableModel,
@@ -74,13 +74,18 @@ class SalesPage(AsyncCommandPage):
                 ("expense", "Total purchases"),
                 ("income", "Sales revenue"),
                 ("profit", "Realized profit"),
+                ("roi", "Realized ROI"),
                 ("inventory", "Inventory value"),
                 ("cash", "Cash flow"),
             )
         ):
             title_label = QLabel(title)
-            value_label = QLabel("€0.00")
+            value_label = QLabel("N/A" if key == "roi" else "€0.00")
             value_label.setStyleSheet("font-size: 18px; font-weight: 600")
+            if key == "roi":
+                explanation = "Realized ROI = realized profit ÷ cost of sold items."
+                title_label.setToolTip(explanation)
+                value_label.setToolTip(explanation)
             summary_layout.addWidget(title_label, 0, column)
             summary_layout.addWidget(value_label, 1, column)
             self.summary_labels[key] = value_label
@@ -164,6 +169,15 @@ class SalesPage(AsyncCommandPage):
                     "Profit",
                     lambda sale: format_cents(sale.profit_cents),
                     lambda sale: sale.profit_cents,
+                ),
+                Column(
+                    "ROI on cost",
+                    lambda sale: format_percentage_basis_points(sale.roi_basis_points),
+                    lambda sale: (
+                        sale.roi_basis_points
+                        if sale.roi_basis_points is not None
+                        else -10_001
+                    ),
                 ),
                 Column(
                     "Items",
@@ -277,6 +291,9 @@ class SalesPage(AsyncCommandPage):
             ("cash", summary.cash_flow_cents),
         ):
             self.summary_labels[key].setText(format_cents(cents))
+        self.summary_labels["roi"].setText(
+            format_percentage_basis_points(summary.roi_basis_points)
+        )
 
         self._expense_page = snapshot.expenses
         self._expenses = {item.id: item for item in snapshot.expenses.records}

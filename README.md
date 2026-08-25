@@ -2,7 +2,7 @@
 
 PC Inventory Management Software is a cross-platform PySide6/Qt desktop
 application for purchases, component inventory, assembled PCs, sales, profit,
-and verified SQLite backups.
+return on investment (ROI), and verified SQLite backups.
 
 The PySide6 rewrite is currently available as a `2.0.0b3` prerelease. Beta
 builds use the current normalized database format and deliberately do not open
@@ -86,6 +86,9 @@ list, and each component has its own ID, so multiple parts of the same category
 remain distinct. Selling a PC marks that same PC record sold instead of deleting
 it. Undoing the sale restores the same PC identity and membership. Standalone
 sales can likewise be deleted with Undo, returning all of their items to stock.
+The financial summary and each sale report ROI on cost as profit divided by the
+purchase cost of the sold items. A zero-cost sale shows `N/A` instead of an
+undefined or infinite percentage.
 
 Each individual item can have up to 20 proofs of purchase in PDF, PNG, JPEG, or
 WebP format, with a 20 MiB limit per file. Proofs can be selected while staging

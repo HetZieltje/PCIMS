@@ -7,6 +7,16 @@ from pcims.domain import ItemDetails, ItemType, SaleKind
 from pcims.proofs import ProofSummary
 
 
+def _roi_basis_points(profit_cents: int, cost_cents: int) -> int | None:
+    """Return profit divided by cost as hundredths of a percentage point."""
+    if cost_cents == 0:
+        return None
+    numerator = profit_cents * 10_000
+    if numerator >= 0:
+        return (numerator + cost_cents // 2) // cost_cents
+    return -((-numerator + cost_cents // 2) // cost_cents)
+
+
 @dataclass(frozen=True, slots=True)
 class Expense:
     id: int
@@ -60,6 +70,10 @@ class Sale:
     def profit_cents(self) -> int:
         return self.selling_price_cents - self.cost_cents
 
+    @property
+    def roi_basis_points(self) -> int | None:
+        return _roi_basis_points(self.profit_cents, self.cost_cents)
+
 
 @dataclass(frozen=True, slots=True)
 class SaleSummary:
@@ -77,6 +91,10 @@ class SaleSummary:
     def profit_cents(self) -> int:
         return self.selling_price_cents - self.cost_cents
 
+    @property
+    def roi_basis_points(self) -> int | None:
+        return _roi_basis_points(self.profit_cents, self.cost_cents)
+
 
 @dataclass(frozen=True, slots=True)
 class FinancialSummary:
@@ -88,3 +106,11 @@ class FinancialSummary:
     @property
     def cash_flow_cents(self) -> int:
         return self.income_cents - self.expense_cents
+
+    @property
+    def realized_cost_cents(self) -> int:
+        return self.income_cents - self.profit_cents
+
+    @property
+    def roi_basis_points(self) -> int | None:
+        return _roi_basis_points(self.profit_cents, self.realized_cost_cents)

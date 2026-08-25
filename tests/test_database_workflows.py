@@ -1023,6 +1023,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(summary.expense_cents, 21_000)
         self.assertEqual(summary.income_cents, 16_500)
         self.assertEqual(summary.profit_cents, 1_500)
+        self.assertEqual(summary.realized_cost_cents, 15_000)
+        self.assertEqual(summary.roi_basis_points, 1_000)
         self.assertEqual(summary.inventory_cents, 6_000)
         self.assertEqual(snapshot.summary, summary)
 
@@ -1043,12 +1045,36 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(sale.cost_cents, 3000)
         self.assertEqual(sale.selling_price_cents, 10000)
         self.assertEqual(sale.profit_cents, 7000)
+        self.assertEqual(sale.roi_basis_points, 23_333)
         self.assertEqual(tuple(item.id for item in sale.items), tuple(ids))
         self.assertEqual(self.services.list_inventory(), ())
 
         self.services.undo_sale(sale_id)
         self.assertEqual(self.services.list_sales(), ())
         self.assertEqual({item.id for item in self.services.list_inventory()}, set(ids))
+
+    def test_roi_handles_losses_and_zero_cost_sales(self):
+        loss_item = self.buy("Loss", "Extra", 100)
+        free_item = self.buy("Free", "Extra", 0)
+        self.services.sell_items([loss_item], SaleTerms.create(75, TEST_DATE))
+        self.services.sell_items([free_item], SaleTerms.create(25, TEST_DATE))
+
+        loss_sale, free_sale = self.services.list_sales()
+        self.assertEqual(loss_sale.roi_basis_points, -2_500)
+        self.assertIsNone(free_sale.roi_basis_points)
+
+        summaries = self.services.sales_snapshot(page_size=10).sales.records
+        self.assertIsNone(summaries[0].roi_basis_points)
+        self.assertEqual(summaries[1].roi_basis_points, -2_500)
+
+    def test_financial_roi_is_unavailable_when_sold_items_have_no_cost(self):
+        free_item = self.buy("Free", "Extra", 0)
+        self.services.sell_items([free_item], SaleTerms.create(25, TEST_DATE))
+
+        summary = self.services.financial_summary()
+        self.assertEqual(summary.realized_cost_cents, 0)
+        self.assertEqual(summary.profit_cents, 2_500)
+        self.assertIsNone(summary.roi_basis_points)
 
     def test_sale_summaries_and_item_details_are_independently_bounded(self):
         ids = self.services.add_expenses(
@@ -1444,6 +1470,8 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(summary.expense_cents, 6500)
         self.assertEqual(summary.income_cents, 5000)
         self.assertEqual(summary.profit_cents, 2500)
+        self.assertEqual(summary.realized_cost_cents, 2500)
+        self.assertEqual(summary.roi_basis_points, 10_000)
         self.assertEqual(summary.inventory_cents, 4000)
         self.assertEqual(summary.cash_flow_cents, -1500)
 

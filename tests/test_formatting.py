@@ -3,6 +3,7 @@ import unittest
 from pcims.app.formatting import (
     allocate_cents,
     format_cents,
+    format_percentage_basis_points,
     parse_money_cents,
 )
 
@@ -39,6 +40,11 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(format_cents(123456), "€1,234.56")
         self.assertEqual(format_cents(-50), "-€0.50")
         self.assertEqual(format_cents(9_007_199_254_740_993), "€90,071,992,547,409.93")
+
+    def test_format_percentage_basis_points(self):
+        self.assertEqual(format_percentage_basis_points(8_182), "81.82%")
+        self.assertEqual(format_percentage_basis_points(-1_250), "-12.50%")
+        self.assertEqual(format_percentage_basis_points(None), "N/A")
 
     def test_every_supported_display_value_round_trips_exactly(self):
         for cents in (0, 1, 99, 100, 123456, 99_999_999_999):

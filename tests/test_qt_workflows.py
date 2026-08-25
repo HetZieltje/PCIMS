@@ -1249,7 +1249,9 @@ class QtWorkflowTests(unittest.TestCase):
         sales = SalesPage(self.services, tasks=self.tasks)
         sales.refresh()
         self.assertEqual(sales.summary_labels["cash"].text(), "€9.00")
+        self.assertEqual(sales.summary_labels["roi"].text(), "81.82%")
         self.assertNotIn("assets", sales.summary_labels)
+        self.assertEqual(sales.sale_model.index(0, 7).data(), "81.82%")
         sales.sale_table.selectRow(0)
         self.wait_until(lambda: sales.detail_model.rowCount() == 2)
         with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):
@@ -1293,7 +1295,7 @@ class QtWorkflowTests(unittest.TestCase):
         page = SalesPage(self.services, tasks=self.tasks)
         page.refresh()
 
-        self.assertEqual(page.sale_model.index(0, 7).data(), "501")
+        self.assertEqual(page.sale_model.index(0, 8).data(), "501")
         page.sale_table.selectRow(0)
         self.wait_until(lambda: page.detail_model.rowCount() == 500)
         self.assertTrue(page.detail_older.isEnabled())
