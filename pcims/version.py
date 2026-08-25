@@ -1,6 +1,6 @@
 """Single source of truth for the application and distribution version."""
 
-__version__ = "2.0.0b3.dev0"
+__version__ = "2.0.0b3"
 
 
 def application_version() -> str:
