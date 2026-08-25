@@ -1,4 +1,4 @@
-"""Atomic purchase and expense write workflows."""
+"""Atomic inventory-item and proof write workflows."""
 
 import hashlib
 import sqlite3
@@ -12,7 +12,7 @@ from pcims.db.command_support import (
     unique_command_ids,
 )
 from pcims.db.connection import Database
-from pcims.db.errors import DatabaseIntegrityError, NotFoundError, ValidationError
+from pcims.db.errors import NotFoundError, ValidationError
 from pcims.db.records import inserted_id
 from pcims.domain import NewExpense
 from pcims.proofs import MAX_PROOFS_PER_ITEM, NewProof, validate_proof_collection
@@ -28,17 +28,16 @@ def _proof_id(
         return cached
     digest = hashlib.sha256(proof.content).hexdigest()
     existing = connection.execute(
-        "SELECT id FROM proof_files WHERE sha256=? AND file_name=?",
-        (digest, proof.file_name),
+        "SELECT id FROM proof_files WHERE sha256=?", (digest,)
     ).fetchone()
     if existing is not None:
         proof_id = int(existing["id"])
     else:
         proof_id = inserted_id(
             connection.execute(
-                """INSERT INTO proof_files (file_name,media_type,content,sha256)
-                   VALUES (?,?,?,?)""",
-                (proof.file_name, proof.media_type, proof.content, digest),
+                """INSERT INTO proof_files (media_type,content,sha256)
+                   VALUES (?,?,?)""",
+                (proof.media_type, proof.content, digest),
             )
         )
     cache[id(proof)] = proof_id
@@ -57,10 +56,12 @@ def _link_new_proofs(
     if len(proof_ids) != len(set(proof_ids)):
         raise ValidationError("The same proof file cannot be attached twice.")
     connection.executemany(
-        "INSERT INTO expense_proofs (expense_id,proof_id,position) VALUES (?,?,?)",
+        "INSERT INTO item_proofs (item_id,proof_id,file_name,position) VALUES (?,?,?,?)",
         (
-            (expense_id, proof_id, start_position + position)
-            for position, proof_id in enumerate(proof_ids)
+            (expense_id, proof_id, proof.file_name, start_position + position)
+            for position, (proof_id, proof) in enumerate(
+                zip(proof_ids, proofs, strict=True)
+            )
         ),
     )
 
@@ -93,13 +94,23 @@ def add_expenses(
         for expense, proofs in zip(expenses, proof_groups, strict=True):
             expense_id = inserted_id(
                 connection.execute(
-                    "INSERT INTO expenses "
-                    "(name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
+                    "INSERT INTO inventory_items "
+                    "(name,item_type,price_cents,purchase_date,vendor,serial_number,"
+                    "storage_location,condition,warranty_until,notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (
                         expense.name,
                         expense.item_type,
                         expense.price_cents,
                         expense.purchase_date.isoformat(),
+                        expense.details.vendor,
+                        expense.details.serial_number,
+                        expense.details.storage_location,
+                        expense.details.condition,
+                        expense.details.warranty_until.isoformat()
+                        if expense.details.warranty_until
+                        else None,
+                        expense.details.notes,
                     ),
                 )
             )
@@ -109,27 +120,10 @@ def add_expenses(
                 proofs,
                 proof_id_cache=proof_id_cache,
             )
-            connection.execute(
-                """UPDATE expense_details
-                      SET vendor=?,serial_number=?,storage_location=?,condition=?,
-                          warranty_until=?,notes=?
-                    WHERE expense_id=?""",
-                (
-                    expense.details.vendor,
-                    expense.details.serial_number,
-                    expense.details.storage_location,
-                    expense.details.condition,
-                    expense.details.warranty_until.isoformat()
-                    if expense.details.warranty_until
-                    else None,
-                    expense.details.notes,
-                    expense_id,
-                ),
-            )
             record_audit_event(
                 connection,
                 "created",
-                "expense",
+                "item",
                 expense_id,
                 f"Added {expense.item_type} '{expense.name}'.",
             )
@@ -145,7 +139,7 @@ def replace_expense_proofs(
     database: Database,
 ) -> None:
     """Replace one item's proof collection without changing purchase history."""
-    expense_id = positive_command_id(expense_id, "Expense ID")
+    expense_id = positive_command_id(expense_id, "Item ID")
     retained = tuple(
         positive_command_id(proof_id, "Proof ID") for proof_id in retained_proof_ids
     )
@@ -161,15 +155,14 @@ def replace_expense_proofs(
 
     with database.transaction(write=True) as connection:
         exists = connection.execute(
-            "SELECT 1 FROM expenses WHERE id=?", (expense_id,)
+            "SELECT 1 FROM inventory_items WHERE id=?", (expense_id,)
         ).fetchone()
         if exists is None:
-            raise NotFoundError(f"Expense {expense_id} does not exist.")
+            raise NotFoundError(f"Item {expense_id} does not exist.")
         current_rows = connection.execute(
-            """SELECT ep.proof_id,ep.position,pf.file_name
-                 FROM expense_proofs ep
-                 JOIN proof_files pf ON pf.id=ep.proof_id
-                WHERE ep.expense_id=? ORDER BY ep.position""",
+            """SELECT ip.proof_id,ip.position,ip.file_name
+                 FROM item_proofs ip
+                WHERE ip.item_id=? ORDER BY ip.position""",
             (expense_id,),
         ).fetchall()
         current = {int(row["proof_id"]): row for row in current_rows}
@@ -178,7 +171,7 @@ def replace_expense_proofs(
         )
         if missing is not None:
             raise ValidationError(
-                f"Proof {missing} is not attached to expense {expense_id}."
+                f"Proof {missing} is not attached to item {expense_id}."
             )
         names = [
             str(current[proof_id]["file_name"]).casefold() for proof_id in retained
@@ -189,7 +182,7 @@ def replace_expense_proofs(
 
         removed = tuple(proof_id for proof_id in current if proof_id not in retained)
         connection.executemany(
-            "DELETE FROM expense_proofs WHERE expense_id=? AND proof_id=?",
+            "DELETE FROM item_proofs WHERE item_id=? AND proof_id=?",
             ((expense_id, proof_id) for proof_id in removed),
         )
         next_position = (
@@ -203,38 +196,40 @@ def replace_expense_proofs(
         record_audit_event(
             connection,
             "proofs_updated",
-            "expense",
+            "item",
             expense_id,
             f"Updated proofs: {len(retained)} kept, {len(additions)} added.",
         )
 
 
 def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:
-    ids = unique_command_ids(expense_ids, "Expense ID")
+    ids = unique_command_ids(expense_ids, "Item ID")
     with database.transaction(write=True) as connection:
         rows = select_expense_rows(connection, ids)
         if len(rows) != len(ids):
             found = {row["id"] for row in rows}
             missing = next(item_id for item_id in ids if item_id not in found)
-            raise NotFoundError(f"Expense {missing} does not exist.")
+            raise NotFoundError(f"Item {missing} does not exist.")
         for row in rows:
             if row["pc_id"] is not None:
                 raise ValidationError(
-                    f"Expense {row['id']} belongs to PC '{row['pc_name']}'."
+                    f"Item {row['id']} belongs to PC '{row['pc_name']}'."
                 )
             if row["sale_id"] is not None:
                 raise ValidationError(
-                    f"Expense {row['id']} has sale history. Undo the sale first."
+                    f"Item {row['id']} has sale history. Undo the sale first."
                 )
         for row in rows:
             record_audit_event(
                 connection,
                 "deleted",
-                "expense",
+                "item",
                 int(row["id"]),
                 f"Deleted {row['item_type']} '{row['name']}'.",
             )
-        connection.executemany("DELETE FROM expenses WHERE id=?", ((i,) for i in ids))
+        connection.executemany(
+            "DELETE FROM inventory_items WHERE id=?", ((i,) for i in ids)
+        )
 
 
 def update_expense(
@@ -243,65 +238,71 @@ def update_expense(
     *,
     database: Database,
 ) -> None:
-    """Replace every editable field while preserving the expense identity."""
-    expense_id = positive_command_id(expense_id, "Expense ID")
+    """Replace every editable field while preserving the item identity."""
+    expense_id = positive_command_id(expense_id, "Item ID")
     with database.transaction(write=True) as connection:
         rows = select_expense_rows(connection, [expense_id])
         if not rows:
-            raise NotFoundError(f"Expense {expense_id} does not exist.")
+            raise NotFoundError(f"Item {expense_id} does not exist.")
         row = rows[0]
-        if row["sale_id"] is not None:
-            raise ValidationError(
-                f"Expense {expense_id} has sale history and cannot be edited."
-            )
-
         pc_id = int(row["pc_id"]) if row["pc_id"] is not None else None
-        pc_name = str(row["pc_name"]) if row["pc_name"] is not None else None
-        pc_expense_ids: tuple[int, ...] = ()
         if pc_id is not None:
-            if pc_name is None:
-                raise DatabaseIntegrityError(
-                    f"Expense {expense_id} has an invalid PC relationship."
-                )
             membership = connection.execute(
-                """SELECT pp.expense_id,e.price_cents
-                     FROM pc_parts pp JOIN expenses e ON e.id=pp.expense_id
+                """SELECT pp.item_id,e.price_cents
+                     FROM pc_parts pp JOIN inventory_items e ON e.id=pp.item_id
                     WHERE pp.pc_id=? ORDER BY pp.position""",
                 (pc_id,),
             ).fetchall()
-            pc_expense_ids = tuple(int(part["expense_id"]) for part in membership)
             bounded_cents_total(
                 (
                     replacement.price_cents
-                    if int(part["expense_id"]) == expense_id
+                    if int(part["item_id"]) == expense_id
                     else int(part["price_cents"])
                     for part in membership
                 ),
                 "Combined PC cost",
             )
-            connection.execute("DELETE FROM assembled_pcs WHERE id=?", (pc_id,))
+
+        linked_sale = connection.execute(
+            """SELECT s.id,s.sale_date FROM sales s
+               JOIN sale_items si ON si.sale_id=s.id
+               WHERE si.item_id=?""",
+            (expense_id,),
+        ).fetchone()
+        if (
+            linked_sale is not None
+            and replacement.purchase_date.isoformat() > linked_sale["sale_date"]
+        ):
+            raise ValidationError(
+                "Purchase date cannot be after the recorded sale date."
+            )
+        if linked_sale is not None:
+            sale_items = connection.execute(
+                """SELECT si.item_id,i.price_cents FROM sale_items si
+                   JOIN inventory_items i ON i.id=si.item_id
+                   WHERE si.sale_id=?""",
+                (linked_sale["id"],),
+            )
+            bounded_cents_total(
+                (
+                    replacement.price_cents
+                    if int(item["item_id"]) == expense_id
+                    else int(item["price_cents"])
+                    for item in sale_items
+                ),
+                "Combined sale cost",
+            )
 
         result = connection.execute(
-            """UPDATE expenses
-                  SET name=?,item_type=?,price_cents=?,purchase_date=?
+            """UPDATE inventory_items
+                  SET name=?,item_type=?,price_cents=?,purchase_date=?,vendor=?,
+                      serial_number=?,storage_location=?,condition=?,warranty_until=?,notes=?
                 WHERE id=?""",
             (
                 replacement.name,
                 replacement.item_type,
                 replacement.price_cents,
                 replacement.purchase_date.isoformat(),
-                expense_id,
-            ),
-        )
-        if result.rowcount != 1:
-            raise NotFoundError(f"Expense {expense_id} does not exist.")
-
-        connection.execute(
-            """UPDATE expense_details
-                  SET vendor=?,serial_number=?,storage_location=?,condition=?,
-                      warranty_until=?,notes=?
-                WHERE expense_id=?""",
-            (
                 replacement.details.vendor,
                 replacement.details.serial_number,
                 replacement.details.storage_location,
@@ -313,22 +314,12 @@ def update_expense(
                 expense_id,
             ),
         )
-
-        if pc_id is not None:
-            connection.executemany(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,?)",
-                (
-                    (pc_id, part_id, position)
-                    for position, part_id in enumerate(pc_expense_ids)
-                ),
-            )
-            connection.execute(
-                "INSERT INTO assembled_pcs (id,name) VALUES (?,?)", (pc_id, pc_name)
-            )
+        if result.rowcount != 1:
+            raise NotFoundError(f"Item {expense_id} does not exist.")
         record_audit_event(
             connection,
             "updated",
-            "expense",
+            "item",
             expense_id,
             f"Updated {replacement.item_type} '{replacement.name}'.",
         )

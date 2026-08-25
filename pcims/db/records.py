@@ -11,13 +11,12 @@ from pcims.proofs import ProofSummary
 EXPENSE_SELECT = """
     SELECT e.id,e.name,e.item_type,e.price_cents,e.purchase_date,
            p.id AS pc_id,p.name AS pc_name,si.sale_id,
-           d.vendor,d.serial_number,d.storage_location,d.condition,
-           d.warranty_until,d.notes
-      FROM expenses e
-      JOIN expense_details d ON d.expense_id=e.id
-      LEFT JOIN pc_parts pp ON pp.expense_id=e.id
-      LEFT JOIN assembled_pcs p ON p.id=pp.pc_id
-      LEFT JOIN sale_items si ON si.expense_id=e.id
+           e.vendor,e.serial_number,e.storage_location,e.condition,
+           e.warranty_until,e.notes
+      FROM inventory_items e
+      LEFT JOIN pc_parts pp ON pp.item_id=e.id
+      LEFT JOIN pcs p ON p.id=pp.pc_id
+      LEFT JOIN sale_items si ON si.item_id=e.id
 """
 
 

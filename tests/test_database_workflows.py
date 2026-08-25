@@ -1,5 +1,4 @@
 import gc
-import hashlib
 import os
 import sqlite3
 import stat
@@ -30,11 +29,8 @@ from pcims.db.expense_commands import add_expenses
 from pcims.db.gate import gate_for
 from pcims.db.reads import ReadQueries
 from pcims.db.schema import (
-    SCHEMA_15_DEFINITIONS,
     SCHEMA_DEFINITIONS,
     SCHEMA_VERSION,
-    UPGRADABLE_SCHEMA_DEFINITIONS,
-    UPGRADABLE_SCHEMA_VERSION,
     initialize_database,
 )
 from pcims.domain import ItemDetails, NewExpense, SaleTerms
@@ -218,7 +214,9 @@ class DatabaseWorkflowTests(unittest.TestCase):
         active_database = self.database
         self.buy("Existing", "Extra", 1)
         with active_database.transaction() as reader:
-            before = reader.execute("SELECT COUNT(*) FROM expenses").fetchone()[0]
+            before = reader.execute("SELECT COUNT(*) FROM inventory_items").fetchone()[
+                0
+            ]
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
                     add_expenses,
@@ -226,7 +224,9 @@ class DatabaseWorkflowTests(unittest.TestCase):
                     database=active_database,
                 )
                 future.result(timeout=2)
-            during = reader.execute("SELECT COUNT(*) FROM expenses").fetchone()[0]
+            during = reader.execute("SELECT COUNT(*) FROM inventory_items").fetchone()[
+                0
+            ]
 
         self.assertEqual(before, 1)
         self.assertEqual(during, before)
@@ -378,29 +378,6 @@ class DatabaseWorkflowTests(unittest.TestCase):
             [NewExpense.create(name, item_type, price, purchase_date)]
         )[0]
 
-    def create_schema_14_database(self, name="schema-14.db"):
-        path = Path(self.temporary_directory.name) / name
-        database = Database.at(path)
-        definitions = tuple(UPGRADABLE_SCHEMA_DEFINITIONS.values())
-        with closing(database.connect(create=True)) as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            for statement in definitions:
-                connection.execute(statement)
-            connection.execute(f"PRAGMA user_version={UPGRADABLE_SCHEMA_VERSION}")
-            connection.commit()
-        return database
-
-    def create_schema_15_database(self, name="schema-15.db"):
-        path = Path(self.temporary_directory.name) / name
-        database = Database.at(path)
-        with closing(database.connect(create=True)) as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            for statement in SCHEMA_15_DEFINITIONS.values():
-                connection.execute(statement)
-            connection.execute("PRAGMA user_version=15")
-            connection.commit()
-        return database
-
     def test_item_details_are_created_updated_and_searchable(self):
         details = ItemDetails(
             vendor="Retailer",
@@ -423,48 +400,15 @@ class DatabaseWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(self.services.list_expenses()[-1].details, replacement_details)
 
-    def test_schema_15_upgrade_populates_details_and_keeps_proofs(self):
-        database = self.create_schema_15_database()
-        proof = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.4\n%%EOF")
-        services = ApplicationServices(database)
-        with database.transaction(write=True) as connection:
-            connection.execute(
-                """INSERT INTO expenses
-                   (id,name,item_type,price_cents,purchase_date)
-                   VALUES (1,'Existing','Extra',100,?)""",
-                (TEST_DATE.isoformat(),),
-            )
-            digest = hashlib.sha256(proof.content).hexdigest()
-            connection.execute(
-                """INSERT INTO proof_files
-                   (id,file_name,media_type,content,sha256) VALUES (1,?,?,?,?)""",
-                (proof.file_name, proof.media_type, proof.content, digest),
-            )
-            connection.execute(
-                "INSERT INTO expense_proofs (expense_id,proof_id,position) VALUES (1,1,0)"
-            )
-
-        services.initialize()
-
-        stored = services.list_expenses()[0]
-        self.assertTrue(stored.details.is_empty)
-        self.assertEqual(stored.proofs[0].file_name, "receipt.pdf")
-        self.assertEqual(
-            len(list(database.path.parent.glob("backups/*_pre_v16_*.db"))), 1
-        )
-
-    def test_activity_is_append_only_and_committed_with_changes(self):
+    def test_activity_is_clearable_and_committed_with_changes(self):
         expense_id = self.buy("Tracked", "Extra", 10)
         self.services.update_expense(
             expense_id, NewExpense.create("Tracked 2", "Extra", 11, TEST_DATE)
         )
         events = self.services.list_activity()
         self.assertEqual([event.action for event in events[:2]], ["updated", "created"])
-        with (
-            self.database.transaction(write=True) as connection,
-            self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"),
-        ):
-            connection.execute("DELETE FROM audit_events")
+        self.services.clear_activity()
+        self.assertEqual(self.services.list_activity(), ())
 
     def test_history_searches_purchase_metadata_and_sale_names(self):
         expense_id = self.services.add_expenses(
@@ -544,12 +488,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
                 )
             }
-            expense_columns = [
-                row[1] for row in database.execute("PRAGMA table_info(expenses)")
+            item_columns = [
+                row[1] for row in database.execute("PRAGMA table_info(inventory_items)")
             ]
-            pc_columns = [
-                row[1] for row in database.execute("PRAGMA table_info(assembled_pcs)")
-            ]
+            pc_columns = [row[1] for row in database.execute("PRAGMA table_info(pcs)")]
             sale_columns = [
                 row[1] for row in database.execute("PRAGMA table_info(sales)")
             ]
@@ -557,50 +499,54 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(
             tables,
             {
-                "expenses",
-                "assembled_pcs",
+                "schema_migrations",
+                "inventory_items",
+                "pcs",
                 "pc_parts",
                 "sales",
                 "sale_items",
                 "proof_files",
-                "expense_proofs",
-                "expense_details",
-                "audit_events",
+                "item_proofs",
+                "activity_events",
             },
         )
         self.assertEqual(
-            expense_columns, ["id", "name", "item_type", "price_cents", "purchase_date"]
+            item_columns,
+            [
+                "id",
+                "name",
+                "item_type",
+                "price_cents",
+                "purchase_date",
+                "vendor",
+                "serial_number",
+                "storage_location",
+                "condition",
+                "warranty_until",
+                "notes",
+            ],
         )
-        self.assertEqual(pc_columns, ["id", "name"])
+        self.assertEqual(pc_columns, ["id", "name", "status"])
         self.assertEqual(
             sale_columns,
-            ["id", "name", "kind", "selling_price_cents", "sale_date"],
+            ["id", "name", "kind", "pc_id", "selling_price_cents", "sale_date"],
         )
 
     def test_pc_name_uniqueness_is_enforced_by_unicode_database_collation(self):
         first_id = self.buy("First", "CPU", 10)
-        second_id = self.buy("Second", "RAM", 10)
         with (
             self.assertRaises(sqlite3.IntegrityError),
             self.database.transaction(write=True) as database,
         ):
+            database.execute("INSERT INTO pcs (id,name) VALUES (101,?)", ("Straße",))
             database.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (101,?,0)",
+                "INSERT INTO pc_parts (pc_id,item_id,position) VALUES (101,?,0)",
                 (first_id,),
             )
-            database.execute(
-                "INSERT INTO assembled_pcs (id,name) VALUES (101,?)", ("Straße",)
-            )
-            database.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (102,?,0)",
-                (second_id,),
-            )
-            database.execute(
-                "INSERT INTO assembled_pcs (id,name) VALUES (102,?)", ("STRASSE",)
-            )
+            database.execute("INSERT INTO pcs (id,name) VALUES (102,?)", ("STRASSE",))
 
         with self.database.transaction() as database:
-            count = database.execute("SELECT COUNT(*) FROM assembled_pcs").fetchone()[0]
+            count = database.execute("SELECT COUNT(*) FROM pcs").fetchone()[0]
         self.assertEqual(count, 0)
 
     def test_schema_rejects_wrong_types_and_out_of_range_money_directly(self):
@@ -612,7 +558,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 self.database.transaction(write=True) as database,
             ):
                 database.execute(
-                    "INSERT INTO expenses "
+                    "INSERT INTO inventory_items "
                     "(name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
                     ("Invalid", "CPU", invalid, TEST_DATE.isoformat()),
                 )
@@ -625,7 +571,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 self.database.transaction(write=True) as database,
             ):
                 database.execute(
-                    "INSERT INTO expenses "
+                    "INSERT INTO inventory_items "
                     "(name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
                     ("Impossible", "CPU", 100, invalid_date),
                 )
@@ -638,7 +584,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 self.database.transaction(write=True) as database,
             ):
                 database.execute(
-                    "INSERT INTO expenses "
+                    "INSERT INTO inventory_items "
                     "(name,item_type,price_cents,purchase_date) VALUES (?,?,?,?)",
                     (invalid_name, "CPU", 100, TEST_DATE.isoformat()),
                 )
@@ -666,28 +612,28 @@ class DatabaseWorkflowTests(unittest.TestCase):
                     """EXPLAIN QUERY PLAN
                        SELECT e.id,e.name,e.item_type,e.price_cents,e.purchase_date,
                               p.id AS pc_id,p.name AS pc_name,si.sale_id
-                         FROM expenses e
-                         LEFT JOIN pc_parts pp ON pp.expense_id=e.id
-                         LEFT JOIN assembled_pcs p ON p.id=pp.pc_id
-                         LEFT JOIN sale_items si ON si.expense_id=e.id
+                         FROM inventory_items e
+                         LEFT JOIN pc_parts pp ON pp.item_id=e.id
+                         LEFT JOIN pcs p ON p.id=pp.pc_id
+                         LEFT JOIN sale_items si ON si.item_id=e.id
                         WHERE si.sale_id IS NULL
                         ORDER BY e.item_type,e.name COLLATE PCIMS_NOCASE,e.id"""
                 )
             )
 
-        self.assertIn("expenses_inventory_order", plan)
+        self.assertIn("inventory_items_order", plan)
         self.assertNotIn("TEMP B-TREE", plan)
 
     def test_missing_or_changed_schema_objects_are_rejected(self):
         with self.database.transaction() as database:
-            database.execute("DROP TRIGGER pc_part_must_not_be_sold")
+            database.execute("DROP TRIGGER pc_part_item_must_be_available")
         with self.assertRaisesRegex(SchemaVersionError, "missing"):
             initialize_database(self.database)
 
         with self.database.transaction() as database:
             database.execute(
-                """CREATE TRIGGER pc_part_must_not_be_sold
-                   AFTER INSERT ON expenses BEGIN SELECT 1; END"""
+                """CREATE TRIGGER pc_part_item_must_be_available
+                   AFTER INSERT ON inventory_items BEGIN SELECT 1; END"""
             )
         with self.assertRaisesRegex(SchemaVersionError, "changed"):
             initialize_database(self.database)
@@ -711,91 +657,11 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 ["id", "price"],
             )
 
-    def test_exact_schema_14_is_backed_up_and_upgraded_without_data_loss(self):
-        database = self.create_schema_14_database()
-        with database.transaction(write=True) as connection:
-            connection.executemany(
-                """INSERT INTO expenses
-                   (id,name,item_type,price_cents,purchase_date)
-                   VALUES (?,?,?,?,?)""",
-                (
-                    (7, "Available", "Extra", 1_000, TEST_DATE.isoformat()),
-                    (8, "PC part", "CPU", 2_000, TEST_DATE.isoformat()),
-                    (9, "Sold", "RAM", 3_000, TEST_DATE.isoformat()),
-                ),
-            )
-            connection.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (4,8,0)"
-            )
-            connection.execute(
-                "INSERT INTO assembled_pcs (id,name) VALUES (4,'Existing PC')"
-            )
-            connection.execute(
-                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (5,9,0)"
-            )
-            connection.execute(
-                """INSERT INTO sales
-                   (id,name,kind,selling_price_cents,sale_date)
-                   VALUES (5,'Sold','item',4000,?)""",
-                (TEST_DATE.isoformat(),),
-            )
-
-        initialize_database(database)
-        validate_database(database.path)
-        services = ApplicationServices(database)
-
-        self.assertEqual([item.id for item in services.list_expenses()], [7, 8, 9])
-        self.assertEqual(services.list_pcs()[0].parts[0].id, 8)
-        self.assertEqual(services.list_sales()[0].items[0].id, 9)
-        new_id = services.add_expenses(
-            [NewExpense.create("New", "Extra", 1, TEST_DATE)]
-        )[0]
-        self.assertEqual(new_id, 10)
-
-        backups = list(database.path.parent.glob("backups/*_pre_v16_*.db"))
-        self.assertEqual(len(backups), 1)
-        with closing(Database.at(backups[0]).connect()) as backup:
-            self.assertEqual(
-                backup.execute("PRAGMA user_version").fetchone()[0],
-                UPGRADABLE_SCHEMA_VERSION,
-            )
-            self.assertEqual(
-                backup.execute("PRAGMA integrity_check").fetchone()[0], "ok"
-            )
-
-    def test_failed_schema_14_upgrade_rolls_back_the_live_database(self):
-        database = self.create_schema_14_database("failed-upgrade.db")
-        broken = dict(SCHEMA_15_DEFINITIONS)
-        broken[("trigger", "expense_proof_count_limit")] = (
-            "CREATE TRIGGER broken nonsense"
-        )
-
-        with (
-            patch("pcims.db.schema.SCHEMA_15_DEFINITIONS", broken),
-            self.assertRaises(sqlite3.OperationalError),
-        ):
-            initialize_database(database)
-
-        with closing(database.connect()) as connection:
-            self.assertEqual(
-                connection.execute("PRAGMA user_version").fetchone()[0],
-                UPGRADABLE_SCHEMA_VERSION,
-            )
-            self.assertIn(
-                "AUTOINCREMENT",
-                connection.execute(
-                    "SELECT sql FROM sqlite_master WHERE name='expenses'"
-                ).fetchone()[0],
-            )
-        self.assertEqual(
-            len(list(database.path.parent.glob("backups/*_pre_v16_*.db"))), 1
-        )
-
     def test_failed_first_run_schema_creation_rolls_back_completely(self):
         partial_path = Path(self.temporary_directory.name) / "partial.db"
         partial_database = Database.at(partial_path)
         broken = dict(SCHEMA_DEFINITIONS)
-        broken[("trigger", "sale_item_must_not_be_in_pc")] = (
+        broken[("trigger", "sale_item_assignment_valid")] = (
             "CREATE TRIGGER broken nonsense"
         )
 
@@ -819,7 +685,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
     def test_current_version_with_wrong_layout_is_rejected(self):
         with self.database.transaction() as database:
             database.execute(
-                "ALTER TABLE expenses RENAME COLUMN price_cents TO price_value"
+                "ALTER TABLE inventory_items RENAME COLUMN price_cents TO price_value"
             )
 
         with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
@@ -833,7 +699,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         with self.database.transaction() as database:
             database.execute("DROP TABLE legacy_income")
-            database.execute("DROP TRIGGER sale_item_must_not_be_in_pc")
+            database.execute("DROP TRIGGER sale_item_assignment_valid")
         with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
             initialize_database(self.database)
 
@@ -841,7 +707,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         item_id = self.buy("CPU", "CPU", 10)
         with closing(sqlite3.connect(self.database_path)) as database:
             database.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (999,?,0)",
+                "INSERT INTO pc_parts (pc_id,item_id,position) VALUES (999,?,0)",
                 (item_id,),
             )
             database.commit()
@@ -854,7 +720,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         with closing(self.database.connect()) as database:
             database.execute("PRAGMA ignore_check_constraints=ON")
             database.execute(
-                "UPDATE expenses SET purchase_date='2025-99-99' WHERE id=?",
+                "UPDATE inventory_items SET purchase_date='2025-99-99' WHERE id=?",
                 (item_id,),
             )
             database.commit()
@@ -931,7 +797,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(
-                database.execute("SELECT COUNT(*) FROM expense_proofs").fetchone()[0],
+                database.execute("SELECT COUNT(*) FROM item_proofs").fetchone()[0],
                 3,
             )
         self.services.delete_expenses(identifiers)
@@ -940,6 +806,34 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 database.execute("SELECT COUNT(*) FROM proof_files").fetchone()[0],
                 0,
             )
+
+    def test_proof_content_is_deduplicated_independently_of_attachment_name(self):
+        content = b"%PDF-1.4\nsame receipt content"
+        first = NewProof("invoice.pdf", "application/pdf", content)
+        second = NewProof("renamed-invoice.pdf", "application/pdf", content)
+        item_ids = self.services.add_expenses(
+            [
+                NewExpense.create("CPU", "CPU", 10, TEST_DATE),
+                NewExpense.create("RAM", "RAM", 10, TEST_DATE),
+            ],
+            [(first,), (second,)],
+        )
+
+        with self.database.transaction() as database:
+            self.assertEqual(
+                database.execute("SELECT COUNT(*) FROM proof_files").fetchone()[0], 1
+            )
+            names = [
+                row[0]
+                for row in database.execute(
+                    "SELECT file_name FROM item_proofs ORDER BY item_id"
+                )
+            ]
+        self.assertEqual(names, ["invoice.pdf", "renamed-invoice.pdf"])
+        self.assertEqual(
+            self.services.proof_file(item_ids[1], 1).file_name,
+            "renamed-invoice.pdf",
+        )
 
     def test_proofs_can_be_replaced_after_sale_and_orphans_are_removed(self):
         pdf = NewProof("invoice.pdf", "application/pdf", b"%PDF-1.4\ninvoice")
@@ -968,7 +862,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             names = [
                 row[0]
                 for row in database.execute(
-                    "SELECT file_name FROM proof_files ORDER BY file_name"
+                    "SELECT file_name FROM item_proofs ORDER BY file_name"
                 )
             ]
         self.assertEqual(names, ["payment.png"])
@@ -1030,7 +924,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.database.transaction() as database,
         ):
             database.execute(
-                "UPDATE pc_parts SET position=0 WHERE pc_id=? AND expense_id=?",
+                "UPDATE pc_parts SET position=0 WHERE pc_id=? AND item_id=?",
                 (pc_id, ids[1]),
             )
 
@@ -1239,18 +1133,37 @@ class DatabaseWorkflowTests(unittest.TestCase):
         ]
         self.assertEqual(len(selects), 1)
 
-    def test_sold_expense_names_are_immutable_historical_data(self):
+    def test_sold_items_can_be_corrected_and_sale_reads_current_item_data(self):
         item_id = self.buy("Historical CPU", "CPU", 30)
         self.services.sell_items([item_id], SaleTerms.create(50))
 
-        with self.assertRaisesRegex(ValidationError, "sale history"):
-            self.services.update_expense(
-                item_id,
-                NewExpense.create("Rewritten CPU", "GPU", 40, TEST_DATE),
-            )
+        self.services.update_expense(
+            item_id,
+            NewExpense.create("Corrected CPU", "CPU", 40, TEST_DATE),
+        )
 
         sale = self.services.list_sales()[0]
-        self.assertEqual(sale.items[0].name, "Historical CPU")
+        self.assertEqual(sale.items[0].name, "Corrected CPU")
+        self.assertEqual(sale.cost_cents, 4_000)
+
+    def test_sold_item_correction_cannot_overflow_combined_sale_cost(self):
+        first_id = self.buy(
+            "Maximum less one", "Extra", f"{(MAX_MONEY_CENTS - 1) / 100:.2f}"
+        )
+        second_id = self.buy("One cent", "Extra", "0.01")
+        self.services.sell_items([first_id, second_id], SaleTerms.create(1, TEST_DATE))
+
+        with self.assertRaisesRegex(ValidationError, "Combined sale cost"):
+            self.services.update_expense(
+                second_id,
+                NewExpense.create("Two cents", "Extra", "0.02", TEST_DATE),
+            )
+        self.assertEqual(
+            next(
+                item for item in self.services.list_expenses() if item.id == second_id
+            ).price_cents,
+            1,
+        )
 
     def test_pc_sale_and_undo_preserve_duplicate_component_types(self):
         ids = [
@@ -1289,176 +1202,88 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.services.list_sales(), ())
         validate_database(self.database_path)
 
-    def test_database_triggers_enforce_cross_row_money_and_date_rules(self):
-        maximum = MAX_MONEY_CENTS
-        first_id = self.buy("First", "Extra", f"{maximum // 100}.{maximum % 100:02d}")
-        second_id = self.buy("Second", "Extra", "0.01")
-        pc_id = 101
+    def test_database_rules_keep_pc_and_sale_assignments_consistent(self):
+        component_id = self.buy("PC part", "CPU", 100)
+        spare_id = self.buy("Spare", "RAM", 40)
+        pc_id = self.services.assemble_pc("Rules PC", [component_id])
+
         with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "combined PC cost"),
+            self.assertRaisesRegex(sqlite3.IntegrityError, "does not belong"),
             self.database.transaction(write=True) as database,
         ):
+            sale_id = database.execute(
+                """INSERT INTO sales
+                   (name,kind,pc_id,selling_price_cents,sale_date)
+                   VALUES ('Invalid item sale','item',NULL,100,?)""",
+                (TEST_DATE.isoformat(),),
+            ).lastrowid
             database.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,0)",
-                (pc_id, first_id),
-            )
-            database.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,1)",
-                (pc_id, second_id),
+                "INSERT INTO sale_items (sale_id,item_id,position) VALUES (?,?,0)",
+                (sale_id, component_id),
             )
 
-        sale_item = self.buy("Future purchase", "CPU", 1, "2026-08-14")
-        sale_id = 101
+        sale_id = self.services.sell_pc(pc_id, SaleTerms.create(150, TEST_DATE))
         with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "valid items"),
-            self.database.transaction(write=True) as database,
-        ):
-            database.execute(
-                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,0)",
-                (sale_id, sale_item),
-            )
-            database.execute(
-                "INSERT INTO sales (id,name,kind,selling_price_cents,sale_date) "
-                "VALUES (?,'Invalid chronology','item',100,'2026-08-13')",
-                (sale_id,),
-            )
-
-        sale_first = self.buy(
-            "Maximum sale cost",
-            "Extra",
-            f"{maximum // 100}.{maximum % 100:02d}",
-        )
-        sale_second = self.buy("Overflow sale cost", "Extra", "0.01")
-        bounded_sale_id = 102
-        with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "valid items"),
-            self.database.transaction(write=True) as database,
-        ):
-            database.execute(
-                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,0)",
-                (bounded_sale_id, sale_first),
-            )
-            database.execute(
-                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,1)",
-                (bounded_sale_id, sale_second),
-            )
-            database.execute(
-                "INSERT INTO sales (id,name,kind,selling_price_cents,sale_date) "
-                "VALUES (?,'Bounded sale','item',100,'2026-08-14')",
-                (bounded_sale_id,),
-            )
-
-    def test_empty_or_post_publication_aggregate_membership_is_rejected(self):
-        item_ids = [self.buy("Part", "Extra", 1) for _ in range(2)]
-        with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "must contain"),
-            self.database.transaction(write=True) as database,
-        ):
-            database.execute(
-                "INSERT INTO assembled_pcs (id,name) VALUES (100,'Empty PC')"
-            )
-        with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "valid items"),
-            self.database.transaction(write=True) as database,
-        ):
-            database.execute(
-                "INSERT INTO sales "
-                "(id,name,kind,selling_price_cents,sale_date) "
-                "VALUES (100,'Empty sale','item',100,'2026-08-14')"
-            )
-
-        pc_id = self.services.assemble_pc("Published PC", [item_ids[0]])
-        with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "published PC"),
-            self.database.transaction(write=True) as database,
-        ):
-            database.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (?,?,1)",
-                (pc_id, item_ids[1]),
-            )
-
-        sale_id = self.services.sell_items([item_ids[1]], SaleTerms.create(2))
-        later_id = self.buy("Later part", "Extra", 1)
-        with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "published sale"),
-            self.database.transaction(write=True) as database,
-        ):
-            database.execute(
-                "INSERT INTO sale_items (sale_id,expense_id,position) VALUES (?,?,1)",
-                (sale_id, later_id),
-            )
-
-    def test_linked_values_and_memberships_are_immutable_in_storage(self):
-        item_id = self.buy("Linked", "CPU", 10)
-        pc_id = self.services.assemble_pc("Immutable PC", [item_id])
-
-        invalid_updates = (
-            ("UPDATE expenses SET price_cents=price_cents+1 WHERE id=?", item_id),
-            ("UPDATE pc_parts SET position=1 WHERE pc_id=?", pc_id),
-        )
-        for statement, identifier in invalid_updates:
-            with (
-                self.subTest(statement=statement),
-                self.assertRaises(sqlite3.IntegrityError),
-                self.database.transaction(write=True) as database,
-            ):
-                database.execute(statement, (identifier,))
-
-        with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "deleting the PC"),
+            self.assertRaisesRegex(sqlite3.IntegrityError, "sold PC membership"),
             self.database.transaction(write=True) as database,
         ):
             database.execute("DELETE FROM pc_parts WHERE pc_id=?", (pc_id,))
-
-        sold_id = self.buy("Sold linked", "RAM", 5, "2026-08-14")
-        sale_id = self.services.sell_items(
-            [sold_id], SaleTerms.create(10, "2026-08-14")
-        )
-        sale_updates = (
-            "UPDATE sales SET sale_date='2026-08-13' WHERE id=?",
-            "UPDATE sale_items SET position=1 WHERE sale_id=?",
-        )
-        for statement in sale_updates:
-            with (
-                self.subTest(statement=statement),
-                self.assertRaises(sqlite3.IntegrityError),
-                self.database.transaction(write=True) as database,
-            ):
-                database.execute(statement, (sale_id,))
-
-        for statement, identifier in (
-            ("UPDATE expenses SET name='Rewritten' WHERE id=?", sold_id),
-            ("UPDATE expenses SET item_type='Extra' WHERE id=?", sold_id),
-        ):
-            with (
-                self.subTest(statement=statement),
-                self.assertRaisesRegex(sqlite3.IntegrityError, "description"),
-                self.database.transaction(write=True) as database,
-            ):
-                database.execute(statement, (identifier,))
-
         with (
-            self.assertRaisesRegex(sqlite3.IntegrityError, "deleting the sale"),
+            self.assertRaisesRegex(sqlite3.IntegrityError, "sold PC membership"),
             self.database.transaction(write=True) as database,
         ):
-            database.execute("DELETE FROM sale_items WHERE sale_id=?", (sale_id,))
+            database.execute(
+                "INSERT INTO pc_parts (pc_id,item_id,position) VALUES (?,?,1)",
+                (pc_id, spare_id),
+            )
+
+        self.services.undo_sale(sale_id)
+        self.services.update_pc(pc_id, "Rules PC corrected", [component_id, spare_id])
+        self.assertEqual(
+            [part.id for part in self.services.list_pcs()[0].parts],
+            [component_id, spare_id],
+        )
+
+    def test_semantic_validation_rejects_empty_aggregate_records(self):
+        with self.database.transaction(write=True) as database:
+            database.execute("INSERT INTO pcs (name) VALUES ('Empty PC')")
+        with self.assertRaisesRegex(DatabaseIntegrityError, "has no components"):
+            initialize_database(self.database)
+        with self.database.transaction(write=True) as database:
+            database.execute("DELETE FROM pcs WHERE name='Empty PC'")
+
+        with self.database.transaction(write=True) as database:
+            database.execute(
+                """INSERT INTO sales
+                   (name,kind,pc_id,selling_price_cents,sale_date)
+                   VALUES ('Empty sale','item',NULL,100,?)""",
+                (TEST_DATE.isoformat(),),
+            )
+        with self.assertRaisesRegex(DatabaseIntegrityError, "invalid items"):
+            initialize_database(self.database)
+
+    def test_linked_items_and_active_pc_memberships_are_correctable(self):
+        first_id = self.buy("Linked CPU", "CPU", 10)
+        second_id = self.buy("Linked RAM", "RAM", 5)
+        pc_id = self.services.assemble_pc("Correctable PC", [first_id])
 
         self.services.update_expense(
-            item_id,
-            NewExpense.create(
-                "Renamed linked item",
-                "GPU",
-                12,
-                TEST_DATE - timedelta(days=1),
-            ),
+            first_id,
+            NewExpense.create("Corrected CPU", "CPU", 12, TEST_DATE),
         )
-        self.services.disassemble_pc(pc_id)
+        self.services.update_pc(pc_id, "Corrected PC", [first_id, second_id])
+        sale_id = self.services.sell_pc(pc_id, SaleTerms.create(25, TEST_DATE))
+        self.services.update_expense(
+            second_id,
+            NewExpense.create("Corrected RAM", "RAM", 6, TEST_DATE),
+        )
         self.services.undo_sale(sale_id)
-        self.assertEqual(self.services.list_pcs(), ())
-        self.assertEqual(self.services.list_sales(), ())
-        self.assertIn(
-            "Renamed linked item",
-            {item.name for item in self.services.list_expenses()},
+
+        restored = self.services.list_pcs()[0]
+        self.assertEqual(restored.id, pc_id)
+        self.assertEqual(restored.name, "Corrected PC")
+        self.assertEqual(
+            [part.name for part in restored.parts], ["Corrected CPU", "Corrected RAM"]
         )
 
     def test_component_edit_replaces_every_field_inside_an_assembled_pc(self):
@@ -1506,12 +1331,12 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual([part.item_type for part in pc.parts], ["RAM", "RAM", "RAM"])
         with self.database.transaction() as connection:
             memberships = connection.execute(
-                """SELECT expense_id,position FROM pc_parts
-                    WHERE pc_id=? ORDER BY position""",
+                """SELECT item_id,position FROM pc_parts
+                   WHERE pc_id=? ORDER BY position""",
                 (pc_id,),
             ).fetchall()
         self.assertEqual(
-            [(row["expense_id"], row["position"]) for row in memberships],
+            [(row["item_id"], row["position"]) for row in memberships],
             [(first_ram, 0), (added_ram, 1), (removed_ram, 2)],
         )
 
@@ -1533,7 +1358,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
             other_part,
         )
 
-    def test_pc_names_and_undo_collisions_are_case_insensitive(self):
+    def test_sold_pc_keeps_its_case_insensitive_name_reservation(self):
         original_id = self.buy("Original", "CPU", 100)
         spare_id = self.buy("Spare", "RAM", 50)
         pc_id = self.services.assemble_pc("Gaming PC", [original_id])
@@ -1542,25 +1367,21 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.services.assemble_pc(" gaming pc ", [spare_id])
 
         sale_id = self.services.sell_pc(pc_id, SaleTerms.create(120))
-        self.services.assemble_pc("GAMING PC", [spare_id])
-        with self.assertRaisesRegex(ValidationError, "Cannot undo"):
-            self.services.undo_sale(sale_id)
-        self.assertEqual([pc.name for pc in self.services.list_pcs()], ["GAMING PC"])
-        self.assertEqual(len(self.services.list_sales()), 1)
+        with self.assertRaisesRegex(ValidationError, "already exists"):
+            self.services.assemble_pc("GAMING PC", [spare_id])
+        self.services.undo_sale(sale_id)
+        self.assertEqual([pc.name for pc in self.services.list_pcs()], ["Gaming PC"])
+        self.assertEqual(self.services.list_sales(), ())
 
-    def test_pc_undo_name_collision_has_no_partial_effect(self):
+    def test_pc_undo_restores_same_identity_without_reconstruction(self):
         old_id = self.buy("Old CPU", "CPU", 100)
-        sale_id = self.services.sell_pc(
-            self.services.assemble_pc("PC 1", [old_id]), SaleTerms.create(125)
-        )
-        new_id = self.buy("New CPU", "CPU", 80)
-        self.services.assemble_pc("PC 1", [new_id])
+        pc_id = self.services.assemble_pc("PC 1", [old_id])
+        sale_id = self.services.sell_pc(pc_id, SaleTerms.create(125))
+        self.services.undo_sale(sale_id)
 
-        with self.assertRaisesRegex(ValidationError, "PC 1"):
-            self.services.undo_sale(sale_id)
-
-        self.assertEqual(len(self.services.list_sales()), 1)
+        self.assertEqual(self.services.list_sales(), ())
         self.assertEqual(len(self.services.list_pcs()), 1)
+        self.assertEqual(self.services.list_pcs()[0].id, pc_id)
 
     def test_sale_date_before_any_purchase_is_rejected_atomically(self):
         tomorrow = TEST_DATE + timedelta(days=1)
@@ -1967,7 +1788,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         item_id = self.buy("CPU", "CPU", 10)
         with closing(sqlite3.connect(self.database_path)) as database:
             database.execute(
-                "INSERT INTO pc_parts (pc_id,expense_id,position) VALUES (999,?,0)",
+                "INSERT INTO pc_parts (pc_id,item_id,position) VALUES (999,?,0)",
                 (item_id,),
             )
             database.commit()

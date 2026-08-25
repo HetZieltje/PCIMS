@@ -1,6 +1,8 @@
-"""Append-only application activity recording inside caller transactions."""
+"""Lightweight application activity recording inside caller transactions."""
 
 import sqlite3
+
+from pcims.db.connection import Database
 
 
 def record_audit_event(
@@ -12,7 +14,7 @@ def record_audit_event(
 ) -> None:
     """Record a concise event atomically with the business change."""
     connection.execute(
-        """INSERT INTO audit_events
+        """INSERT INTO activity_events
            (occurred_at,action,entity_type,entity_id,summary)
            VALUES (strftime('%Y-%m-%dT%H:%M:%SZ','now'),?,?,?,?)""",
         (
@@ -22,3 +24,9 @@ def record_audit_event(
             summary,
         ),
     )
+
+
+def clear_activity(*, database: Database) -> None:
+    """Clear the optional activity feed without touching inventory records."""
+    with database.transaction(write=True) as connection:
+        connection.execute("DELETE FROM activity_events")

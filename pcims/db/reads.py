@@ -40,12 +40,12 @@ class ReadQueries:
             placeholders = ",".join("?" for _ in chunk)
             rows = self.connection.execute(
                 # Only the internally generated placeholder count changes SQL.
-                f"""SELECT ep.expense_id,pf.id,pf.file_name,pf.media_type,
+                f"""SELECT ip.item_id AS expense_id,pf.id,ip.file_name,pf.media_type,
                            length(pf.content) AS size_bytes
-                      FROM expense_proofs ep
-                      JOIN proof_files pf ON pf.id=ep.proof_id
-                     WHERE ep.expense_id IN ({placeholders})
-                     ORDER BY ep.expense_id,ep.position""",  # nosec B608
+                      FROM item_proofs ip
+                      JOIN proof_files pf ON pf.id=ip.proof_id
+                     WHERE ip.item_id IN ({placeholders})
+                     ORDER BY ip.item_id,ip.position""",  # nosec B608
                 chunk,
             )
             for row in rows:
@@ -76,16 +76,17 @@ class ReadQueries:
             pattern = f"%{search}%"
             return int(
                 self.connection.execute(
-                    """SELECT COUNT(*) FROM expenses e
-                       JOIN expense_details d ON d.expense_id=e.id
-                       WHERE e.name LIKE ? OR e.item_type LIKE ? OR d.vendor LIKE ?
-                          OR d.serial_number LIKE ? OR d.storage_location LIKE ?
-                          OR d.notes LIKE ?""",
+                    """SELECT COUNT(*) FROM inventory_items e
+                       WHERE e.name LIKE ? OR e.item_type LIKE ? OR e.vendor LIKE ?
+                          OR e.serial_number LIKE ? OR e.storage_location LIKE ?
+                          OR e.notes LIKE ?""",
                     (pattern,) * 6,
                 ).fetchone()[0]
             )
         return int(
-            self.connection.execute("SELECT COUNT(*) FROM expenses").fetchone()[0]
+            self.connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone()[
+                0
+            ]
         )
 
     def list_expense_page(
@@ -96,9 +97,9 @@ class ReadQueries:
         if search:
             pattern = f"%{search}%"
             where = (
-                " WHERE e.name LIKE ? OR e.item_type LIKE ? OR d.vendor LIKE ?"
-                " OR d.serial_number LIKE ? OR d.storage_location LIKE ?"
-                " OR d.notes LIKE ?"
+                " WHERE e.name LIKE ? OR e.item_type LIKE ? OR e.vendor LIKE ?"
+                " OR e.serial_number LIKE ? OR e.storage_location LIKE ?"
+                " OR e.notes LIKE ?"
             )
             parameters = (pattern,) * 6
         rows = self.connection.execute(
@@ -109,14 +110,14 @@ class ReadQueries:
 
     def list_expense_names(self) -> tuple[str, ...]:
         rows = self.connection.execute(
-            "SELECT DISTINCT name FROM expenses ORDER BY name COLLATE PCIMS_NOCASE,name"
+            "SELECT DISTINCT name FROM inventory_items ORDER BY name COLLATE PCIMS_NOCASE,name"
         )
         return tuple(str(row[0]) for row in rows)
 
     def list_audit_events(self, limit: int = 500) -> tuple[AuditEvent, ...]:
         rows = self.connection.execute(
             """SELECT id,occurred_at,action,entity_type,entity_id,summary
-                 FROM audit_events ORDER BY id DESC LIMIT ?""",
+                 FROM activity_events ORDER BY id DESC LIMIT ?""",
             (limit,),
         )
         return tuple(
@@ -152,10 +153,10 @@ class ReadQueries:
 
     def list_pcs(self) -> tuple[AssembledPC, ...]:
         pcs = self.connection.execute(
-            "SELECT id,name FROM assembled_pcs ORDER BY name,id"
+            "SELECT id,name FROM pcs WHERE status='active' ORDER BY name,id"
         ).fetchall()
         rows = self.connection.execute(
-            EXPENSE_SELECT + " WHERE p.id IS NOT NULL ORDER BY p.id,pp.position"
+            EXPENSE_SELECT + " WHERE p.status='active' ORDER BY p.id,pp.position"
         ).fetchall()
         parts_by_pc: dict[int, list[Expense]] = {int(pc["id"]): [] for pc in pcs}
         for expense in self._expenses_from_rows(rows):
@@ -221,11 +222,11 @@ class ReadQueries:
                     ORDER BY id DESC LIMIT ? OFFSET ?
                )
                SELECT p.id,p.name,p.kind,p.selling_price_cents,p.sale_date,
-                      COUNT(si.expense_id) AS item_count,
+                      COUNT(si.item_id) AS item_count,
                       COALESCE(SUM(e.price_cents),0) AS cost_cents
                  FROM page p
                  JOIN sale_items si ON si.sale_id=p.id
-                 JOIN expenses e ON e.id=si.expense_id
+                 JOIN inventory_items e ON e.id=si.item_id
                 GROUP BY p.id,p.name,p.kind,p.selling_price_cents,p.sale_date
                 ORDER BY p.id DESC""",
             (search, pattern, pattern, limit, offset),
@@ -245,7 +246,7 @@ class ReadQueries:
 
     def count_sale_items(self, sale_id: int) -> int:
         row = self.connection.execute(
-            """SELECT COUNT(si.expense_id)
+            """SELECT COUNT(si.item_id)
                  FROM sales s LEFT JOIN sale_items si ON si.sale_id=s.id
                 WHERE s.id=? GROUP BY s.id""",
             (sale_id,),
@@ -266,15 +267,15 @@ class ReadQueries:
 
     def proof_file(self, expense_id: int, proof_id: int) -> NewProof:
         row = self.connection.execute(
-            """SELECT pf.file_name,pf.media_type,pf.content,pf.sha256
-                 FROM expense_proofs ep
-                 JOIN proof_files pf ON pf.id=ep.proof_id
-                WHERE ep.expense_id=? AND ep.proof_id=?""",
+            """SELECT ip.file_name,pf.media_type,pf.content,pf.sha256
+                 FROM item_proofs ip
+                 JOIN proof_files pf ON pf.id=ip.proof_id
+                WHERE ip.item_id=? AND ip.proof_id=?""",
             (expense_id, proof_id),
         ).fetchone()
         if row is None:
             raise NotFoundError(
-                f"Proof {proof_id} is not attached to expense {expense_id}."
+                f"Proof {proof_id} is not attached to item {expense_id}."
             )
         content = bytes(row["content"])
         if hashlib.sha256(content).hexdigest() != row["sha256"]:
@@ -290,12 +291,12 @@ class ReadQueries:
         expense_cents, income_cents, cost_cents, inventory_cents = (
             self.connection.execute(
                 """SELECT
-                   (SELECT COALESCE(SUM(price_cents),0) FROM expenses),
+                   (SELECT COALESCE(SUM(price_cents),0) FROM inventory_items),
                    (SELECT COALESCE(SUM(selling_price_cents),0) FROM sales),
                    (SELECT COALESCE(SUM(e.price_cents),0)
-                      FROM sale_items si JOIN expenses e ON e.id=si.expense_id),
-                   (SELECT COALESCE(SUM(e.price_cents),0) FROM expenses e
-                      LEFT JOIN sale_items si ON si.expense_id=e.id
+                      FROM sale_items si JOIN inventory_items e ON e.id=si.item_id),
+                   (SELECT COALESCE(SUM(e.price_cents),0) FROM inventory_items e
+                      LEFT JOIN sale_items si ON si.item_id=e.id
                      WHERE si.sale_id IS NULL)"""
             ).fetchone()
         )

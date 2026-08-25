@@ -1,9 +1,10 @@
-"""Read-only activity history page."""
+"""Optional, clearable activity history page."""
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QTableView, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTableView, QVBoxLayout, QWidget
 
 from pcims.app.async_page import AsyncCommandPage
+from pcims.app.common import ask_confirmation
 from pcims.app.table_model import Column, RecordTableModel, configure_table_view
 from pcims.app.tasks import TaskManager
 from pcims.contracts import ActivityOperations
@@ -52,6 +53,12 @@ class ActivityPage(AsyncCommandPage):
         configure_table_view(self.table, self.model)
         self.table.setColumnHidden(0, True)
         layout = QVBoxLayout(self)
+        actions = QHBoxLayout()
+        actions.addStretch()
+        clear_button = QPushButton("Clear activity")
+        clear_button.clicked.connect(self.clear_activity)
+        actions.addWidget(clear_button)
+        layout.addLayout(actions)
         layout.addWidget(self.table)
 
     def load_snapshot(self) -> tuple[AuditEvent, ...]:
@@ -59,3 +66,16 @@ class ActivityPage(AsyncCommandPage):
 
     def apply_snapshot(self, events: tuple[AuditEvent, ...]) -> None:
         self.model.set_records(events)
+
+    def clear_activity(self) -> None:
+        if not ask_confirmation(
+            self,
+            "Clear activity",
+            "Clear the activity list? Inventory, PCs, purchases, and sales are unaffected.",
+        ):
+            return
+        self.run_command(
+            self.services.clear_activity,
+            self.data_changed.emit,
+            "Unable to clear activity",
+        )

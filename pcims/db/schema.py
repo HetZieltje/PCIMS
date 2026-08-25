@@ -1,373 +1,202 @@
-"""Exact schema definition, creation, and semantic integrity checks."""
+"""Clean baseline schema, creation, and semantic integrity checks."""
 
 import hashlib
-import os
 import sqlite3
-import uuid
 from contextlib import closing
-from datetime import UTC, date, datetime
-from pathlib import Path
+from datetime import date
 from typing import Literal
 
-from pcims.db.connection import (
-    Database,
-    ensure_private_directory,
-    register_database_collations,
-)
+from pcims.db.connection import Database
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_CONDITIONS, ITEM_TYPES, MAX_NAME_LENGTH, MAX_NOTES_LENGTH
 from pcims.money import MAX_MONEY_CENTS
 from pcims.proofs import MAX_PROOF_BYTES, MAX_PROOFS_PER_ITEM, NewProof
 
-SCHEMA_VERSION = 16
-UPGRADABLE_SCHEMA_VERSION = 14
+SCHEMA_VERSION = 1
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
+_ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND instr(name,char(0))=0
         AND name NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')"""
+_VALID_FILE_NAME_SQL = _VALID_NAME_SQL.replace("name", "file_name")
+
 SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
-    ("table", "expenses"): f"""CREATE TABLE expenses (
+    ("table", "schema_migrations"): """CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY CHECK (version>0),
+        name TEXT NOT NULL UNIQUE,
+        checksum TEXT NOT NULL CHECK (
+            length(checksum)=64 AND checksum NOT GLOB '*[^0-9a-f]*'),
+        applied_at TEXT NOT NULL
+    ) STRICT""",
+    ("table", "inventory_items"): f"""CREATE TABLE inventory_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL CHECK ({_VALID_NAME_SQL}),
         item_type TEXT NOT NULL CHECK (item_type IN ({_ALLOWED_TYPES_SQL})),
-        price_cents INTEGER NOT NULL
-            CHECK (price_cents >= 0 AND price_cents <= {MAX_MONEY_CENTS}),
+        price_cents INTEGER NOT NULL CHECK (price_cents BETWEEN 0 AND {MAX_MONEY_CENTS}),
         purchase_date TEXT NOT NULL
             CHECK (purchase_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-                   AND COALESCE(strftime('%Y-%m-%d',purchase_date)=purchase_date,0))
+                   AND COALESCE(strftime('%Y-%m-%d',purchase_date)=purchase_date,0)),
+        vendor TEXT NOT NULL DEFAULT ''
+            CHECK (length(vendor)<={MAX_NAME_LENGTH} AND instr(vendor,char(0))=0),
+        serial_number TEXT NOT NULL DEFAULT ''
+            CHECK (length(serial_number)<={MAX_NAME_LENGTH} AND instr(serial_number,char(0))=0),
+        storage_location TEXT NOT NULL DEFAULT ''
+            CHECK (length(storage_location)<={MAX_NAME_LENGTH} AND instr(storage_location,char(0))=0),
+        condition TEXT CHECK (condition IN ({_ALLOWED_CONDITIONS_SQL})),
+        warranty_until TEXT CHECK (
+            warranty_until IS NULL OR
+            (warranty_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+             AND COALESCE(strftime('%Y-%m-%d',warranty_until)=warranty_until,0))),
+        notes TEXT NOT NULL DEFAULT ''
+            CHECK (length(notes)<={MAX_NOTES_LENGTH} AND instr(notes,char(0))=0)
     ) STRICT""",
-    ("table", "assembled_pcs"): f"""CREATE TABLE assembled_pcs (
+    ("table", "pcs"): f"""CREATE TABLE pcs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL COLLATE PCIMS_NOCASE UNIQUE
-            CHECK ({_VALID_NAME_SQL})
+        name TEXT NOT NULL COLLATE PCIMS_NOCASE UNIQUE CHECK ({_VALID_NAME_SQL}),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','sold'))
     ) STRICT""",
     ("table", "pc_parts"): """CREATE TABLE pc_parts (
-        pc_id INTEGER NOT NULL REFERENCES assembled_pcs(id) ON DELETE CASCADE
-            DEFERRABLE INITIALLY DEFERRED,
-        expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
-        position INTEGER NOT NULL CHECK (position >= 0),
-        PRIMARY KEY (pc_id, expense_id),
-        UNIQUE (pc_id, position)
+        pc_id INTEGER NOT NULL REFERENCES pcs(id) ON DELETE CASCADE,
+        item_id INTEGER NOT NULL UNIQUE REFERENCES inventory_items(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL CHECK (position>=0),
+        PRIMARY KEY (pc_id,item_id),
+        UNIQUE (pc_id,position)
     ) STRICT""",
     ("table", "sales"): f"""CREATE TABLE sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL CHECK ({_VALID_NAME_SQL}),
-        kind TEXT NOT NULL CHECK (kind IN ('item', 'pc')),
+        kind TEXT NOT NULL CHECK (kind IN ('item','pc')),
+        pc_id INTEGER UNIQUE REFERENCES pcs(id) ON DELETE RESTRICT,
         selling_price_cents INTEGER NOT NULL
-            CHECK (selling_price_cents >= 0
-                   AND selling_price_cents <= {MAX_MONEY_CENTS}),
+            CHECK (selling_price_cents BETWEEN 0 AND {MAX_MONEY_CENTS}),
         sale_date TEXT NOT NULL
             CHECK (sale_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-                   AND COALESCE(strftime('%Y-%m-%d',sale_date)=sale_date,0))
+                   AND COALESCE(strftime('%Y-%m-%d',sale_date)=sale_date,0)),
+        CHECK ((kind='pc' AND pc_id IS NOT NULL) OR (kind='item' AND pc_id IS NULL))
     ) STRICT""",
     ("table", "sale_items"): """CREATE TABLE sale_items (
-        sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE
-            DEFERRABLE INITIALLY DEFERRED,
-        expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id) ON DELETE RESTRICT,
-        position INTEGER NOT NULL CHECK (position >= 0),
-        PRIMARY KEY (sale_id, expense_id),
-        UNIQUE (sale_id, position)
+        sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+        item_id INTEGER NOT NULL UNIQUE REFERENCES inventory_items(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL CHECK (position>=0),
+        PRIMARY KEY (sale_id,item_id),
+        UNIQUE (sale_id,position)
     ) STRICT""",
+    ("table", "proof_files"): f"""CREATE TABLE proof_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        media_type TEXT NOT NULL CHECK (media_type IN
+            ('application/pdf','image/png','image/jpeg','image/webp')),
+        content BLOB NOT NULL CHECK (length(content) BETWEEN 1 AND {MAX_PROOF_BYTES}),
+        sha256 TEXT NOT NULL UNIQUE CHECK (
+            length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*')
+    ) STRICT""",
+    ("table", "item_proofs"): f"""CREATE TABLE item_proofs (
+        item_id INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+        proof_id INTEGER NOT NULL REFERENCES proof_files(id) ON DELETE RESTRICT,
+        file_name TEXT NOT NULL CHECK ({_VALID_FILE_NAME_SQL}),
+        position INTEGER NOT NULL CHECK (position>=0),
+        PRIMARY KEY (item_id,proof_id),
+        UNIQUE (item_id,position)
+    ) STRICT""",
+    ("table", "activity_events"): """CREATE TABLE activity_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        occurred_at TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (length(trim(action)) BETWEEN 1 AND 200),
+        entity_type TEXT NOT NULL CHECK (length(trim(entity_type)) BETWEEN 1 AND 200),
+        entity_id INTEGER CHECK (entity_id IS NULL OR entity_id>0),
+        summary TEXT NOT NULL CHECK (length(trim(summary)) BETWEEN 1 AND 1000)
+    ) STRICT""",
+    ("index", "inventory_items_order"): """CREATE INDEX inventory_items_order
+        ON inventory_items(item_type,name COLLATE PCIMS_NOCASE,id)""",
     (
         "index",
-        "expenses_inventory_order",
-    ): """CREATE INDEX expenses_inventory_order
-        ON expenses(item_type,name COLLATE PCIMS_NOCASE,id)""",
-    ("trigger", "pc_part_must_not_be_sold"): """CREATE TRIGGER pc_part_must_not_be_sold
+        "item_proofs_by_file",
+    ): """CREATE INDEX item_proofs_by_file ON item_proofs(proof_id)""",
+    (
+        "index",
+        "activity_events_newest",
+    ): """CREATE INDEX activity_events_newest ON activity_events(id DESC)""",
+    (
+        "trigger",
+        "pc_part_item_must_be_available",
+    ): """CREATE TRIGGER pc_part_item_must_be_available
         BEFORE INSERT ON pc_parts
-        WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=NEW.expense_id)
-        BEGIN
-            SELECT RAISE(ABORT, 'sold expense cannot be assigned to a PC');
-        END""",
+        WHEN EXISTS (SELECT 1 FROM sale_items WHERE item_id=NEW.item_id)
+        BEGIN SELECT RAISE(ABORT,'sold item cannot be assigned to a PC'); END""",
     (
         "trigger",
-        "pc_part_insert_requires_new_pc",
-    ): """CREATE TRIGGER pc_part_insert_requires_new_pc
+        "pc_part_target_must_be_active",
+    ): """CREATE TRIGGER pc_part_target_must_be_active
         BEFORE INSERT ON pc_parts
-        WHEN EXISTS (SELECT 1 FROM assembled_pcs WHERE id=NEW.pc_id)
-        BEGIN
-            SELECT RAISE(ABORT, 'published PC membership is immutable');
-        END""",
+        WHEN (SELECT status FROM pcs WHERE id=NEW.pc_id)<>'active'
+        BEGIN SELECT RAISE(ABORT,'sold PC membership cannot be changed'); END""",
     (
         "trigger",
-        "assembled_pc_requires_parts",
-    ): """CREATE TRIGGER assembled_pc_requires_parts
-        AFTER INSERT ON assembled_pcs
-        WHEN NOT EXISTS (SELECT 1 FROM pc_parts WHERE pc_id=NEW.id)
-        BEGIN
-            SELECT RAISE(ABORT, 'assembled PC must contain components');
-        END""",
-    (
-        "trigger",
-        "sale_item_must_not_be_in_pc",
-    ): """CREATE TRIGGER sale_item_must_not_be_in_pc
-        BEFORE INSERT ON sale_items
-        WHEN EXISTS (SELECT 1 FROM pc_parts WHERE expense_id=NEW.expense_id)
-        BEGIN
-            SELECT RAISE(ABORT, 'assembled expense cannot be sold separately');
-        END""",
-    (
-        "trigger",
-        "sale_item_insert_requires_new_sale",
-    ): """CREATE TRIGGER sale_item_insert_requires_new_sale
-        BEFORE INSERT ON sale_items
-        WHEN EXISTS (SELECT 1 FROM sales WHERE id=NEW.sale_id)
-        BEGIN
-            SELECT RAISE(ABORT, 'published sale membership is immutable');
-        END""",
-    ("trigger", "pc_part_cost_limit"): """CREATE TRIGGER pc_part_cost_limit
-        BEFORE INSERT ON pc_parts
-        WHEN (SELECT price_cents FROM expenses WHERE id=NEW.expense_id)
-             + COALESCE((SELECT SUM(e.price_cents)
-                           FROM pc_parts pp
-                           JOIN expenses e ON e.id=pp.expense_id
-                          WHERE pp.pc_id=NEW.pc_id),0) > 99999999999
-        BEGIN
-            SELECT RAISE(ABORT, 'combined PC cost is too large');
-        END""",
-    (
-        "trigger",
-        "sale_item_cost_and_date_limit",
-    ): """CREATE TRIGGER sale_item_cost_and_date_limit
-        BEFORE INSERT ON sale_items
-        WHEN EXISTS (
-            SELECT 1 FROM expenses e JOIN sales s ON s.id=NEW.sale_id
-             WHERE e.id=NEW.expense_id
-               AND (e.purchase_date>s.sale_date
-                    OR e.price_cents
-                       + COALESCE((SELECT SUM(existing.price_cents)
-                                     FROM sale_items si
-                                     JOIN expenses existing
-                                       ON existing.id=si.expense_id
-                                    WHERE si.sale_id=NEW.sale_id),0)
-                       > 99999999999)
-        )
-        BEGIN
-            SELECT RAISE(ABORT, 'sale item has invalid cost or date');
-        END""",
-    (
-        "trigger",
-        "sale_requires_valid_items",
-    ): """CREATE TRIGGER sale_requires_valid_items
-        AFTER INSERT ON sales
-        WHEN NOT EXISTS (SELECT 1 FROM sale_items WHERE sale_id=NEW.id)
-          OR EXISTS (
-              SELECT 1 FROM sale_items si JOIN expenses e ON e.id=si.expense_id
-               WHERE si.sale_id=NEW.id AND e.purchase_date>NEW.sale_date
-          )
-          OR (SELECT SUM(e.price_cents)
-                FROM sale_items si JOIN expenses e ON e.id=si.expense_id
-               WHERE si.sale_id=NEW.id) > 99999999999
-        BEGIN
-            SELECT RAISE(ABORT, 'sale must contain valid items');
-        END""",
-    (
-        "trigger",
-        "linked_expense_value_is_immutable",
-    ): """CREATE TRIGGER linked_expense_value_is_immutable
-        BEFORE UPDATE OF price_cents,purchase_date ON expenses
-        WHEN EXISTS (SELECT 1 FROM pc_parts WHERE expense_id=OLD.id)
-          OR EXISTS (SELECT 1 FROM sale_items WHERE expense_id=OLD.id)
-        BEGIN
-            SELECT RAISE(ABORT, 'linked expense value is immutable');
-        END""",
-    (
-        "trigger",
-        "sold_expense_description_is_immutable",
-    ): """CREATE TRIGGER sold_expense_description_is_immutable
-        BEFORE UPDATE OF name,item_type ON expenses
-        WHEN EXISTS (SELECT 1 FROM sale_items WHERE expense_id=OLD.id)
-        BEGIN
-            SELECT RAISE(ABORT, 'sold expense description is immutable');
-        END""",
-    ("trigger", "sale_record_is_immutable"): """CREATE TRIGGER sale_record_is_immutable
-        BEFORE UPDATE ON sales
-        BEGIN
-            SELECT RAISE(ABORT, 'sale records are immutable');
-        END""",
-    ("trigger", "pc_part_is_immutable"): """CREATE TRIGGER pc_part_is_immutable
-        BEFORE UPDATE ON pc_parts
-        BEGIN
-            SELECT RAISE(ABORT, 'PC membership rows are immutable');
-        END""",
-    (
-        "trigger",
-        "pc_part_delete_requires_pc_delete",
-    ): """CREATE TRIGGER pc_part_delete_requires_pc_delete
+        "active_pc_part_delete_only",
+    ): """CREATE TRIGGER active_pc_part_delete_only
         BEFORE DELETE ON pc_parts
-        WHEN EXISTS (SELECT 1 FROM assembled_pcs WHERE id=OLD.pc_id)
-        BEGIN
-            SELECT RAISE(ABORT, 'disassemble by deleting the PC record');
-        END""",
-    ("trigger", "sale_item_is_immutable"): """CREATE TRIGGER sale_item_is_immutable
-        BEFORE UPDATE ON sale_items
-        BEGIN
-            SELECT RAISE(ABORT, 'sale membership rows are immutable');
-        END""",
+        WHEN EXISTS (SELECT 1 FROM pcs WHERE id=OLD.pc_id AND status<>'active')
+        BEGIN SELECT RAISE(ABORT,'sold PC membership cannot be changed'); END""",
+    ("trigger", "sold_pc_name_is_locked"): """CREATE TRIGGER sold_pc_name_is_locked
+        BEFORE UPDATE OF name ON pcs WHEN OLD.status='sold'
+        BEGIN SELECT RAISE(ABORT,'sold PC cannot be edited'); END""",
     (
         "trigger",
-        "sale_item_delete_requires_sale_delete",
-    ): """CREATE TRIGGER sale_item_delete_requires_sale_delete
-        BEFORE DELETE ON sale_items
-        WHEN EXISTS (SELECT 1 FROM sales WHERE id=OLD.sale_id)
-        BEGIN
-            SELECT RAISE(ABORT, 'undo by deleting the sale record');
-        END""",
+        "sold_pc_cannot_be_deleted",
+    ): """CREATE TRIGGER sold_pc_cannot_be_deleted
+        BEFORE DELETE ON pcs WHEN OLD.status='sold'
+        BEGIN SELECT RAISE(ABORT,'undo the PC sale before deleting the PC'); END""",
+    (
+        "trigger",
+        "sale_item_assignment_valid",
+    ): """CREATE TRIGGER sale_item_assignment_valid
+        BEFORE INSERT ON sale_items
+        WHEN NOT EXISTS (
+            SELECT 1 FROM sales s WHERE s.id=NEW.sale_id AND (
+                (s.kind='item' AND NOT EXISTS (
+                    SELECT 1 FROM pc_parts WHERE item_id=NEW.item_id))
+                OR (s.kind='pc' AND EXISTS (
+                    SELECT 1 FROM pc_parts WHERE pc_id=s.pc_id AND item_id=NEW.item_id))
+            )
+        )
+        BEGIN SELECT RAISE(ABORT,'item does not belong in this sale'); END""",
+    ("trigger", "pc_sale_sets_status"): """CREATE TRIGGER pc_sale_sets_status
+        AFTER INSERT ON sales WHEN NEW.kind='pc'
+        BEGIN UPDATE pcs SET status='sold' WHERE id=NEW.pc_id; END""",
+    (
+        "trigger",
+        "pc_sale_delete_restores_status",
+    ): """CREATE TRIGGER pc_sale_delete_restores_status
+        AFTER DELETE ON sales WHEN OLD.kind='pc'
+        BEGIN UPDATE pcs SET status='active' WHERE id=OLD.pc_id; END""",
+    (
+        "trigger",
+        "proof_link_delete_removes_orphan",
+    ): """CREATE TRIGGER proof_link_delete_removes_orphan
+        AFTER DELETE ON item_proofs
+        WHEN NOT EXISTS (SELECT 1 FROM item_proofs WHERE proof_id=OLD.proof_id)
+        BEGIN DELETE FROM proof_files WHERE id=OLD.proof_id; END""",
+    ("trigger", "item_proof_count_limit"): f"""CREATE TRIGGER item_proof_count_limit
+        BEFORE INSERT ON item_proofs
+        WHEN (SELECT COUNT(*) FROM item_proofs WHERE item_id=NEW.item_id)>={MAX_PROOFS_PER_ITEM}
+        BEGIN SELECT RAISE(ABORT,'too many proofs for item'); END""",  # nosec B608
+    ("trigger", "item_proof_name_unique"): """CREATE TRIGGER item_proof_name_unique
+        BEFORE INSERT ON item_proofs
+        WHEN EXISTS (SELECT 1 FROM item_proofs WHERE item_id=NEW.item_id
+                      AND file_name=NEW.file_name COLLATE PCIMS_NOCASE)
+        BEGIN SELECT RAISE(ABORT,'duplicate proof file name for item'); END""",
 }
-
-SCHEMA_14_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
-UPGRADABLE_SCHEMA_DEFINITIONS = SCHEMA_14_DEFINITIONS
-_VALID_PROOF_NAME_SQL = _VALID_NAME_SQL.replace("name", "file_name")
-SCHEMA_DEFINITIONS.update(
-    {
-        ("table", "proof_files"): f"""CREATE TABLE proof_files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_name TEXT NOT NULL CHECK ({_VALID_PROOF_NAME_SQL}),
-            media_type TEXT NOT NULL CHECK (media_type IN
-                ('application/pdf','image/png','image/jpeg','image/webp')),
-            content BLOB NOT NULL CHECK (
-                length(content) BETWEEN 1 AND {MAX_PROOF_BYTES}),
-            sha256 TEXT NOT NULL CHECK (
-                length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
-            UNIQUE (sha256,file_name)
-        ) STRICT""",
-        ("table", "expense_proofs"): """CREATE TABLE expense_proofs (
-            expense_id INTEGER NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
-            proof_id INTEGER NOT NULL REFERENCES proof_files(id) ON DELETE RESTRICT,
-            position INTEGER NOT NULL CHECK (position >= 0),
-            PRIMARY KEY (expense_id, proof_id),
-            UNIQUE (expense_id, position)
-        ) STRICT""",
-        (
-            "index",
-            "expense_proofs_by_file",
-        ): """CREATE INDEX expense_proofs_by_file ON expense_proofs(proof_id)""",
-        (
-            "trigger",
-            "proof_link_delete_removes_orphan",
-        ): """CREATE TRIGGER proof_link_delete_removes_orphan
-            AFTER DELETE ON expense_proofs
-            WHEN NOT EXISTS (
-                SELECT 1 FROM expense_proofs WHERE proof_id=OLD.proof_id)
-            BEGIN
-                DELETE FROM proof_files WHERE id=OLD.proof_id;
-            END""",
-        (
-            "trigger",
-            "linked_proof_file_is_immutable",
-        ): """CREATE TRIGGER linked_proof_file_is_immutable
-            BEFORE UPDATE ON proof_files
-            WHEN EXISTS (
-                SELECT 1 FROM expense_proofs WHERE proof_id=OLD.id)
-            BEGIN
-                SELECT RAISE(ABORT, 'linked proof file is immutable');
-            END""",
-        # The only interpolated value is the source-controlled integer limit.
-        (
-            "trigger",
-            "expense_proof_count_limit",
-        ): f"""CREATE TRIGGER expense_proof_count_limit
-            BEFORE INSERT ON expense_proofs
-            WHEN (SELECT COUNT(*) FROM expense_proofs
-                   WHERE expense_id=NEW.expense_id) >= {MAX_PROOFS_PER_ITEM}
-            BEGIN
-                SELECT RAISE(ABORT, 'too many proofs for expense');
-            END""",  # nosec B608
-        (
-            "trigger",
-            "expense_proof_name_unique",
-        ): """CREATE TRIGGER expense_proof_name_unique
-            BEFORE INSERT ON expense_proofs
-            WHEN EXISTS (
-                SELECT 1 FROM expense_proofs ep
-                JOIN proof_files existing ON existing.id=ep.proof_id
-                JOIN proof_files added ON added.id=NEW.proof_id
-                WHERE ep.expense_id=NEW.expense_id
-                  AND existing.file_name=added.file_name COLLATE PCIMS_NOCASE)
-            BEGIN
-                SELECT RAISE(ABORT, 'duplicate proof file name for expense');
-            END""",
-    }
-)
-
-SCHEMA_15_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
-_ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
-SCHEMA_DEFINITIONS.update(
-    {
-        ("table", "expense_details"): f"""CREATE TABLE expense_details (
-            expense_id INTEGER PRIMARY KEY
-                REFERENCES expenses(id) ON DELETE CASCADE,
-            vendor TEXT NOT NULL DEFAULT ''
-                CHECK (length(vendor)<={MAX_NAME_LENGTH} AND instr(vendor,char(0))=0),
-            serial_number TEXT NOT NULL DEFAULT ''
-                CHECK (length(serial_number)<={MAX_NAME_LENGTH}
-                       AND instr(serial_number,char(0))=0),
-            storage_location TEXT NOT NULL DEFAULT ''
-                CHECK (length(storage_location)<={MAX_NAME_LENGTH}
-                       AND instr(storage_location,char(0))=0),
-            condition TEXT CHECK (condition IN ({_ALLOWED_CONDITIONS_SQL})),
-            warranty_until TEXT CHECK (
-                warranty_until IS NULL OR
-                (warranty_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-                 AND COALESCE(strftime('%Y-%m-%d',warranty_until)=warranty_until,0))),
-            notes TEXT NOT NULL DEFAULT ''
-                CHECK (length(notes)<={MAX_NOTES_LENGTH} AND instr(notes,char(0))=0)
-        ) STRICT""",
-        ("table", "audit_events"): """CREATE TABLE audit_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            occurred_at TEXT NOT NULL,
-            action TEXT NOT NULL CHECK (length(trim(action)) BETWEEN 1 AND 200),
-            entity_type TEXT NOT NULL
-                CHECK (length(trim(entity_type)) BETWEEN 1 AND 200),
-            entity_id INTEGER CHECK (entity_id IS NULL OR entity_id>0),
-            summary TEXT NOT NULL CHECK (length(trim(summary)) BETWEEN 1 AND 1000)
-        ) STRICT""",
-        ("index", "audit_events_newest"): """CREATE INDEX audit_events_newest
-            ON audit_events(id DESC)""",
-        (
-            "trigger",
-            "expense_insert_creates_details",
-        ): """CREATE TRIGGER expense_insert_creates_details
-            AFTER INSERT ON expenses
-            BEGIN
-                INSERT INTO expense_details (expense_id) VALUES (NEW.id);
-            END""",
-        (
-            "trigger",
-            "audit_event_is_immutable_on_update",
-        ): """CREATE TRIGGER audit_event_is_immutable_on_update
-            BEFORE UPDATE ON audit_events
-            BEGIN
-                SELECT RAISE(ABORT, 'audit events are immutable');
-            END""",
-        (
-            "trigger",
-            "audit_event_is_immutable_on_delete",
-        ): """CREATE TRIGGER audit_event_is_immutable_on_delete
-            BEFORE DELETE ON audit_events
-            BEGIN
-                SELECT RAISE(ABORT, 'audit events are immutable');
-            END""",
-    }
-)
-
-SCHEMA_DEFINITIONS_BY_VERSION = {
-    14: SCHEMA_14_DEFINITIONS,
-    15: SCHEMA_15_DEFINITIONS,
-    16: SCHEMA_DEFINITIONS,
-}
-
-for _money_trigger in (
-    "pc_part_cost_limit",
-    "sale_item_cost_and_date_limit",
-    "sale_requires_valid_items",
-):
-    if str(MAX_MONEY_CENTS) not in SCHEMA_DEFINITIONS[("trigger", _money_trigger)]:
-        raise RuntimeError(f"{_money_trigger} does not use the current money limit.")
 
 
 def _normalize_schema_sql(sql: object) -> str:
     return " ".join(str(sql).split()).casefold()
+
+
+SCHEMA_CHECKSUM = hashlib.sha256(
+    "\n".join(
+        f"{kind}:{name}:{_normalize_schema_sql(sql)}"
+        for (kind, name), sql in sorted(SCHEMA_DEFINITIONS.items())
+    ).encode("utf-8")
+).hexdigest()
 
 
 def _schema_objects(database: sqlite3.Connection) -> dict[tuple[str, str], str]:
@@ -381,177 +210,129 @@ def _schema_objects(database: sqlite3.Connection) -> dict[tuple[str, str], str]:
     }
 
 
-def _validate_schema_definition(
-    database: sqlite3.Connection,
-    expected_version: int,
-    definitions: dict[tuple[str, str], str],
-) -> None:
+def validate_schema(database: sqlite3.Connection) -> None:
+    """Require the exact clean-baseline schema and its migration marker."""
     actual_version = int(database.execute("PRAGMA user_version").fetchone()[0])
     actual = _schema_objects(database)
-    expected = {key: _normalize_schema_sql(sql) for key, sql in definitions.items()}
-    if actual_version == expected_version and actual == expected:
-        return
-
-    missing = sorted(name for _, name in expected.keys() - actual.keys())
-    unexpected = sorted(name for _, name in actual.keys() - expected.keys())
-    changed = sorted(
-        name
-        for kind, name in expected.keys() & actual.keys()
-        if expected[(kind, name)] != actual[(kind, name)]
-    )
-    differences: list[str] = []
-    if actual_version != expected_version:
-        differences.append(f"version {actual_version}, expected {expected_version}")
-    if missing:
-        differences.append(f"missing {', '.join(missing)}")
-    if unexpected:
-        differences.append(f"unexpected {', '.join(unexpected)}")
-    if changed:
-        differences.append(f"changed {', '.join(changed)}")
-    raise SchemaVersionError(
-        "Database schema is incompatible with the current format"
-        f" ({'; '.join(differences)}). Restore a current-format backup or choose "
-        "a new database."
-    )
-
-
-def validate_schema(database: sqlite3.Connection) -> None:
-    """Require the exact current tables, constraints, indexes, and triggers."""
-    _validate_schema_definition(database, SCHEMA_VERSION, SCHEMA_DEFINITIONS)
-
-
-def _validate_dates(database: sqlite3.Connection) -> None:
-    date_fields = (
-        ("expenses", "purchase date", "SELECT id,purchase_date FROM expenses"),
-        ("sales", "sale date", "SELECT id,sale_date FROM sales"),
-    )
-    for table, label, query in date_fields:
-        for row_id, stored_date in database.execute(query):
-            try:
-                date.fromisoformat(stored_date)
-            except (TypeError, ValueError) as exc:
-                raise DatabaseIntegrityError(
-                    f"Database contains an invalid {label} in {table} row {row_id}."
-                ) from exc
-    has_details = database.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='expense_details'"
-    ).fetchone()
-    if has_details:
-        for expense_id, stored_date in database.execute(
-            "SELECT expense_id,warranty_until FROM expense_details "
-            "WHERE warranty_until IS NOT NULL"
-        ):
-            try:
-                date.fromisoformat(stored_date)
-            except (TypeError, ValueError) as exc:
-                raise DatabaseIntegrityError(
-                    "Database contains an invalid warranty date for expense "
-                    f"{expense_id}."
-                ) from exc
-
-
-def _validate_money(database: sqlite3.Connection) -> None:
-    money_fields = (
-        (
-            "expenses",
-            "SELECT id FROM expenses WHERE price_cents<0 OR price_cents>? LIMIT 1",
-        ),
-        (
-            "sales",
-            """SELECT id FROM sales
-               WHERE selling_price_cents<0 OR selling_price_cents>? LIMIT 1""",
-        ),
-    )
-    for table, query in money_fields:
-        invalid = database.execute(query, (MAX_MONEY_CENTS,)).fetchone()
-        if invalid:
-            raise DatabaseIntegrityError(
-                f"Database contains an invalid monetary value in {table} "
-                f"row {invalid[0]}."
-            )
-
-
-def _validate_relationships(database: sqlite3.Connection) -> None:
-    has_details = database.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='expense_details'"
-    ).fetchone()
-    if has_details:
-        missing_details = database.execute(
-            """SELECT e.id FROM expenses e
-               LEFT JOIN expense_details d ON d.expense_id=e.id
-               WHERE d.expense_id IS NULL LIMIT 1"""
-        ).fetchone()
-        if missing_details:
-            raise DatabaseIntegrityError(
-                f"Expense {missing_details[0]} has no item-details record."
-            )
-    conflict = database.execute(
-        """SELECT pp.expense_id FROM pc_parts pp
-           JOIN sale_items si ON si.expense_id=pp.expense_id LIMIT 1"""
-    ).fetchone()
-    if conflict:
-        raise DatabaseIntegrityError(
-            f"Expense {conflict[0]} is both assigned to a PC and recorded as sold."
+    expected = {
+        key: _normalize_schema_sql(sql) for key, sql in SCHEMA_DEFINITIONS.items()
+    }
+    if actual_version != SCHEMA_VERSION or actual != expected:
+        missing = sorted(name for _, name in expected.keys() - actual.keys())
+        unexpected = sorted(name for _, name in actual.keys() - expected.keys())
+        changed = sorted(
+            key[1]
+            for key in expected.keys() & actual.keys()
+            if expected[key] != actual[key]
         )
+        differences = []
+        if actual_version != SCHEMA_VERSION:
+            differences.append(f"version {actual_version}, expected {SCHEMA_VERSION}")
+        if missing:
+            differences.append(f"missing {', '.join(missing)}")
+        if unexpected:
+            differences.append(f"unexpected {', '.join(unexpected)}")
+        if changed:
+            differences.append(f"changed {', '.join(changed)}")
+        raise SchemaVersionError(
+            "Database schema is incompatible with the clean pre-release baseline"
+            f" ({'; '.join(differences)}). Choose a new database."
+        )
+    markers = database.execute(
+        "SELECT version,name,checksum FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    if len(markers) != 1 or tuple(markers[0]) != (
+        SCHEMA_VERSION,
+        "initial inventory baseline",
+        SCHEMA_CHECKSUM,
+    ):
+        raise SchemaVersionError("Database baseline marker is missing or invalid.")
+
+
+def _valid_iso_date(value: object) -> bool:
+    try:
+        date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def validate_current_data(database: sqlite3.Connection) -> None:
+    """Reject structurally valid databases with inconsistent inventory state."""
+    for item_id, purchase_date, warranty_until in database.execute(
+        "SELECT id,purchase_date,warranty_until FROM inventory_items"
+    ):
+        if not _valid_iso_date(purchase_date):
+            raise DatabaseIntegrityError(
+                f"Item {item_id} has an invalid purchase date."
+            )
+        if warranty_until is not None and not _valid_iso_date(warranty_until):
+            raise DatabaseIntegrityError(
+                f"Item {item_id} has an invalid warranty date."
+            )
+    for sale_id, sale_date in database.execute("SELECT id,sale_date FROM sales"):
+        if not _valid_iso_date(sale_date):
+            raise DatabaseIntegrityError(f"Sale {sale_id} has an invalid sale date.")
 
     empty_pc = database.execute(
-        """SELECT p.id FROM assembled_pcs p
-           LEFT JOIN pc_parts pp ON pp.pc_id=p.id
-           GROUP BY p.id HAVING COUNT(pp.expense_id)=0 LIMIT 1"""
+        """SELECT p.id FROM pcs p LEFT JOIN pc_parts pp ON pp.pc_id=p.id
+           GROUP BY p.id HAVING COUNT(pp.item_id)=0 LIMIT 1"""
     ).fetchone()
     if empty_pc:
-        raise DatabaseIntegrityError(f"Assembled PC {empty_pc[0]} has no components.")
-
-    seen_pc_names: dict[str, int] = {}
-    for pc_id, pc_name in database.execute("SELECT id,name FROM assembled_pcs"):
-        folded_name = pc_name.casefold()
-        if folded_name in seen_pc_names:
-            raise DatabaseIntegrityError(
-                f"Assembled PCs {seen_pc_names[folded_name]} and {pc_id} have "
-                "case-insensitively duplicate names."
-            )
-        seen_pc_names[folded_name] = pc_id
-
+        raise DatabaseIntegrityError(f"PC {empty_pc[0]} has no components.")
+    invalid_pc_state = database.execute(
+        """SELECT p.id FROM pcs p LEFT JOIN sales s ON s.pc_id=p.id
+           GROUP BY p.id HAVING (p.status='sold')<>(COUNT(s.id)=1) LIMIT 1"""
+    ).fetchone()
+    if invalid_pc_state:
+        raise DatabaseIntegrityError(
+            f"PC {invalid_pc_state[0]} has an invalid sale state."
+        )
     invalid_sale = database.execute(
         """SELECT s.id FROM sales s
            LEFT JOIN sale_items si ON si.sale_id=s.id
-           LEFT JOIN expenses e ON e.id=si.expense_id
+           LEFT JOIN inventory_items i ON i.id=si.item_id
            GROUP BY s.id
-           HAVING COUNT(si.expense_id)=0
-               OR COALESCE(SUM(e.price_cents),0)>?
-               OR s.sale_date<MAX(e.purchase_date)
-           LIMIT 1""",
+           HAVING COUNT(si.item_id)=0 OR COALESCE(SUM(i.price_cents),0)>?
+               OR s.sale_date<MAX(i.purchase_date) LIMIT 1""",
         (MAX_MONEY_CENTS,),
     ).fetchone()
     if invalid_sale:
         raise DatabaseIntegrityError(
-            f"Sale {invalid_sale[0]} has inconsistent items, cost, or dates."
+            f"Sale {invalid_sale[0]} has invalid items, cost, or dates."
         )
-
-    has_proof_storage = database.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='proof_files'"
+    invalid_item_sale = database.execute(
+        """SELECT s.id FROM sales s JOIN sale_items si ON si.sale_id=s.id
+           JOIN pc_parts pp ON pp.item_id=si.item_id WHERE s.kind='item' LIMIT 1"""
     ).fetchone()
-    if has_proof_storage:
-        orphaned_proof = database.execute(
-            """SELECT pf.id FROM proof_files pf
-               LEFT JOIN expense_proofs ep ON ep.proof_id=pf.id
-               WHERE ep.proof_id IS NULL LIMIT 1"""
-        ).fetchone()
-        if orphaned_proof:
-            raise DatabaseIntegrityError(
-                f"Proof file {orphaned_proof[0]} is not attached to an expense."
-            )
-
-
-def validate_current_data(database: sqlite3.Connection) -> None:
-    """Reject structurally valid databases with invalid business records."""
-    _validate_dates(database)
-    _validate_money(database)
-    _validate_relationships(database)
+    if invalid_item_sale:
+        raise DatabaseIntegrityError(
+            f"Item sale {invalid_item_sale[0]} contains a PC component."
+        )
+    invalid_pc_sale = database.execute(
+        """SELECT s.id FROM sales s WHERE s.kind='pc' AND (
+             EXISTS (SELECT item_id FROM pc_parts WHERE pc_id=s.pc_id
+                     EXCEPT SELECT item_id FROM sale_items WHERE sale_id=s.id)
+             OR EXISTS (SELECT item_id FROM sale_items WHERE sale_id=s.id
+                        EXCEPT SELECT item_id FROM pc_parts WHERE pc_id=s.pc_id)
+           ) LIMIT 1"""
+    ).fetchone()
+    if invalid_pc_sale:
+        raise DatabaseIntegrityError(
+            f"PC sale {invalid_pc_sale[0]} does not match its PC components."
+        )
+    orphan = database.execute(
+        """SELECT pf.id FROM proof_files pf LEFT JOIN item_proofs ip ON ip.proof_id=pf.id
+           WHERE ip.proof_id IS NULL LIMIT 1"""
+    ).fetchone()
+    if orphan:
+        raise DatabaseIntegrityError(
+            f"Proof file {orphan[0]} is not attached to an item."
+        )
 
 
 def validate_proof_files(database: sqlite3.Connection) -> None:
-    """Fully verify proof metadata, signatures, and stored content hashes."""
+    """Verify each stored blob, hash, signature, and per-item filename."""
     for (
         proof_id,
         file_name,
@@ -559,7 +340,8 @@ def validate_proof_files(database: sqlite3.Connection) -> None:
         stored_content,
         stored_hash,
     ) in database.execute(
-        "SELECT id,file_name,media_type,content,sha256 FROM proof_files"
+        """SELECT pf.id,ip.file_name,pf.media_type,pf.content,pf.sha256
+           FROM proof_files pf JOIN item_proofs ip ON ip.proof_id=pf.id"""
     ):
         content = bytes(stored_content)
         try:
@@ -575,171 +357,49 @@ def validate_proof_files(database: sqlite3.Connection) -> None:
 
 
 def _validate_storage(database: sqlite3.Connection, *, thorough: bool = True) -> None:
-    """Validate storage, using the faster safe-open check on current databases."""
-    statement = "PRAGMA integrity_check" if thorough else "PRAGMA quick_check"
-    integrity = database.execute(statement).fetchone()[0]
-    if integrity != "ok":
-        raise DatabaseIntegrityError(f"Database integrity check failed: {integrity}")
-    foreign_key_violations = database.execute("PRAGMA foreign_key_check").fetchall()
-    if foreign_key_violations:
-        table, row_id, referenced_table, _ = foreign_key_violations[0]
+    check = "PRAGMA integrity_check" if thorough else "PRAGMA quick_check"
+    result = database.execute(check).fetchone()[0]
+    if result != "ok":
+        raise DatabaseIntegrityError(f"Database integrity check failed: {result}")
+    violation = database.execute("PRAGMA foreign_key_check").fetchone()
+    if violation:
         raise DatabaseIntegrityError(
-            f"Database foreign-key check failed at {table} row {row_id} "
-            f"(missing {referenced_table} record)."
+            f"Database foreign-key check failed at {violation[0]} row {violation[1]}."
         )
 
 
-def _inspect_database(database: Database) -> Literal["empty", "current"] | int:
+def _inspect_database(database: Database) -> Literal["empty", "current"]:
     with database.transaction() as connection:
         if not _schema_objects(connection):
             return "empty"
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version == SCHEMA_VERSION:
-            validate_schema(connection)
-            state: Literal["current"] | int = "current"
-        elif version in SCHEMA_DEFINITIONS_BY_VERSION:
-            _validate_schema_definition(
-                connection, version, SCHEMA_DEFINITIONS_BY_VERSION[version]
-            )
-            state = version
-        else:
-            validate_schema(connection)
-            raise AssertionError("unreachable")
-        _validate_storage(connection, thorough=state != "current")
+        validate_schema(connection)
+        _validate_storage(connection, thorough=False)
         validate_current_data(connection)
-        return state
-
-
-def _sync_upgrade_directory(path: Path) -> None:
-    if os.name == "nt":
-        return
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _create_pre_upgrade_backup(database: Database, source_version: int) -> Path:
-    """Publish a verified source-format copy before a supported upgrade."""
-    destination = ensure_private_directory(database.path.parent / "backups")
-    stamp = datetime.now(UTC).astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
-    final_path = destination / (
-        f"{database.path.stem}_pre_v{SCHEMA_VERSION}_{stamp}_{uuid.uuid4().hex}.db"
-    )
-    temporary_path = final_path.with_suffix(".tmp")
-    primary_error: BaseException | None = None
-    try:
-        with (
-            database.transaction() as source,
-            closing(sqlite3.connect(temporary_path)) as target,
-        ):
-            source.backup(target)
-        if os.name != "nt":
-            temporary_path.chmod(0o600)
-        with closing(sqlite3.connect(temporary_path)) as copied:
-            register_database_collations(copied)
-            _validate_schema_definition(
-                copied,
-                source_version,
-                SCHEMA_DEFINITIONS_BY_VERSION[source_version],
-            )
-            _validate_storage(copied)
-            validate_current_data(copied)
-        with temporary_path.open("r+b") as file:
-            os.fsync(file.fileno())
-        os.replace(temporary_path, final_path)
-        _sync_upgrade_directory(destination)
-    except BaseException as error:
-        primary_error = error
-        raise
-    finally:
-        try:
-            temporary_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as cleanup_error:
-            if primary_error is None:
-                raise
-            primary_error.add_note(
-                f"Temporary upgrade-backup cleanup failed: {cleanup_error}"
-            )
-    return final_path
-
-
-def _migrate_schema_14_to_15(database: sqlite3.Connection) -> None:
-    """Add proof storage without rewriting current inventory or history rows."""
-    for key, statement in SCHEMA_15_DEFINITIONS.items():
-        if key not in SCHEMA_14_DEFINITIONS:
-            database.execute(statement)
-    database.execute("PRAGMA user_version = 15")
-
-
-def _migrate_schema_15_to_16(database: sqlite3.Connection) -> None:
-    """Add optional item details and immutable application activity."""
-    for key, statement in SCHEMA_DEFINITIONS.items():
-        if key not in SCHEMA_15_DEFINITIONS:
-            database.execute(statement)
-    database.execute("INSERT INTO expense_details (expense_id) SELECT id FROM expenses")
-    database.execute("PRAGMA user_version = 16")
-
-
-MIGRATION_STEPS = {
-    14: _migrate_schema_14_to_15,
-    15: _migrate_schema_15_to_16,
-}
+        return "current"
 
 
 def _initialize_database(database: Database) -> None:
-    """Create the current schema or apply each verified forward migration."""
     with closing(database.connect(create=True)) as setup_connection:
-        journal_mode = setup_connection.execute("PRAGMA journal_mode = WAL").fetchone()[
-            0
-        ]
-        if journal_mode.casefold() != "wal":
+        journal_mode = setup_connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        if str(journal_mode).casefold() != "wal":
             raise DatabaseIntegrityError(
                 f"Database could not enable WAL journaling (got {journal_mode})."
             )
-    state = _inspect_database(database)
-    if state == "current":
+    if _inspect_database(database) == "current":
         return
-    if isinstance(state, int):
-        _create_pre_upgrade_backup(database, state)
-        with database.transaction(write=True) as connection:
-            _validate_schema_definition(
-                connection,
-                state,
-                SCHEMA_DEFINITIONS_BY_VERSION[state],
-            )
-            _validate_storage(connection)
-            validate_current_data(connection)
-            version = state
-            while version < SCHEMA_VERSION:
-                migration = MIGRATION_STEPS.get(version)
-                if migration is None:
-                    raise SchemaVersionError(
-                        f"No migration is available from database version {version}."
-                    )
-                migration(connection)
-                version += 1
-                _validate_schema_definition(
-                    connection,
-                    version,
-                    SCHEMA_DEFINITIONS_BY_VERSION[version],
-                )
-            validate_schema(connection)
-            _validate_storage(connection)
-            validate_current_data(connection)
-        return
-
     with database.transaction(write=True) as connection:
         for statement in SCHEMA_DEFINITIONS.values():
             connection.execute(statement)
-        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        connection.execute(
+            """INSERT INTO schema_migrations (version,name,checksum,applied_at)
+               VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
+            (SCHEMA_VERSION, "initial inventory baseline", SCHEMA_CHECKSUM),
+        )
+        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         validate_schema(connection)
 
 
 def initialize_database(database: Database) -> None:
-    """Initialize while excluding live operations and database replacement."""
+    """Create or validate the single supported pre-release database baseline."""
     with database.gate.maintenance(), database.gate.exclusive():
         _initialize_database(database)

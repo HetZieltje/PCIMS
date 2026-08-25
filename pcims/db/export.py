@@ -44,7 +44,7 @@ def export_csv(
     _publish_csv(
         purchases_path,
         (
-            "expense_id",
+            "item_id",
             "name",
             "type",
             "price",
@@ -97,7 +97,7 @@ def export_csv(
             "cost",
             "revenue",
             "profit",
-            "expense_ids",
+            "item_ids",
         ),
         (
             (

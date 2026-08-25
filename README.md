@@ -72,22 +72,27 @@ include them automatically.
 
 ## Database policy
 
-The Qt rewrite uses one normalized schema with integer cents and ID-based
-relationships. An exact schema-v14 rewrite database is automatically backed up
-and upgraded to schema v15 without changing its records. Tkinter-era, modified,
-and otherwise unknown schemas remain unsupported and are rejected without being
-modified; use a compatible backup or a new database path.
+The pre-release Qt rewrite uses one clean baseline schema with integer cents,
+ID-based relationships, and no compatibility or conversion layer for earlier
+database layouts. Item details live on each inventory row; PCs remain persistent
+records with active or sold status; and a schema-migration marker identifies the
+exact baseline. Any earlier beta, Tkinter-era, modified, or otherwise unknown
+schema is rejected without being changed. Select a new database path when
+testing this baseline.
 
-Unsold components can be edited in place, including while assigned to a PC.
-Editing an assembled PC atomically replaces its name and complete ordered parts
-list, and each component is tracked by its own ID so multiple parts of the same
-category remain distinct. Completed sale history stays immutable.
+Components can be corrected in place, including after sale or while assigned to
+a PC. Editing an active PC atomically updates its name and complete ordered parts
+list, and each component has its own ID, so multiple parts of the same category
+remain distinct. Selling a PC marks that same PC record sold instead of deleting
+it. Undoing the sale restores the same PC identity and membership. Standalone
+sales can likewise be deleted with Undo, returning all of their items to stock.
 
 Each individual item can have up to 20 proofs of purchase in PDF, PNG, JPEG, or
 WebP format, with a 20 MiB limit per file. Proofs can be selected while staging
 a purchase or managed later from Inventory and purchase history, including for
-sold items. When one proof is applied to multiple units in a quantity purchase,
-its file data is stored once and linked to every unit.
+sold items. Identical proof content is stored once regardless of its attachment
+filename and linked to every applicable item. The optional activity feed can be
+cleared without changing inventory, PCs, purchases, or sales.
 
 ## Development checks
 

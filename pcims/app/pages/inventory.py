@@ -328,8 +328,8 @@ class InventoryPage(AsyncCommandPage):
             return
         if not ask_confirmation(
             self,
-            "Delete expenses",
-            f"Permanently delete {len(parts)} selected expense record(s)?",
+            "Delete items",
+            f"Permanently delete {len(parts)} selected inventory item(s)?",
         ):
             return
         self.run_command(

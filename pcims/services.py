@@ -19,6 +19,7 @@ from pcims.db.assembly_commands import (
     disassemble_pc,
     update_pc,
 )
+from pcims.db.audit import clear_activity
 from pcims.db.connection import Database, default_database
 from pcims.db.expense_commands import (
     add_expenses,
@@ -139,6 +140,9 @@ class ApplicationServices:
             raise ValueError("Activity limit must be between 1 and 1000.")
         with self.database.transaction() as connection:
             return ReadQueries(connection).list_audit_events(limit)
+
+    def clear_activity(self) -> None:
+        clear_activity(database=self.database)
 
     def list_inventory(
         self, item_type: ItemType | None = None, available_only: bool = False

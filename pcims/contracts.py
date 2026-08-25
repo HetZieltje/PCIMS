@@ -158,6 +158,7 @@ class SalesOperations(Protocol):
 
 class ActivityOperations(Protocol):
     def list_activity(self, limit: int = 500) -> tuple[AuditEvent, ...]: ...
+    def clear_activity(self) -> None: ...
 
 
 class MaintenanceOperations(Protocol):
