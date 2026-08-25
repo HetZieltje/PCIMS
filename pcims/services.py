@@ -13,13 +13,13 @@ from pcims.contracts import (
     PurchasesSnapshot,
     RestoreResult,
     SalesSnapshot,
+    StorageSummary,
 )
 from pcims.db.assembly_commands import (
     assemble_pc,
     disassemble_pc,
     update_pc,
 )
-from pcims.db.audit import clear_activity
 from pcims.db.connection import Database, default_database
 from pcims.db.expense_commands import (
     add_expenses,
@@ -32,10 +32,11 @@ from pcims.db.sale_commands import (
     sell_items,
     sell_pc,
     undo_sale,
+    update_sale,
 )
 from pcims.db.schema import initialize_database
 from pcims.domain import ItemType, NewExpense, SaleTerms
-from pcims.models import AssembledPC, AuditEvent, Expense, FinancialSummary, Sale
+from pcims.models import AssembledPC, Expense, FinancialSummary, Sale
 from pcims.proofs import NewProof
 
 MAX_HISTORY_PAGE_SIZE = 1_000
@@ -131,19 +132,6 @@ class ApplicationServices:
         with self.database.transaction() as connection:
             return ReadQueries(connection).list_expenses()
 
-    def list_activity(self, limit: int = 500) -> tuple[AuditEvent, ...]:
-        if (
-            isinstance(limit, bool)
-            or not isinstance(limit, int)
-            or not 1 <= limit <= 1000
-        ):
-            raise ValueError("Activity limit must be between 1 and 1000.")
-        with self.database.transaction() as connection:
-            return ReadQueries(connection).list_audit_events(limit)
-
-    def clear_activity(self) -> None:
-        clear_activity(database=self.database)
-
     def list_inventory(
         self, item_type: ItemType | None = None, available_only: bool = False
     ) -> tuple[Expense, ...]:
@@ -207,6 +195,9 @@ class ApplicationServices:
     def undo_sale(self, sale_id: int) -> None:
         undo_sale(sale_id, database=self.database)
 
+    def update_sale(self, sale_id: int, terms: SaleTerms) -> None:
+        update_sale(sale_id, terms, database=self.database)
+
     def financial_summary(self) -> FinancialSummary:
         with self.database.transaction() as connection:
             return ReadQueries(connection).financial_summary()
@@ -225,16 +216,45 @@ class ApplicationServices:
 
         return create_backup(destination_directory, keep, database=self.database)
 
+    def storage_summary(self) -> StorageSummary:
+        from pcims.db.backup import backup_usage
+
+        with self.database.transaction() as connection:
+            proof_count, proof_bytes = connection.execute(
+                "SELECT COUNT(*),COALESCE(SUM(length(content)),0) FROM proof_files"
+            ).fetchone()
+        database_bytes = 0
+        for path in (
+            self.database.path,
+            Path(f"{self.database.path}-wal"),
+            Path(f"{self.database.path}-shm"),
+        ):
+            try:
+                database_bytes += path.stat().st_size
+            except OSError:
+                continue
+        backup_count, backup_bytes = backup_usage(database=self.database)
+        return StorageSummary(
+            database_bytes=database_bytes,
+            proof_bytes=int(proof_bytes),
+            proof_count=int(proof_count),
+            backup_bytes=backup_bytes,
+            backup_count=backup_count,
+        )
+
     def restore_backup(
         self,
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
+        keep: int = 14,
     ) -> RestoreResult:
         from pcims.db.backup import restore_backup
 
-        return restore_backup(
-            backup_path, pre_restore_directory, database=self.database
+        result = restore_backup(
+            backup_path, pre_restore_directory, keep, database=self.database
         )
+        initialize_database(self.database)
+        return result
 
     @property
     def database_path(self) -> Path:

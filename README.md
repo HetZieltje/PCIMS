@@ -72,13 +72,11 @@ include them automatically.
 
 ## Database policy
 
-The pre-release Qt rewrite uses one clean baseline schema with integer cents,
-ID-based relationships, and no compatibility or conversion layer for earlier
-database layouts. Item details live on each inventory row; PCs remain persistent
-records with active or sold status; and a schema-migration marker identifies the
-exact baseline. Any earlier beta, Tkinter-era, modified, or otherwise unknown
-schema is rejected without being changed. Select a new database path when
-testing this baseline.
+The pre-release Qt rewrite starts from one clean baseline schema with integer
+cents, ID-based relationships, and no compatibility layer for Tkinter-era
+layouts. Databases from the clean Qt baseline are upgraded through ordered,
+transactional migrations after a verified pre-upgrade backup. Modified, unknown,
+and legacy schemas are rejected without being changed.
 
 Components can be corrected in place, including after sale or while assigned to
 a PC. Editing an active PC atomically updates its name and complete ordered parts
@@ -86,6 +84,9 @@ list, and each component has its own ID, so multiple parts of the same category
 remain distinct. Selling a PC marks that same PC record sold instead of deleting
 it. Undoing the sale restores the same PC identity and membership. Standalone
 sales can likewise be deleted with Undo, returning all of their items to stock.
+An existing sale's price and date can be corrected in place without changing its
+identity or sold-item membership. The sale date must remain on or after every
+included item's purchase date.
 The financial summary and each sale report ROI on cost as profit divided by the
 purchase cost of the sold items. A zero-cost sale shows `N/A` instead of an
 undefined or infinite percentage.
@@ -94,8 +95,15 @@ Each individual item can have up to 20 proofs of purchase in PDF, PNG, JPEG, or
 WebP format, with a 20 MiB limit per file. Proofs can be selected while staging
 a purchase or managed later from Inventory and purchase history, including for
 sold items. Identical proof content is stored once regardless of its attachment
-filename and linked to every applicable item. The optional activity feed can be
-cleared without changing inventory, PCs, purchases, or sales.
+filename and linked to every applicable item. Total stored proof content is
+capped at 512 MiB so receipts cannot silently expand every backup without limit.
+
+Automatic backup retention is configurable from 1 to 30 copies. An unchanged
+database reuses its newest verified backup instead of storing a duplicate. The
+Settings page reports database, proof, and automatic-backup storage usage.
+Window geometry, splitters, table widths, and table sorting are restored between
+sessions. The former Activity feed has been removed; unexpected application
+errors remain available in the bounded diagnostic log.
 
 ## Development checks
 

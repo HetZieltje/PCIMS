@@ -33,15 +33,18 @@ def main() -> None:
         expense_id = services.add_expenses(
             [NewExpense.create("Artifact GPU", "GPU", "100.00", "2026-08-14")]
         )[0]
-        services.sell_items([expense_id], SaleTerms.create("125.00", "2026-08-14"))
-        if services.financial_summary().profit_cents != 2_500:
+        sale_id = services.sell_items(
+            [expense_id], SaleTerms.create("125.00", "2026-08-14")
+        )
+        services.update_sale(sale_id, SaleTerms.create("120.00", "2026-08-15"))
+        if services.financial_summary().profit_cents != 2_000:
             raise RuntimeError("Installed wheel produced an invalid financial result.")
         window = MainWindow(services)
         deadline = time.monotonic() + 5
         while window.tasks.active and time.monotonic() < deadline:
             application.processEvents()
             time.sleep(0.005)
-        if window.tasks.active or window.tabs.count() != 6:
+        if window.tasks.active or window.tabs.count() != 5:
             raise RuntimeError("Installed Qt frontend did not initialize completely.")
         window.deleteLater()
         application.processEvents()

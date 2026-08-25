@@ -4,12 +4,12 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
+    QTableView,
     QTabWidget,
 )
 
 from pcims.app.appearance import apply_application_theme
 from pcims.app.common import show_error
-from pcims.app.pages.activity import ActivityPage
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
@@ -50,10 +50,10 @@ class MainWindow(QMainWindow):
         )
         self.assemble_page = AssemblePage(self.services, tasks=self.tasks)
         self.sales_page = SalesPage(self.services, tasks=self.tasks)
-        self.activity_page = ActivityPage(self.services, tasks=self.tasks)
         self.settings_page = SettingsPage(
             self.services,
             theme=self.window_state.theme,
+            backup_retention=self.window_state.backup_retention,
             has_pending_changes=lambda: self.purchases_page.has_staged_items,
             tasks=self.tasks,
         )
@@ -62,7 +62,6 @@ class MainWindow(QMainWindow):
             self.purchases_page,
             self.assemble_page,
             self.sales_page,
-            self.activity_page,
         )
         self.pages = (
             *self.data_pages,
@@ -90,9 +89,9 @@ class MainWindow(QMainWindow):
                 lambda snapshot: self.sales_page.apply_snapshot(snapshot),
             ),
             bind_refresh(
-                self.activity_page,
-                lambda: self.activity_page.load_snapshot(),
-                lambda snapshot: self.activity_page.apply_snapshot(snapshot),
+                self.settings_page,
+                lambda: self.settings_page.load_snapshot(),
+                lambda snapshot: self.settings_page.apply_snapshot(snapshot),
             ),
         )
         self.refreshes = RefreshCoordinator(self.tasks, bindings, self)
@@ -109,7 +108,6 @@ class MainWindow(QMainWindow):
                 "Purchases",
                 "Assemble",
                 "Sales and History",
-                "Activity",
                 "Settings",
             ),
         ):
@@ -117,6 +115,8 @@ class MainWindow(QMainWindow):
         for page in self.data_pages:
             page.data_changed.connect(self._on_data_changed)
         self.settings_page.theme_changed.connect(self.apply_theme)
+        self.settings_page.backup_retention_changed.connect(self._set_backup_retention)
+        self.settings_page.storage_changed.connect(self._storage_changed)
         self.settings_page.database_restored.connect(self._after_database_restore)
         self.tabs.currentChanged.connect(self.refresh_current)
         self.apply_theme(self.window_state.theme)
@@ -127,8 +127,9 @@ class MainWindow(QMainWindow):
     def create_startup_backup(self) -> None:
         self.statusBar().showMessage("Creating startup backup…")
         generation = self._data_generation
+        keep = self.window_state.backup_retention
         self._startup_backup_task = self.tasks.run(
-            self.services.create_backup,
+            lambda: self.services.create_backup(keep=keep),
             lambda backup: self._startup_backup_finished(generation, backup),
             self._startup_backup_failed,
             owner=self,
@@ -136,7 +137,13 @@ class MainWindow(QMainWindow):
 
     def _startup_backup_finished(self, generation: int, backup: BackupResult) -> None:
         self._backed_up_generation = generation if backup.durable else None
-        self.statusBar().showMessage("Startup backup complete", 2500)
+        self._storage_changed()
+        self.statusBar().showMessage(
+            "Existing backup is current"
+            if backup.reused
+            else "Startup backup complete",
+            2500,
+        )
         if backup.has_warnings:
             QMessageBox.warning(
                 self,
@@ -175,6 +182,14 @@ class MainWindow(QMainWindow):
         self.refreshes.invalidate_all(self.tabs.currentWidget())
         self.statusBar().showMessage("Data updated", 2500)
 
+    def _set_backup_retention(self, keep: int) -> None:
+        self.window_state.backup_retention = keep
+
+    def _storage_changed(self) -> None:
+        self.refreshes.mark_dirty(self.settings_page)
+        if self.tabs.currentWidget() is self.settings_page:
+            self.refreshes.start_if_dirty(self.settings_page)
+
     def _after_database_restore(self) -> None:
         self.purchases_page.discard_staged()
         self._on_data_changed()
@@ -189,6 +204,7 @@ class MainWindow(QMainWindow):
                 ("sales", self.sales_page.splitter),
                 ("sales_details", self.sales_page.detail_splitter),
             ),
+            self._persistent_tables(),
         )
 
     def _save_window_state(self) -> None:
@@ -200,6 +216,17 @@ class MainWindow(QMainWindow):
                 ("sales", self.sales_page.splitter),
                 ("sales_details", self.sales_page.detail_splitter),
             ),
+            self._persistent_tables(),
+        )
+
+    def _persistent_tables(self) -> tuple[tuple[str, QTableView], ...]:
+        return (
+            ("inventory_items", self.inventory_page.parts_table),
+            ("inventory_pcs", self.inventory_page.pc_table),
+            ("purchase_draft", self.purchases_page.table),
+            ("purchase_history", self.sales_page.expense_table),
+            ("sales", self.sales_page.sale_table),
+            ("sale_items", self.sales_page.detail_table),
         )
 
     def apply_theme(self, theme: str) -> None:
@@ -249,8 +276,9 @@ class MainWindow(QMainWindow):
             return
         self._close_backup_running = True
         self.statusBar().showMessage("Backing up before closing…")
+        keep = self.window_state.backup_retention
         self._close_backup_task = self.tasks.run(
-            self.services.create_backup,
+            lambda: self.services.create_backup(keep=keep),
             self._close_backup_finished,
             self._close_backup_failed,
             owner=self,

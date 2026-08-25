@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Generic, Protocol, TypeVar
 
 from pcims.domain import NewExpense, SaleTerms
-from pcims.models import AssembledPC, AuditEvent, Expense, FinancialSummary, SaleSummary
+from pcims.models import AssembledPC, Expense, FinancialSummary, SaleSummary
 from pcims.proofs import NewProof
 
 RecordT = TypeVar("RecordT")
@@ -20,6 +20,7 @@ class BackupResult(os.PathLike[str]):
     path: Path
     warnings: tuple[str, ...] = ()
     durable: bool = True
+    reused: bool = False
 
     def __fspath__(self) -> str:
         return str(self.path)
@@ -56,6 +57,15 @@ class RestoreResult:
     @property
     def warning_text(self) -> str:
         return "\n".join(self.all_warnings)
+
+
+@dataclass(frozen=True, slots=True)
+class StorageSummary:
+    database_bytes: int
+    proof_bytes: int
+    proof_count: int
+    backup_bytes: int
+    backup_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +157,7 @@ class SalesOperations(Protocol):
         page_size: int = 500,
     ) -> HistoryPage[Expense]: ...
     def undo_sale(self, sale_id: int) -> None: ...
+    def update_sale(self, sale_id: int, terms: SaleTerms) -> None: ...
     def replace_expense_proofs(
         self,
         expense_id: int,
@@ -154,11 +165,6 @@ class SalesOperations(Protocol):
         new_proofs: Iterable[NewProof],
     ) -> None: ...
     def proof_file(self, expense_id: int, proof_id: int) -> NewProof: ...
-
-
-class ActivityOperations(Protocol):
-    def list_activity(self, limit: int = 500) -> tuple[AuditEvent, ...]: ...
-    def clear_activity(self) -> None: ...
 
 
 class MaintenanceOperations(Protocol):
@@ -171,10 +177,13 @@ class MaintenanceOperations(Protocol):
         keep: int = 14,
     ) -> BackupResult: ...
 
+    def storage_summary(self) -> StorageSummary: ...
+
     def restore_backup(
         self,
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
+        keep: int = 14,
     ) -> RestoreResult: ...
 
     def export_csv(self, directory: str | os.PathLike[str]) -> tuple[Path, Path]: ...

@@ -40,6 +40,59 @@ def _backup_prefix(database: Database) -> str:
     return f"pcims_{digest}_"
 
 
+def _file_hash(path: Path) -> bytes:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def _identical_backup(
+    destination: Path,
+    prefix: str,
+    candidate: Path,
+    excluded_paths: tuple[Path, ...] = (),
+) -> Path | None:
+    candidate_size = candidate.stat().st_size
+    try:
+        paths = sorted(destination.glob(f"{prefix}*.db"), reverse=True)
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            if (
+                not any(_paths_alias(path, excluded) for excluded in excluded_paths)
+                and path.is_file()
+                and path.stat().st_size == candidate_size
+                and _file_hash(path) == _file_hash(candidate)
+            ):
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def backup_usage(*, database: Database) -> tuple[int, int]:
+    """Return count and bytes for this database's automatic backup namespace."""
+    destination = database.path.parent / "backups"
+    try:
+        paths = tuple(destination.glob(f"{_backup_prefix(database)}*.db"))
+    except OSError:
+        return 0, 0
+    count = 0
+    size = 0
+    for path in paths:
+        try:
+            metadata = path.stat()
+        except OSError:
+            continue
+        if stat.S_ISREG(metadata.st_mode):
+            count += 1
+            size += metadata.st_size
+    return count, size
+
+
 def _paths_alias(first: Path, second: Path) -> bool:
     """Compare existing file identity while retaining a path-only fallback."""
     if first == second:
@@ -161,6 +214,8 @@ def _create_backup(
     primary_error: BaseException | None = None
     publication_errors: list[str] = []
     durable = True
+    reused = False
+    published_path = final_path
     try:
         with (
             database.transaction() as source,
@@ -170,15 +225,23 @@ def _create_backup(
         if os.name != "nt":
             temporary_path.chmod(0o600)
         validate_database(temporary_path)
-        _sync_file(temporary_path)
-        os.replace(temporary_path, final_path)
-        try:
-            _sync_directory(destination)
-        except OSError as error:
-            durable = False
-            publication_errors.append(
-                f"Backup was created, but its directory could not be flushed: {error}"
-            )
+        identical = _identical_backup(
+            destination, prefix, temporary_path, protected_paths
+        )
+        if identical is not None:
+            published_path = identical
+            reused = True
+        else:
+            _sync_file(temporary_path)
+            os.replace(temporary_path, final_path)
+            try:
+                _sync_directory(destination)
+            except OSError as error:
+                durable = False
+                publication_errors.append(
+                    "Backup was created, but its directory could not be flushed: "
+                    f"{error}"
+                )
     except BaseException as error:
         primary_error = error
         raise
@@ -186,8 +249,15 @@ def _create_backup(
         _remove_temporary(temporary_path, primary_error)
 
     warnings = publication_errors
-    warnings.extend(_prune_backups(destination, prefix, keep, protected_paths))
-    return BackupResult(final_path, tuple(warnings), durable)
+    warnings.extend(
+        _prune_backups(
+            destination,
+            prefix,
+            keep,
+            (*protected_paths, published_path),
+        )
+    )
+    return BackupResult(published_path, tuple(warnings), durable, reused)
 
 
 def create_backup(
@@ -209,6 +279,7 @@ def create_backup(
 def _restore_backup(
     backup_path: str | os.PathLike[str],
     pre_restore_directory: str | os.PathLike[str] | None = None,
+    keep: int = 14,
     *,
     database: Database,
 ) -> RestoreResult:
@@ -231,6 +302,7 @@ def _restore_backup(
         validate_database(staged_path)
         safety_backup = _create_backup(
             pre_restore_directory,
+            keep,
             database=database,
             protected_paths=(source_path, live_path),
         )
@@ -273,9 +345,12 @@ def _restore_backup(
 def restore_backup(
     backup_path: str | os.PathLike[str],
     pre_restore_directory: str | os.PathLike[str] | None = None,
+    keep: int = 14,
     *,
     database: Database,
 ) -> RestoreResult:
     """Atomically replace the live database after all operations have drained."""
     with database.gate.maintenance(), database.gate.exclusive():
-        return _restore_backup(backup_path, pre_restore_directory, database=database)
+        return _restore_backup(
+            backup_path, pre_restore_directory, keep, database=database
+        )

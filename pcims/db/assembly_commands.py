@@ -2,7 +2,6 @@
 
 from collections.abc import Iterable
 
-from pcims.db.audit import record_audit_event
 from pcims.db.command_support import (
     bounded_cents_total,
     find_pc_name_collision,
@@ -39,9 +38,6 @@ def assemble_pc(name: str, expense_ids: Iterable[int], *, database: Database) ->
             "INSERT INTO pc_parts (pc_id,item_id,position) VALUES (?,?,?)",
             ((pc_id, expense_id, position) for position, expense_id in enumerate(ids)),
         )
-        record_audit_event(
-            connection, "assembled", "pc", pc_id, f"Assembled PC '{name}'."
-        )
         return pc_id
 
 
@@ -58,13 +54,6 @@ def disassemble_pc(pc_id: int, *, database: Database) -> None:
         result = connection.execute("DELETE FROM pcs WHERE id=?", (pc_id,))
         if result.rowcount != 1:
             raise NotFoundError(f"PC {pc_id} does not exist.")
-        record_audit_event(
-            connection,
-            "disassembled",
-            "pc",
-            pc_id,
-            f"Disassembled PC '{pc['name']}'.",
-        )
 
 
 def update_pc(
@@ -112,4 +101,3 @@ def update_pc(
             "INSERT INTO pc_parts (pc_id,item_id,position) VALUES (?,?,?)",
             ((pc_id, expense_id, position) for position, expense_id in enumerate(ids)),
         )
-        record_audit_event(connection, "updated", "pc", pc_id, f"Updated PC '{name}'.")

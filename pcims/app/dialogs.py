@@ -390,13 +390,26 @@ class PCEditDialog(QDialog):
 
 
 class SaleDialog(QDialog):
-    def __init__(self, item_name: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        item_name: str,
+        parent: QWidget | None = None,
+        *,
+        initial: SaleTerms | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Record sale")
+        self.setWindowTitle("Edit sale" if initial is not None else "Record sale")
         self.setModal(True)
         self.amount = QLineEdit()
         self.amount.setPlaceholderText("0.00")
-        self.sale_date = QDateEdit(QDate.currentDate())
+        initial_date = (
+            QDate(
+                initial.sale_date.year, initial.sale_date.month, initial.sale_date.day
+            )
+            if initial is not None
+            else QDate.currentDate()
+        )
+        self.sale_date = QDateEdit(initial_date)
         self.sale_date.setCalendarPopup(True)
         self.sale_date.setDisplayFormat("yyyy-MM-dd")
         self.error_label = QLabel()
@@ -417,6 +430,10 @@ class SaleDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(self.error_label)
         layout.addWidget(buttons)
+        if initial is not None:
+            cents = initial.selling_price_cents
+            self.amount.setText(f"{cents // 100}.{cents % 100:02d}")
+            self.amount.selectAll()
         self.amount.setFocus()
 
     def _validate(self) -> None:
@@ -429,9 +446,13 @@ class SaleDialog(QDialog):
 
     @classmethod
     def get_sale(
-        cls, item_name: str, parent: QWidget | None = None
+        cls,
+        item_name: str,
+        parent: QWidget | None = None,
+        *,
+        initial: SaleTerms | None = None,
     ) -> SaleTerms | None:
-        dialog = cls(item_name, parent)
+        dialog = cls(item_name, parent, initial=initial)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
         return SaleTerms(

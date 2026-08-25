@@ -3,7 +3,6 @@
 import sqlite3
 from collections.abc import Iterable
 
-from pcims.db.audit import record_audit_event
 from pcims.db.command_support import (
     bounded_cents_total,
     positive_command_id,
@@ -52,13 +51,6 @@ def sell_items(
             "INSERT INTO sale_items (sale_id,item_id,position) VALUES (?,?,?)",
             ((sale_id, item_id, position) for position, item_id in enumerate(ids)),
         )
-        record_audit_event(
-            connection,
-            "sold",
-            "sale",
-            sale_id,
-            f"Sold {len(ids)} item(s) as '{name}'.",
-        )
         return sale_id
 
 
@@ -93,14 +85,34 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
             "INSERT INTO sale_items (sale_id,item_id,position) VALUES (?,?,?)",
             ((sale_id, item_id, position) for position, item_id in enumerate(item_ids)),
         )
-        record_audit_event(
-            connection,
-            "sold",
-            "sale",
-            sale_id,
-            f"Sold PC '{pc['name']}'.",
-        )
         return sale_id
+
+
+def update_sale(sale_id: int, terms: SaleTerms, *, database: Database) -> None:
+    """Correct the editable sale terms without changing sold-item membership."""
+    sale_id = positive_command_id(sale_id, "Sale ID")
+    sale_day = terms.sale_date.isoformat()
+    with database.transaction(write=True) as connection:
+        sale = connection.execute(
+            "SELECT id FROM sales WHERE id=?", (sale_id,)
+        ).fetchone()
+        if sale is None:
+            raise NotFoundError(f"Sale {sale_id} does not exist.")
+        rows = connection.execute(
+            """SELECT i.purchase_date FROM sale_items si
+               JOIN inventory_items i ON i.id=si.item_id
+               WHERE si.sale_id=?""",
+            (sale_id,),
+        ).fetchall()
+        if not rows:
+            raise ValidationError(f"Sale {sale_id} contains no items.")
+        _validate_sale_date(rows, sale_day)
+        result = connection.execute(
+            """UPDATE sales SET selling_price_cents=?,sale_date=? WHERE id=?""",
+            (terms.selling_price_cents, sale_day, sale_id),
+        )
+        if result.rowcount != 1:
+            raise NotFoundError(f"Sale {sale_id} does not exist.")
 
 
 def undo_sale(sale_id: int, *, database: Database) -> None:
@@ -121,10 +133,3 @@ def undo_sale(sale_id: int, *, database: Database) -> None:
         if not item_ids:
             raise ValidationError(f"Sale {sale_id} contains no recoverable items.")
         connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))
-        record_audit_event(
-            connection,
-            "sale_undone",
-            "sale",
-            sale_id,
-            f"Undid sale '{sale['name']}'.",
-        )

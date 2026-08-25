@@ -36,16 +36,6 @@ class Expense:
 
 
 @dataclass(frozen=True, slots=True)
-class AuditEvent:
-    id: int
-    occurred_at: str
-    action: str
-    entity_type: str
-    entity_id: int | None
-    summary: str
-
-
-@dataclass(frozen=True, slots=True)
 class AssembledPC:
     id: int
     name: str

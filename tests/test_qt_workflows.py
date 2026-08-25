@@ -26,7 +26,12 @@ from shiboken6 import delete as delete_qt_object
 
 from pcims.app.application import acquire_instance_lock, create_application, main
 from pcims.app.assembly_model import AssemblyTreeModel
-from pcims.app.dialogs import ExpenseEditDialog, PCEditDialog, ProofEditDialog
+from pcims.app.dialogs import (
+    ExpenseEditDialog,
+    PCEditDialog,
+    ProofEditDialog,
+    SaleDialog,
+)
 from pcims.app.errors import install_exception_hook, log_exception
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
@@ -127,7 +132,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.show()
         self.wait_for_window(window)
 
-        self.assertEqual(window.tabs.count(), 6)
+        self.assertEqual(window.tabs.count(), 5)
         self.assertGreaterEqual(window.width(), 900)
         self.assertTrue(all(page.tasks is window.tasks for page in window.pages))
         for index in range(window.tabs.count()):
@@ -222,6 +227,9 @@ class QtWorkflowTests(unittest.TestCase):
         first.inventory_page.splitter.setSizes((800, 200))
         first.sales_page.splitter.setSizes((300, 700))
         first.sales_page.detail_splitter.setSizes((500, 100))
+        first.sales_page.sale_table.horizontalHeader().resizeSection(3, 321)
+        first.sales_page.sale_table.sortByColumn(6, Qt.SortOrder.DescendingOrder)
+        first.settings_page.backup_retention.setValue(7)
         first.show()
         self.application.processEvents()
         expected_geometry = first.saveGeometry()
@@ -230,6 +238,7 @@ class QtWorkflowTests(unittest.TestCase):
             first.sales_page.splitter.saveState(),
             first.sales_page.detail_splitter.saveState(),
         )
+        expected_sale_table = first.sales_page.sale_table.horizontalHeader().saveState()
         expected_ratios = tuple(
             tuple(size / sum(splitter.sizes()) for size in splitter.sizes())
             for splitter in (
@@ -245,6 +254,8 @@ class QtWorkflowTests(unittest.TestCase):
             ("inventory", "sales", "sales_details"), expected_splitters
         ):
             self.assertEqual(settings.value(f"window/splitters/{key}"), state)
+        self.assertEqual(settings.value("window/tables/sales"), expected_sale_table)
+        self.assertEqual(settings.value("backups/retention"), 7)
         first.deleteLater()
 
         with patch.object(MainWindow, "restoreGeometry", return_value=True) as restore:
@@ -254,6 +265,14 @@ class QtWorkflowTests(unittest.TestCase):
         second.show()
         self.application.processEvents()
         self.assertEqual(second.tabs.currentIndex(), 3)
+        self.assertEqual(
+            second.sales_page.sale_table.horizontalHeader().sortIndicatorSection(), 6
+        )
+        self.assertEqual(
+            second.sales_page.sale_table.horizontalHeader().sortIndicatorOrder(),
+            Qt.SortOrder.DescendingOrder,
+        )
+        self.assertEqual(second.settings_page.backup_retention.value(), 7)
         for splitter, expected in zip(
             (
                 second.inventory_page.splitter,
@@ -1252,6 +1271,21 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(sales.summary_labels["roi"].text(), "81.82%")
         self.assertNotIn("assets", sales.summary_labels)
         self.assertEqual(sales.sale_model.index(0, 7).data(), "81.82%")
+        sales.sale_table.selectRow(0)
+        with patch.object(
+            SaleDialog,
+            "get_sale",
+            return_value=SaleTerms.create("18.00", TEST_DATE),
+        ):
+            sales.edit_selected_sale()
+        self.wait_for_page(sales)
+        corrected = self.services.list_sales()[0]
+        self.assertEqual(corrected.id, sale.id)
+        self.assertEqual(corrected.selling_price_cents, 1_800)
+        self.assertEqual({item.id for item in corrected.items}, set(ids))
+        sales.refresh()
+        self.assertEqual(sales.summary_labels["cash"].text(), "€7.00")
+        self.assertEqual(sales.summary_labels["roi"].text(), "63.64%")
         sales.sale_table.selectRow(0)
         self.wait_until(lambda: sales.detail_model.rowCount() == 2)
         with patch("pcims.app.pages.sales.ask_confirmation", return_value=True):

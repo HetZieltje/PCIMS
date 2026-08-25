@@ -12,7 +12,6 @@ from pcims.db.records import EXPENSE_SELECT, expense_from_row
 from pcims.domain import ItemType, SaleKind
 from pcims.models import (
     AssembledPC,
-    AuditEvent,
     Expense,
     FinancialSummary,
     Sale,
@@ -113,24 +112,6 @@ class ReadQueries:
             "SELECT DISTINCT name FROM inventory_items ORDER BY name COLLATE PCIMS_NOCASE,name"
         )
         return tuple(str(row[0]) for row in rows)
-
-    def list_audit_events(self, limit: int = 500) -> tuple[AuditEvent, ...]:
-        rows = self.connection.execute(
-            """SELECT id,occurred_at,action,entity_type,entity_id,summary
-                 FROM activity_events ORDER BY id DESC LIMIT ?""",
-            (limit,),
-        )
-        return tuple(
-            AuditEvent(
-                id=row["id"],
-                occurred_at=row["occurred_at"],
-                action=row["action"],
-                entity_type=row["entity_type"],
-                entity_id=row["entity_id"],
-                summary=row["summary"],
-            )
-            for row in rows
-        )
 
     def list_inventory(
         self, item_type: ItemType | None = None, available_only: bool = False

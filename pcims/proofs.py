@@ -7,6 +7,7 @@ from pcims.domain import normalized_text
 
 MAX_PROOF_BYTES = 20 * 1024 * 1024
 MAX_PROOFS_PER_ITEM = 20
+MAX_TOTAL_PROOF_BYTES = 512 * 1024 * 1024
 PROOF_FILE_FILTER = "Proofs (*.pdf *.png *.jpg *.jpeg *.webp)"
 
 

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.common import ask_confirmation, show_error
-from pcims.app.dialogs import ProofEditDialog
+from pcims.app.dialogs import ProofEditDialog, SaleDialog
 from pcims.app.formatting import format_cents, format_percentage_basis_points
 from pcims.app.table_model import (
     Column,
@@ -25,6 +25,7 @@ from pcims.app.table_model import (
 )
 from pcims.app.tasks import TaskManager
 from pcims.contracts import HistoryPage, SalesOperations, SalesSnapshot
+from pcims.domain import SaleTerms
 from pcims.models import Expense, SaleSummary
 
 
@@ -199,6 +200,8 @@ class SalesPage(AsyncCommandPage):
         )
         undo_button = QPushButton("Undo selected sale")
         undo_button.clicked.connect(self.undo_selected)
+        edit_button = QPushButton("Edit selected sale…")
+        edit_button.clicked.connect(self.edit_selected_sale)
         self.sale_newer = QPushButton("Newer")
         self.sale_newer.clicked.connect(lambda: self._change_sale_page(-1))
         self.sale_page_label = QLabel("0 records")
@@ -209,6 +212,7 @@ class SalesPage(AsyncCommandPage):
         sale_actions.addWidget(self.sale_page_label)
         sale_actions.addWidget(self.sale_older)
         sale_actions.addStretch()
+        sale_actions.addWidget(edit_button)
         sale_actions.addWidget(undo_button)
         sale_box = QGroupBox("Sales")
         sale_layout = QVBoxLayout(sale_box)
@@ -472,4 +476,35 @@ class SalesPage(AsyncCommandPage):
             lambda: self.services.undo_sale(sale.id),
             self.data_changed.emit,
             "Unable to undo sale",
+        )
+
+    def edit_selected_sale(self) -> None:
+        ids = selected_ids(self.sale_table)
+        if len(ids) != 1:
+            QMessageBox.information(
+                self, "Select one sale", "Select exactly one sale to edit."
+            )
+            return
+        sale = self._sales.get(ids[0])
+        if sale is None:
+            QMessageBox.information(
+                self,
+                "Selection changed",
+                "That sale is no longer in the current view.",
+            )
+            return
+        terms = SaleDialog.get_sale(
+            sale.name,
+            self,
+            initial=SaleTerms(sale.selling_price_cents, sale.sale_date),
+        )
+        if terms is None or terms == SaleTerms(
+            sale.selling_price_cents, sale.sale_date
+        ):
+            return
+        self._clear_details()
+        self.run_command(
+            lambda: self.services.update_sale(sale.id, terms),
+            self.data_changed.emit,
+            "Unable to edit sale",
         )

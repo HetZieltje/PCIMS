@@ -29,7 +29,8 @@ from pcims.db.expense_commands import add_expenses
 from pcims.db.gate import gate_for
 from pcims.db.reads import ReadQueries
 from pcims.db.schema import (
-    SCHEMA_DEFINITIONS,
+    SCHEMA_V1_CHECKSUM,
+    SCHEMA_V1_DEFINITIONS,
     SCHEMA_VERSION,
     initialize_database,
 )
@@ -400,16 +401,6 @@ class DatabaseWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(self.services.list_expenses()[-1].details, replacement_details)
 
-    def test_activity_is_clearable_and_committed_with_changes(self):
-        expense_id = self.buy("Tracked", "Extra", 10)
-        self.services.update_expense(
-            expense_id, NewExpense.create("Tracked 2", "Extra", 11, TEST_DATE)
-        )
-        events = self.services.list_activity()
-        self.assertEqual([event.action for event in events[:2]], ["updated", "created"])
-        self.services.clear_activity()
-        self.assertEqual(self.services.list_activity(), ())
-
     def test_history_searches_purchase_metadata_and_sale_names(self):
         expense_id = self.services.add_expenses(
             [
@@ -507,7 +498,6 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 "sale_items",
                 "proof_files",
                 "item_proofs",
-                "activity_events",
             },
         )
         self.assertEqual(
@@ -660,13 +650,13 @@ class DatabaseWorkflowTests(unittest.TestCase):
     def test_failed_first_run_schema_creation_rolls_back_completely(self):
         partial_path = Path(self.temporary_directory.name) / "partial.db"
         partial_database = Database.at(partial_path)
-        broken = dict(SCHEMA_DEFINITIONS)
+        broken = dict(SCHEMA_V1_DEFINITIONS)
         broken[("trigger", "sale_item_assignment_valid")] = (
             "CREATE TRIGGER broken nonsense"
         )
 
         with (
-            patch("pcims.db.schema.SCHEMA_DEFINITIONS", broken),
+            patch("pcims.db.schema.SCHEMA_V1_DEFINITIONS", broken),
             self.assertRaises(sqlite3.OperationalError),
         ):
             initialize_database(partial_database)
@@ -681,6 +671,61 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         initialize_database(partial_database)
         validate_database(partial_path)
+
+    def test_v1_baseline_is_backed_up_and_migrated_without_losing_inventory(self):
+        migration_path = Path(self.temporary_directory.name) / "migration.db"
+        migration_database = Database.at(migration_path)
+        with closing(migration_database.connect(create=True)) as database:
+            for statement in SCHEMA_V1_DEFINITIONS.values():
+                database.execute(statement)
+            database.execute(
+                """INSERT INTO schema_migrations
+                   (version,name,checksum,applied_at) VALUES (1,?,?,?)""",
+                (
+                    "initial inventory baseline",
+                    SCHEMA_V1_CHECKSUM,
+                    "2026-08-14T12:00:00Z",
+                ),
+            )
+            database.execute("PRAGMA user_version=1")
+            database.execute(
+                """INSERT INTO inventory_items
+                   (name,item_type,price_cents,purchase_date)
+                   VALUES ('Migrated CPU','CPU',10000,'2026-08-14')"""
+            )
+            database.execute(
+                """INSERT INTO activity_events
+                   (occurred_at,action,entity_type,entity_id,summary)
+                   VALUES ('2026-08-14T12:00:00Z','created','item',1,'Old event')"""
+            )
+            database.commit()
+
+        initialize_database(migration_database)
+
+        with migration_database.transaction() as database:
+            tables = {
+                row[0]
+                for row in database.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            markers = database.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            name = database.execute(
+                "SELECT name FROM inventory_items WHERE id=1"
+            ).fetchone()[0]
+        self.assertEqual(name, "Migrated CPU")
+        self.assertEqual([row[0] for row in markers], [1, 2])
+        self.assertNotIn("activity_events", tables)
+        backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
+        self.assertEqual(len(backups), 1)
+        with closing(sqlite3.connect(backups[0])) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(
+                backup.execute("SELECT summary FROM activity_events").fetchone()[0],
+                "Old event",
+            )
 
     def test_current_version_with_wrong_layout_is_rejected(self):
         with self.database.transaction() as database:
@@ -1053,6 +1098,40 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.services.list_sales(), ())
         self.assertEqual({item.id for item in self.services.list_inventory()}, set(ids))
 
+    def test_sale_terms_can_be_corrected_without_replacing_the_sale(self):
+        item_id = self.buy("Correctable", "Extra", 100)
+        sale_id = self.services.sell_items(
+            [item_id], SaleTerms.create(150, TEST_DATE + timedelta(days=1))
+        )
+
+        self.services.update_sale(
+            sale_id, SaleTerms.create(125, TEST_DATE + timedelta(days=2))
+        )
+
+        sale = self.services.list_sales()[0]
+        self.assertEqual(sale.id, sale_id)
+        self.assertEqual([item.id for item in sale.items], [item_id])
+        self.assertEqual(sale.selling_price_cents, 12_500)
+        self.assertEqual(sale.sale_date, TEST_DATE + timedelta(days=2))
+        self.assertEqual(sale.profit_cents, 2_500)
+
+    def test_invalid_sale_correction_rolls_back(self):
+        item_id = self.buy("Correctable", "Extra", 100)
+        sale_id = self.services.sell_items([item_id], SaleTerms.create(150, TEST_DATE))
+
+        with self.assertRaisesRegex(ValidationError, "before purchase"):
+            self.services.update_sale(
+                sale_id, SaleTerms.create(90, TEST_DATE - timedelta(days=1))
+            )
+
+        sale = self.services.list_sales()[0]
+        self.assertEqual(sale.selling_price_cents, 15_000)
+        self.assertEqual(sale.sale_date, TEST_DATE)
+
+    def test_missing_sale_cannot_be_edited(self):
+        with self.assertRaisesRegex(NotFoundError, "does not exist"):
+            self.services.update_sale(999, SaleTerms.create(10, TEST_DATE))
+
     def test_roi_handles_losses_and_zero_cost_sales(self):
         loss_item = self.buy("Loss", "Extra", 100)
         free_item = self.buy("Free", "Extra", 0)
@@ -1075,6 +1154,36 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(summary.realized_cost_cents, 0)
         self.assertEqual(summary.profit_cents, 2_500)
         self.assertIsNone(summary.roi_basis_points)
+
+    def test_total_proof_storage_limit_is_reported_before_insertion(self):
+        proof = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.4\nreceipt")
+        with (
+            patch("pcims.db.expense_commands.MAX_TOTAL_PROOF_BYTES", 5),
+            self.assertRaisesRegex(ValidationError, "512 MiB"),
+        ):
+            self.services.add_expenses(
+                [NewExpense.create("Limited", "Extra", 1, TEST_DATE)],
+                [(proof,)],
+            )
+        self.assertEqual(self.services.list_expenses(), ())
+
+    def test_storage_summary_counts_deduplicated_proofs_and_backups(self):
+        proof = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.4\nreceipt")
+        self.services.add_expenses(
+            [
+                NewExpense.create("One", "Extra", 1, TEST_DATE),
+                NewExpense.create("Two", "Extra", 1, TEST_DATE),
+            ],
+            [(proof,), (proof,)],
+        )
+        backup = self.services.create_backup()
+
+        summary = self.services.storage_summary()
+        self.assertGreater(summary.database_bytes, 0)
+        self.assertEqual(summary.proof_count, 1)
+        self.assertEqual(summary.proof_bytes, len(proof.content))
+        self.assertEqual(summary.backup_count, 1)
+        self.assertEqual(summary.backup_bytes, backup.path.stat().st_size)
 
     def test_sale_summaries_and_item_details_are_independently_bounded(self):
         ids = self.services.add_expenses(
@@ -1538,6 +1647,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.buy("Keep", "CPU", 10)
         backup_directory = Path(self.temporary_directory.name) / "backups"
         first = create_backup(backup_directory, keep=1, database=self.database)
+        self.buy("Changed", "RAM", 1)
         original_unlink = Path.unlink
 
         def fail_for_oldest(path, *args, **kwargs):
@@ -1576,6 +1686,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         initialize_database(other_database)
         other_first = create_backup(shared_directory, keep=1, database=other_database)
 
+        self.buy("Changed", "RAM", 1)
         create_backup(shared_directory, keep=1, database=self.database)
 
         self.assertFalse(first.path.exists())
@@ -1588,6 +1699,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         first = create_backup(keep=2, database=self.database)
         os.utime(first.path, ns=(1, 1))
         old_clock = datetime(2000, 1, 1, tzinfo=UTC)
+        self.buy("Changed", "RAM", 1)
 
         with patch("pcims.db.backup.datetime") as clock:
             clock.now.return_value = old_clock
@@ -1596,16 +1708,17 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertFalse(first.path.exists())
         self.assertTrue(second.path.exists())
 
-    def test_repeated_wall_clock_timestamp_still_creates_distinct_backups(self):
+    def test_unchanged_database_reuses_verified_backup(self):
         repeated_time = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
         with patch("pcims.db.backup.datetime") as clock:
             clock.now.return_value = repeated_time
             first = create_backup(database=self.database)
             second = create_backup(database=self.database)
 
-        self.assertNotEqual(first.path, second.path)
+        self.assertEqual(first.path, second.path)
         self.assertTrue(first.path.is_file())
-        self.assertTrue(second.path.is_file())
+        self.assertTrue(second.reused)
+        self.assertEqual(len(tuple(first.path.parent.glob("pcims_*.db"))), 1)
 
     def test_non_file_cannot_consume_a_backup_retention_slot(self):
         first = create_backup(keep=2, database=self.database)
@@ -1616,6 +1729,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         future = (datetime.now(UTC) + timedelta(days=1)).timestamp()
         os.utime(matching_directory, (future, future))
 
+        self.buy("Changed", "RAM", 1)
         second = create_backup(keep=1, database=self.database)
 
         self.assertFalse(first.path.exists())

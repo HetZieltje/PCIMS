@@ -10,9 +10,14 @@ from pcims.db.connection import Database
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_CONDITIONS, ITEM_TYPES, MAX_NAME_LENGTH, MAX_NOTES_LENGTH
 from pcims.money import MAX_MONEY_CENTS
-from pcims.proofs import MAX_PROOF_BYTES, MAX_PROOFS_PER_ITEM, NewProof
+from pcims.proofs import (
+    MAX_PROOF_BYTES,
+    MAX_PROOFS_PER_ITEM,
+    MAX_TOTAL_PROOF_BYTES,
+    NewProof,
+)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
@@ -20,7 +25,7 @@ _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
         AND name NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')"""
 _VALID_FILE_NAME_SQL = _VALID_NAME_SQL.replace("name", "file_name")
 
-SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
+SCHEMA_V1_DEFINITIONS: dict[tuple[str, str], str] = {
     ("table", "schema_migrations"): """CREATE TABLE schema_migrations (
         version INTEGER PRIMARY KEY CHECK (version>0),
         name TEXT NOT NULL UNIQUE,
@@ -186,17 +191,47 @@ SCHEMA_DEFINITIONS: dict[tuple[str, str], str] = {
         BEGIN SELECT RAISE(ABORT,'duplicate proof file name for item'); END""",
 }
 
+SCHEMA_DEFINITIONS = {
+    key: sql
+    for key, sql in SCHEMA_V1_DEFINITIONS.items()
+    if key[1] not in {"activity_events", "activity_events_newest"}
+}
+SCHEMA_DEFINITIONS[
+    ("trigger", "proof_total_size_limit")
+] = f"""CREATE TRIGGER proof_total_size_limit
+        BEFORE INSERT ON proof_files
+        WHEN COALESCE((SELECT SUM(length(content)) FROM proof_files),0)
+             + length(NEW.content)>{MAX_TOTAL_PROOF_BYTES}
+        BEGIN SELECT RAISE(ABORT,'stored proofs exceed 512 MiB total'); END"""  # nosec B608
+
 
 def _normalize_schema_sql(sql: object) -> str:
     return " ".join(str(sql).split()).casefold()
 
 
-SCHEMA_CHECKSUM = hashlib.sha256(
-    "\n".join(
-        f"{kind}:{name}:{_normalize_schema_sql(sql)}"
-        for (kind, name), sql in sorted(SCHEMA_DEFINITIONS.items())
-    ).encode("utf-8")
-).hexdigest()
+def _schema_checksum(definitions: dict[tuple[str, str], str]) -> str:
+    return hashlib.sha256(
+        "\n".join(
+            f"{kind}:{name}:{_normalize_schema_sql(sql)}"
+            for (kind, name), sql in sorted(definitions.items())
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+SCHEMA_V1_CHECKSUM = _schema_checksum(SCHEMA_V1_DEFINITIONS)
+SCHEMA_CHECKSUM = _schema_checksum(SCHEMA_DEFINITIONS)
+SCHEMA_REVISIONS = {
+    1: (
+        "initial inventory baseline",
+        SCHEMA_V1_CHECKSUM,
+        SCHEMA_V1_DEFINITIONS,
+    ),
+    2: (
+        "streamline history and cap proof storage",
+        SCHEMA_CHECKSUM,
+        SCHEMA_DEFINITIONS,
+    ),
+}
 
 
 def _schema_objects(database: sqlite3.Connection) -> dict[tuple[str, str], str]:
@@ -211,13 +246,18 @@ def _schema_objects(database: sqlite3.Connection) -> dict[tuple[str, str], str]:
 
 
 def validate_schema(database: sqlite3.Connection) -> None:
-    """Require the exact clean-baseline schema and its migration marker."""
+    """Require an exact known schema revision and its complete migration history."""
     actual_version = int(database.execute("PRAGMA user_version").fetchone()[0])
+    revision = SCHEMA_REVISIONS.get(actual_version)
+    if revision is None:
+        raise SchemaVersionError(
+            "Database schema is incompatible with this PCIMS version "
+            f"(version {actual_version}, supported 1 through {SCHEMA_VERSION})."
+        )
+    _name, _checksum, definitions = revision
     actual = _schema_objects(database)
-    expected = {
-        key: _normalize_schema_sql(sql) for key, sql in SCHEMA_DEFINITIONS.items()
-    }
-    if actual_version != SCHEMA_VERSION or actual != expected:
+    expected = {key: _normalize_schema_sql(sql) for key, sql in definitions.items()}
+    if actual != expected:
         missing = sorted(name for _, name in expected.keys() - actual.keys())
         unexpected = sorted(name for _, name in actual.keys() - expected.keys())
         changed = sorted(
@@ -226,8 +266,6 @@ def validate_schema(database: sqlite3.Connection) -> None:
             if expected[key] != actual[key]
         )
         differences = []
-        if actual_version != SCHEMA_VERSION:
-            differences.append(f"version {actual_version}, expected {SCHEMA_VERSION}")
         if missing:
             differences.append(f"missing {', '.join(missing)}")
         if unexpected:
@@ -235,18 +273,18 @@ def validate_schema(database: sqlite3.Connection) -> None:
         if changed:
             differences.append(f"changed {', '.join(changed)}")
         raise SchemaVersionError(
-            "Database schema is incompatible with the clean pre-release baseline"
-            f" ({'; '.join(differences)}). Choose a new database."
+            f"Database schema version {actual_version} is incompatible"
+            f" ({'; '.join(differences)})."
         )
     markers = database.execute(
         "SELECT version,name,checksum FROM schema_migrations ORDER BY version"
     ).fetchall()
-    if len(markers) != 1 or tuple(markers[0]) != (
-        SCHEMA_VERSION,
-        "initial inventory baseline",
-        SCHEMA_CHECKSUM,
-    ):
-        raise SchemaVersionError("Database baseline marker is missing or invalid.")
+    expected_markers = tuple(
+        (version, SCHEMA_REVISIONS[version][0], SCHEMA_REVISIONS[version][1])
+        for version in range(1, actual_version + 1)
+    )
+    if tuple(tuple(row) for row in markers) != expected_markers:
+        raise SchemaVersionError("Database migration history is missing or invalid.")
 
 
 def _valid_iso_date(value: object) -> bool:
@@ -368,14 +406,39 @@ def _validate_storage(database: sqlite3.Connection, *, thorough: bool = True) ->
         )
 
 
-def _inspect_database(database: Database) -> Literal["empty", "current"]:
+def _inspect_database(database: Database) -> Literal["empty"] | int:
     with database.transaction() as connection:
         if not _schema_objects(connection):
             return "empty"
         validate_schema(connection)
         _validate_storage(connection, thorough=False)
         validate_current_data(connection)
-        return "current"
+        return int(connection.execute("PRAGMA user_version").fetchone()[0])
+
+
+def _record_revision(connection: sqlite3.Connection, version: int) -> None:
+    name, checksum, _definitions = SCHEMA_REVISIONS[version]
+    connection.execute(
+        """INSERT INTO schema_migrations (version,name,checksum,applied_at)
+           VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
+        (version, name, checksum),
+    )
+    connection.execute(f"PRAGMA user_version={version}")
+
+
+def _upgrade_schema(connection: sqlite3.Connection, version: int) -> None:
+    while version < SCHEMA_VERSION:
+        if version == 1:
+            connection.execute("DROP TABLE activity_events")
+            connection.execute(
+                SCHEMA_DEFINITIONS[("trigger", "proof_total_size_limit")]
+            )
+        else:  # pragma: no cover - every supported source has a registered step
+            raise SchemaVersionError(
+                f"No database migration is registered after version {version}."
+            )
+        version += 1
+        _record_revision(connection, version)
 
 
 def _initialize_database(database: Database) -> None:
@@ -385,21 +448,30 @@ def _initialize_database(database: Database) -> None:
             raise DatabaseIntegrityError(
                 f"Database could not enable WAL journaling (got {journal_mode})."
             )
-    if _inspect_database(database) == "current":
+    state = _inspect_database(database)
+    if state == SCHEMA_VERSION:
         return
+    if state == "empty":
+        with database.transaction(write=True) as connection:
+            for statement in SCHEMA_V1_DEFINITIONS.values():
+                connection.execute(statement)
+            _record_revision(connection, 1)
+            _upgrade_schema(connection, 1)
+            validate_schema(connection)
+        return
+
+    # A verified snapshot is mandatory before modifying a recognized older revision.
+    from pcims.db.backup import create_backup
+
+    create_backup(database=database)
     with database.transaction(write=True) as connection:
-        for statement in SCHEMA_DEFINITIONS.values():
-            connection.execute(statement)
-        connection.execute(
-            """INSERT INTO schema_migrations (version,name,checksum,applied_at)
-               VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
-            (SCHEMA_VERSION, "initial inventory baseline", SCHEMA_CHECKSUM),
-        )
-        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        _upgrade_schema(connection, state)
         validate_schema(connection)
+        _validate_storage(connection, thorough=False)
+        validate_current_data(connection)
 
 
 def initialize_database(database: Database) -> None:
-    """Create or validate the single supported pre-release database baseline."""
+    """Create, migrate, or validate the database from the clean v1 baseline."""
     with database.gate.maintenance(), database.gate.exclusive():
         _initialize_database(database)

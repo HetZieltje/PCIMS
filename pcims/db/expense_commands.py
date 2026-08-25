@@ -4,7 +4,6 @@ import hashlib
 import sqlite3
 from collections.abc import Iterable
 
-from pcims.db.audit import record_audit_event
 from pcims.db.command_support import (
     bounded_cents_total,
     positive_command_id,
@@ -15,7 +14,12 @@ from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
 from pcims.db.records import inserted_id
 from pcims.domain import NewExpense
-from pcims.proofs import MAX_PROOFS_PER_ITEM, NewProof, validate_proof_collection
+from pcims.proofs import (
+    MAX_PROOFS_PER_ITEM,
+    MAX_TOTAL_PROOF_BYTES,
+    NewProof,
+    validate_proof_collection,
+)
 
 
 def _proof_id(
@@ -33,6 +37,16 @@ def _proof_id(
     if existing is not None:
         proof_id = int(existing["id"])
     else:
+        stored_bytes = int(
+            connection.execute(
+                "SELECT COALESCE(SUM(length(content)),0) FROM proof_files"
+            ).fetchone()[0]
+        )
+        if stored_bytes + len(proof.content) > MAX_TOTAL_PROOF_BYTES:
+            raise ValidationError(
+                "Stored proofs cannot exceed 512 MiB in total. Remove unused proofs "
+                "or keep the receipt outside PCIMS."
+            )
         proof_id = inserted_id(
             connection.execute(
                 """INSERT INTO proof_files (media_type,content,sha256)
@@ -120,13 +134,6 @@ def add_expenses(
                 proofs,
                 proof_id_cache=proof_id_cache,
             )
-            record_audit_event(
-                connection,
-                "created",
-                "item",
-                expense_id,
-                f"Added {expense.item_type} '{expense.name}'.",
-            )
             identifiers.append(expense_id)
         return identifiers
 
@@ -193,13 +200,6 @@ def replace_expense_proofs(
             + 1
         )
         _link_new_proofs(connection, expense_id, additions, next_position)
-        record_audit_event(
-            connection,
-            "proofs_updated",
-            "item",
-            expense_id,
-            f"Updated proofs: {len(retained)} kept, {len(additions)} added.",
-        )
 
 
 def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:
@@ -219,14 +219,6 @@ def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:
                 raise ValidationError(
                     f"Item {row['id']} has sale history. Undo the sale first."
                 )
-        for row in rows:
-            record_audit_event(
-                connection,
-                "deleted",
-                "item",
-                int(row["id"]),
-                f"Deleted {row['item_type']} '{row['name']}'.",
-            )
         connection.executemany(
             "DELETE FROM inventory_items WHERE id=?", ((i,) for i in ids)
         )
@@ -316,10 +308,3 @@ def update_expense(
         )
         if result.rowcount != 1:
             raise NotFoundError(f"Item {expense_id} does not exist.")
-        record_audit_event(
-            connection,
-            "updated",
-            "item",
-            expense_id,
-            f"Updated {replacement.item_type} '{replacement.name}'.",
-        )
