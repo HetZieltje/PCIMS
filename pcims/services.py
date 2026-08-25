@@ -71,19 +71,21 @@ class ApplicationServices:
         expense_offset: int = 0,
         sale_offset: int = 0,
         page_size: int = 500,
+        search: str = "",
     ) -> SalesSnapshot:
         page_size = _history_page_size(page_size)
         expense_offset = _history_offset(expense_offset)
         sale_offset = _history_offset(sale_offset)
+        search = str(search).strip()[:200]
         with self.database.transaction() as connection:
             queries = ReadQueries(connection)
-            expense_total = queries.count_expenses()
-            sale_total = queries.count_sales()
+            expense_total = queries.count_expenses(search)
+            sale_total = queries.count_sales(search)
             expense_offset = _clamped_page_offset(
                 expense_offset, expense_total, page_size
             )
             sale_offset = _clamped_page_offset(sale_offset, sale_total, page_size)
-            expenses = queries.list_expense_page(expense_offset, page_size)
+            expenses = queries.list_expense_page(expense_offset, page_size, search)
             return SalesSnapshot(
                 queries.financial_summary(),
                 HistoryPage(
@@ -93,7 +95,7 @@ class ApplicationServices:
                     page_size,
                 ),
                 HistoryPage(
-                    queries.list_sale_page(sale_offset, page_size),
+                    queries.list_sale_page(sale_offset, page_size, search),
                     sale_offset,
                     sale_total,
                     page_size,
@@ -204,6 +206,11 @@ class ApplicationServices:
     def financial_summary(self) -> FinancialSummary:
         with self.database.transaction() as connection:
             return ReadQueries(connection).financial_summary()
+
+    def export_csv(self, directory: str | os.PathLike[str]) -> tuple[Path, Path]:
+        from pcims.db.export import export_csv
+
+        return export_csv(directory, database=self.database)
 
     def create_backup(
         self,

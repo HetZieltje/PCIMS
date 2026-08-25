@@ -38,6 +38,7 @@ from pcims.db.schema import (
     initialize_database,
 )
 from pcims.domain import ItemDetails, NewExpense, SaleTerms
+from pcims.drafts import DraftPurchase, PurchaseDraftStore
 from pcims.money import MAX_MONEY_CENTS
 from pcims.proofs import NewProof
 from pcims.services import ApplicationServices
@@ -464,6 +465,73 @@ class DatabaseWorkflowTests(unittest.TestCase):
             self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"),
         ):
             connection.execute("DELETE FROM audit_events")
+
+    def test_history_searches_purchase_metadata_and_sale_names(self):
+        expense_id = self.services.add_expenses(
+            [
+                NewExpense.create(
+                    "Searchable GPU",
+                    "GPU",
+                    100,
+                    TEST_DATE,
+                    ItemDetails(serial_number="UNIQUE-SERIAL"),
+                )
+            ]
+        )[0]
+        self.services.sell_items([expense_id], SaleTerms.create(120, TEST_DATE))
+
+        by_serial = self.services.sales_snapshot(search="UNIQUE-SERIAL")
+        self.assertEqual([item.id for item in by_serial.expenses.records], [expense_id])
+        self.assertEqual(by_serial.sales.records, ())
+        by_sale = self.services.sales_snapshot(search="Searchable GPU")
+        self.assertEqual(by_sale.sales.records[0].name, "Searchable GPU")
+
+    def test_csv_export_contains_stable_ids_metadata_and_sales(self):
+        expense_id = self.services.add_expenses(
+            [
+                NewExpense.create(
+                    "Exported",
+                    "Extra",
+                    10,
+                    TEST_DATE,
+                    ItemDetails(vendor="Export Shop", serial_number="CSV-1"),
+                )
+            ]
+        )[0]
+        self.services.sell_items([expense_id], SaleTerms.create(15, TEST_DATE))
+        destination = Path(self.temporary_directory.name) / "export"
+
+        purchases, sales = self.services.export_csv(destination)
+
+        purchases_text = purchases.read_text(encoding="utf-8-sig")
+        sales_text = sales.read_text(encoding="utf-8-sig")
+        self.assertIn(f"{expense_id},Exported,Extra,10.00", purchases_text)
+        self.assertIn("Export Shop,CSV-1", purchases_text)
+        self.assertIn("Exported,10.00,15.00,5.00", sales_text)
+
+    def test_purchase_draft_round_trips_details_and_proof_content(self):
+        store = PurchaseDraftStore(
+            self.database_path,
+            Path(self.temporary_directory.name) / "draft-storage",
+        )
+        proof = NewProof("draft.pdf", "application/pdf", b"%PDF-1.4\n%%EOF")
+        line = DraftPurchase(
+            7,
+            NewExpense.create(
+                "Draft GPU",
+                "GPU",
+                99,
+                TEST_DATE,
+                ItemDetails(serial_number="DRAFT-1", condition="Used"),
+            ),
+            (proof,),
+        )
+
+        store.save((line,))
+
+        self.assertEqual(store.load(), (line,))
+        store.discard()
+        self.assertEqual(store.load(), ())
 
     def test_schema_contains_only_authoritative_current_tables_and_columns(self):
         with self.database.transaction() as database:

@@ -116,6 +116,9 @@ class InventoryOperations(Protocol):
 
 
 class PurchaseOperations(Protocol):
+    @property
+    def database_path(self) -> Path: ...
+
     def purchases_snapshot(self) -> PurchasesSnapshot: ...
     def add_expenses(
         self,
@@ -135,6 +138,7 @@ class SalesOperations(Protocol):
         expense_offset: int = 0,
         sale_offset: int = 0,
         page_size: int = 500,
+        search: str = "",
     ) -> SalesSnapshot: ...
     def sale_item_page(
         self,
@@ -171,3 +175,5 @@ class MaintenanceOperations(Protocol):
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
     ) -> RestoreResult: ...
+
+    def export_csv(self, directory: str | os.PathLike[str]) -> tuple[Path, Path]: ...

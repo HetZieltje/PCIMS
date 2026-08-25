@@ -73,10 +73,13 @@ class SettingsPage(QWidget):
         self.backup_button.clicked.connect(self.create_backup)
         self.restore_button = QPushButton("Restore backup…")
         self.restore_button.clicked.connect(self.restore_backup)
+        self.export_button = QPushButton("Export purchases and sales…")
+        self.export_button.clicked.connect(self.export_csv)
         maintenance_form = QFormLayout()
         maintenance_form.addRow("Database", location_widget)
         maintenance_form.addRow("Backup", self.backup_button)
         maintenance_form.addRow("Restore", self.restore_button)
+        maintenance_form.addRow("CSV export", self.export_button)
         maintenance_box = QGroupBox("Data and backups")
         maintenance_box.setLayout(maintenance_form)
 
@@ -100,6 +103,32 @@ class SettingsPage(QWidget):
             self._backup_failed,
             owner=self,
         )
+
+    def export_csv(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self, "Choose export folder", str(self.services.database_path.parent)
+        )
+        if not directory:
+            return
+        self.export_button.setEnabled(False)
+        self._export_task = self.tasks.run(
+            lambda: self.services.export_csv(directory),
+            self._export_finished,
+            self._export_failed,
+            owner=self,
+        )
+
+    def _export_finished(self, paths: tuple[object, object]) -> None:
+        self.export_button.setEnabled(True)
+        QMessageBox.information(
+            self,
+            "Export complete",
+            f"Created:\n{paths[0]}\n{paths[1]}",
+        )
+
+    def _export_failed(self, error: Exception) -> None:
+        self.export_button.setEnabled(True)
+        show_error(self, "Export failed", error)
 
     def _backup_finished(self, backup: BackupResult) -> None:
         self.backup_button.setEnabled(True)

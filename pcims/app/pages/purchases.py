@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
@@ -39,14 +38,10 @@ from pcims.app.table_model import (
 from pcims.app.tasks import TaskManager
 from pcims.contracts import PurchaseOperations, PurchasesSnapshot
 from pcims.domain import ITEM_CONDITIONS, ITEM_TYPES, ItemDetails, ItemType, NewExpense
+from pcims.drafts import DraftPurchase, PurchaseDraftStore
 from pcims.proofs import NewProof
 
-
-@dataclass(frozen=True, slots=True)
-class StagedPurchase:
-    staged_id: int
-    expense: NewExpense
-    proofs: tuple[NewProof, ...] = ()
+StagedPurchase = DraftPurchase
 
 
 class PurchasesPage(AsyncCommandPage):
@@ -57,12 +52,22 @@ class PurchasesPage(AsyncCommandPage):
         services: PurchaseOperations,
         *,
         tasks: TaskManager,
+        draft_store: PurchaseDraftStore | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(tasks, parent)
         self.services = services
-        self._staged: list[StagedPurchase] = []
+        self._draft_store = draft_store
+        self._draft_load_error: Exception | None = None
+        self._staged: list[DraftPurchase] = []
+        if self._draft_store is not None:
+            try:
+                self._staged = list(self._draft_store.load())
+            except (OSError, TypeError, ValueError) as error:
+                self._draft_load_error = error
         self._next_staged_id = 1
+        if self._staged:
+            self._next_staged_id = max(item.staged_id for item in self._staged) + 1
         self._pending_proofs: tuple[NewProof, ...] = ()
 
         self.name = QLineEdit()
@@ -133,7 +138,7 @@ class PurchasesPage(AsyncCommandPage):
         form_box = QGroupBox("New purchase line")
         form_box.setLayout(form)
 
-        self.table_model = RecordTableModel[StagedPurchase](
+        self.table_model = RecordTableModel[DraftPurchase](
             (
                 Column(
                     "Line",
@@ -199,6 +204,10 @@ class PurchasesPage(AsyncCommandPage):
 
     def apply_snapshot(self, snapshot: PurchasesSnapshot) -> None:
         self._completion_model.setStringList(list(snapshot.expense_names))
+        if self._draft_load_error is not None:
+            error = self._draft_load_error
+            self._draft_load_error = None
+            show_error(self, "Unable to restore purchase draft", error)
 
     @property
     def has_staged_items(self) -> bool:
@@ -253,7 +262,7 @@ class PurchasesPage(AsyncCommandPage):
             return
         for price_cents in prices:
             self._staged.append(
-                StagedPurchase(
+                DraftPurchase(
                     self._next_staged_id,
                     NewExpense(
                         name,
@@ -312,6 +321,11 @@ class PurchasesPage(AsyncCommandPage):
         QMessageBox.information(self, "Purchase recorded", f"Recorded {count} item(s).")
 
     def _render_staged(self) -> None:
+        if self._draft_store is not None:
+            try:
+                self._draft_store.save(tuple(self._staged))
+            except OSError as error:
+                show_error(self, "Unable to save purchase draft", error)
         self.table_model.set_records(self._staged)
         self.total_label.setText(
             "Staged total: "

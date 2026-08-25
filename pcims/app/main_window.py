@@ -19,6 +19,7 @@ from pcims.app.refresh import RefreshCoordinator, bind_refresh
 from pcims.app.tasks import TaskManager
 from pcims.app.window_state import WindowStateStore
 from pcims.contracts import BackupResult
+from pcims.drafts import PurchaseDraftStore
 from pcims.services import ApplicationServices
 
 
@@ -42,7 +43,11 @@ class MainWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.setCentralWidget(self.tabs)
         self.inventory_page = InventoryPage(self.services, tasks=self.tasks)
-        self.purchases_page = PurchasesPage(self.services, tasks=self.tasks)
+        self.purchases_page = PurchasesPage(
+            self.services,
+            tasks=self.tasks,
+            draft_store=PurchaseDraftStore(self.services.database_path),
+        )
         self.assemble_page = AssemblePage(self.services, tasks=self.tasks)
         self.sales_page = SalesPage(self.services, tasks=self.tasks)
         self.activity_page = ActivityPage(self.services, tasks=self.tasks)
@@ -211,9 +216,9 @@ class MainWindow(QMainWindow):
         if self.purchases_page.has_staged_items:
             answer = QMessageBox.question(
                 self,
-                "Unrecorded purchase",
+                "Saved purchase draft",
                 "The Purchases tab contains items that have not been recorded. "
-                "Close and discard them?",
+                "They are saved and will be restored next time. Close PCIMS?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )

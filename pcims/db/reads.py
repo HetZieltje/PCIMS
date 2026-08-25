@@ -71,15 +71,39 @@ class ReadQueries:
         rows = self.connection.execute(EXPENSE_SELECT + " ORDER BY e.id").fetchall()
         return self._expenses_from_rows(rows)
 
-    def count_expenses(self) -> int:
+    def count_expenses(self, search: str = "") -> int:
+        if search:
+            pattern = f"%{search}%"
+            return int(
+                self.connection.execute(
+                    """SELECT COUNT(*) FROM expenses e
+                       JOIN expense_details d ON d.expense_id=e.id
+                       WHERE e.name LIKE ? OR e.item_type LIKE ? OR d.vendor LIKE ?
+                          OR d.serial_number LIKE ? OR d.storage_location LIKE ?
+                          OR d.notes LIKE ?""",
+                    (pattern,) * 6,
+                ).fetchone()[0]
+            )
         return int(
             self.connection.execute("SELECT COUNT(*) FROM expenses").fetchone()[0]
         )
 
-    def list_expense_page(self, offset: int, limit: int) -> tuple[Expense, ...]:
+    def list_expense_page(
+        self, offset: int, limit: int, search: str = ""
+    ) -> tuple[Expense, ...]:
+        where = ""
+        parameters: tuple[object, ...] = ()
+        if search:
+            pattern = f"%{search}%"
+            where = (
+                " WHERE e.name LIKE ? OR e.item_type LIKE ? OR d.vendor LIKE ?"
+                " OR d.serial_number LIKE ? OR d.storage_location LIKE ?"
+                " OR d.notes LIKE ?"
+            )
+            parameters = (pattern,) * 6
         rows = self.connection.execute(
-            EXPENSE_SELECT + " ORDER BY e.id DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            EXPENSE_SELECT + where + " ORDER BY e.id DESC LIMIT ? OFFSET ?",
+            (*parameters, limit, offset),
         )
         return self._expenses_from_rows(rows)
 
@@ -169,18 +193,32 @@ class ReadQueries:
             for sale in sales
         )
 
-    def count_sales(self) -> int:
-        return int(self.connection.execute("SELECT COUNT(*) FROM sales").fetchone()[0])
+    def count_sales(self, search: str = "") -> int:
+        if not search:
+            return int(
+                self.connection.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
+            )
+        pattern = f"%{search}%"
+        return int(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM sales WHERE name LIKE ? OR kind LIKE ?",
+                (pattern, pattern),
+            ).fetchone()[0]
+        )
 
     def list_sale_page(
         self,
         offset: int,
         limit: int,
+        search: str = "",
     ) -> tuple[SaleSummary, ...]:
+        pattern = f"%{search}%"
         sales = self.connection.execute(
             """WITH page AS (
                    SELECT id,name,kind,selling_price_cents,sale_date
-                     FROM sales ORDER BY id DESC LIMIT ? OFFSET ?
+                     FROM sales
+                    WHERE ?='' OR name LIKE ? OR kind LIKE ?
+                    ORDER BY id DESC LIMIT ? OFFSET ?
                )
                SELECT p.id,p.name,p.kind,p.selling_price_cents,p.sale_date,
                       COUNT(si.expense_id) AS item_count,
@@ -190,7 +228,7 @@ class ReadQueries:
                  JOIN expenses e ON e.id=si.expense_id
                 GROUP BY p.id,p.name,p.kind,p.selling_price_cents,p.sale_date
                 ORDER BY p.id DESC""",
-            (limit, offset),
+            (search, pattern, pattern, limit, offset),
         )
         return tuple(
             SaleSummary(

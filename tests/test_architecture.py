@@ -295,9 +295,12 @@ class ArchitectureTests(unittest.TestCase):
         purchases = (
             Path(__file__).parents[1] / "pcims" / "app" / "pages" / "purchases.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("@dataclass(frozen=True, slots=True)", purchases)
+        drafts = (Path(__file__).parents[1] / "pcims" / "drafts.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("@dataclass(frozen=True, slots=True)", drafts)
         self.assertNotIn("TypedDict", purchases)
-        self.assertIn("expense: NewExpense", purchases)
+        self.assertIn("expense: NewExpense", drafts)
 
     def test_only_composition_root_can_choose_default_services(self):
         root = Path(__file__).parents[1] / "pcims"

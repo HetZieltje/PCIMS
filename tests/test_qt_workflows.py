@@ -361,7 +361,7 @@ class QtWorkflowTests(unittest.TestCase):
         log_error.assert_not_called()
         page.deleteLater()
 
-    def test_close_warns_before_discarding_staged_purchase(self):
+    def test_close_explains_that_staged_purchase_will_be_restored(self):
         window = MainWindow(self.services)
         self.wait_for_window(window)
         window.purchases_page._staged.append(

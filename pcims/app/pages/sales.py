@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -52,6 +53,19 @@ class SalesPage(AsyncCommandPage):
         self._detail_page = HistoryPage[Expense]((), 0, 0, 500)
         self._detail_sale_id: int | None = None
         self._detail_generation = 0
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(
+            "Search purchases, serial numbers, vendors, locations, or sales…"
+        )
+        self.search.returnPressed.connect(self.apply_filter)
+        search_button = QPushButton("Search")
+        search_button.clicked.connect(self.apply_filter)
+        clear_button = QPushButton("Clear")
+        clear_button.clicked.connect(self.clear_filter)
+        search_row = QHBoxLayout()
+        search_row.addWidget(self.search, 1)
+        search_row.addWidget(search_button)
+        search_row.addWidget(clear_button)
         self.summary_labels: dict[str, QLabel] = {}
         summary_box = QGroupBox("Financial summary")
         summary_layout = QGridLayout(summary_box)
@@ -239,6 +253,7 @@ class SalesPage(AsyncCommandPage):
 
         layout = QVBoxLayout(self)
         layout.addWidget(summary_box)
+        layout.addLayout(search_row)
         layout.addWidget(self.splitter, 1)
 
     def refresh(self) -> None:
@@ -249,6 +264,7 @@ class SalesPage(AsyncCommandPage):
             self._expense_page.offset,
             self._sale_page.offset,
             self._expense_page.limit,
+            self.search.text(),
         )
 
     def apply_snapshot(self, snapshot: SalesSnapshot) -> None:
@@ -295,6 +311,15 @@ class SalesPage(AsyncCommandPage):
         )
         self._load_page(offset, self._sale_page.offset)
 
+    def apply_filter(self) -> None:
+        self._load_page(0, 0)
+
+    def clear_filter(self) -> None:
+        if not self.search.text():
+            return
+        self.search.clear()
+        self.apply_filter()
+
     def edit_selected_expense_proofs(self) -> None:
         ids = selected_ids(self.expense_table)
         if len(ids) != 1 or ids[0] not in self._expenses:
@@ -334,6 +359,7 @@ class SalesPage(AsyncCommandPage):
                 expense_offset,
                 sale_offset,
                 self._expense_page.limit,
+                self.search.text(),
             ),
             self.apply_snapshot,
             "Unable to load history",
