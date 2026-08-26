@@ -2,19 +2,22 @@
 
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Literal, TypeAlias
 
 from pcims.domain import ItemDetails, ItemType, SaleKind
 from pcims.proofs import ProofSummary
 
+BalanceBucket: TypeAlias = Literal["day", "week", "month", "year"]
 
-def _roi_basis_points(profit_cents: int, cost_cents: int) -> int | None:
-    """Return profit divided by cost as hundredths of a percentage point."""
-    if cost_cents == 0:
+
+def _ratio_basis_points(numerator_cents: int, denominator_cents: int) -> int | None:
+    """Return a ratio as hundredths of a percentage point."""
+    if denominator_cents == 0:
         return None
-    numerator = profit_cents * 10_000
+    numerator = numerator_cents * 10_000
     if numerator >= 0:
-        return (numerator + cost_cents // 2) // cost_cents
-    return -((-numerator + cost_cents // 2) // cost_cents)
+        return (numerator + denominator_cents // 2) // denominator_cents
+    return -((-numerator + denominator_cents // 2) // denominator_cents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +65,7 @@ class Sale:
 
     @property
     def roi_basis_points(self) -> int | None:
-        return _roi_basis_points(self.profit_cents, self.cost_cents)
+        return _ratio_basis_points(self.profit_cents, self.cost_cents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +86,7 @@ class SaleSummary:
 
     @property
     def roi_basis_points(self) -> int | None:
-        return _roi_basis_points(self.profit_cents, self.cost_cents)
+        return _ratio_basis_points(self.profit_cents, self.cost_cents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,4 +106,64 @@ class FinancialSummary:
 
     @property
     def roi_basis_points(self) -> int | None:
-        return _roi_basis_points(self.profit_cents, self.realized_cost_cents)
+        return _ratio_basis_points(self.profit_cents, self.realized_cost_cents)
+
+
+@dataclass(frozen=True, slots=True)
+class BalancePoint:
+    """Economic activity grouped into one dashboard time bucket."""
+
+    period_start: date
+    purchase_cents: int
+    revenue_cents: int
+    realized_cost_cents: int
+    purchase_count: int
+    sale_count: int
+    sold_item_count: int
+
+    @property
+    def profit_cents(self) -> int:
+        return self.revenue_cents - self.realized_cost_cents
+
+    @property
+    def cash_flow_cents(self) -> int:
+        return self.revenue_cents - self.purchase_cents
+
+    @property
+    def roi_basis_points(self) -> int | None:
+        return _ratio_basis_points(self.profit_cents, self.realized_cost_cents)
+
+
+@dataclass(frozen=True, slots=True)
+class BalanceSummary:
+    """Selected-period totals plus the current unsold inventory valuation."""
+
+    purchase_cents: int
+    revenue_cents: int
+    realized_cost_cents: int
+    current_inventory_cents: int
+    purchase_count: int
+    sale_count: int
+    sold_item_count: int
+
+    @property
+    def profit_cents(self) -> int:
+        return self.revenue_cents - self.realized_cost_cents
+
+    @property
+    def cash_flow_cents(self) -> int:
+        return self.revenue_cents - self.purchase_cents
+
+    @property
+    def roi_basis_points(self) -> int | None:
+        return _ratio_basis_points(self.profit_cents, self.realized_cost_cents)
+
+    @property
+    def profit_margin_basis_points(self) -> int | None:
+        return _ratio_basis_points(self.profit_cents, self.revenue_cents)
+
+    @property
+    def average_sale_cents(self) -> int | None:
+        if self.sale_count == 0:
+            return None
+        return (self.revenue_cents + self.sale_count // 2) // self.sale_count

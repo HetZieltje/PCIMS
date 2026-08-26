@@ -1584,6 +1584,85 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(summary.inventory_cents, 4000)
         self.assertEqual(summary.cash_flow_cents, -1500)
 
+    def test_balance_dashboard_aggregates_selected_period_and_fills_time_buckets(
+        self,
+    ):
+        old_item = self.buy("Old CPU", "CPU", 100, date(2026, 1, 10))
+        self.buy("August RAM", "RAM", 50, date(2026, 8, 14))
+        second_sale_item = self.buy("August cable", "Extra", 10, date(2026, 8, 15))
+        self.services.sell_items([old_item], SaleTerms.create(160, date(2026, 8, 20)))
+        self.services.sell_items(
+            [second_sale_item], SaleTerms.create(15, date(2026, 8, 21))
+        )
+
+        snapshot = self.services.balance_snapshot(date(2026, 8, 1), date(2026, 8, 31))
+
+        self.assertEqual(snapshot.bucket, "day")
+        self.assertEqual(len(snapshot.points), 31)
+        self.assertEqual(snapshot.summary.purchase_cents, 6_000)
+        self.assertEqual(snapshot.summary.revenue_cents, 17_500)
+        self.assertEqual(snapshot.summary.realized_cost_cents, 11_000)
+        self.assertEqual(snapshot.summary.profit_cents, 6_500)
+        self.assertEqual(snapshot.summary.cash_flow_cents, 11_500)
+        self.assertEqual(snapshot.summary.roi_basis_points, 5_909)
+        self.assertEqual(snapshot.summary.profit_margin_basis_points, 3_714)
+        self.assertEqual(snapshot.summary.average_sale_cents, 8_750)
+        self.assertEqual(snapshot.summary.purchase_count, 2)
+        self.assertEqual(snapshot.summary.sale_count, 2)
+        self.assertEqual(snapshot.summary.sold_item_count, 2)
+        self.assertEqual(snapshot.summary.current_inventory_cents, 5_000)
+        august_twentieth = next(
+            point
+            for point in snapshot.points
+            if point.period_start == date(2026, 8, 20)
+        )
+        self.assertEqual(august_twentieth.revenue_cents, 16_000)
+        self.assertEqual(august_twentieth.profit_cents, 6_000)
+        self.assertEqual(august_twentieth.sale_count, 1)
+
+        all_time = self.services.balance_snapshot(None, date(2026, 8, 31))
+        self.assertEqual(all_time.start_date, date(2026, 1, 10))
+        self.assertEqual(all_time.end_date, date(2026, 8, 31))
+        self.assertEqual(all_time.bucket, "month")
+        self.assertEqual(len(all_time.points), 8)
+        self.assertEqual(all_time.summary.purchase_cents, 16_000)
+
+    def test_balance_dashboard_validates_dates_and_handles_an_empty_period(self):
+        with self.assertRaisesRegex(ValueError, "cannot be after"):
+            self.services.balance_snapshot(date(2026, 8, 2), date(2026, 8, 1))
+        with self.assertRaisesRegex(TypeError, "end date"):
+            self.services.balance_snapshot(date(2026, 8, 1), "2026-08-02")  # type: ignore[arg-type]
+
+        snapshot = self.services.balance_snapshot(date(2026, 8, 1), date(2026, 8, 3))
+        self.assertEqual(len(snapshot.points), 3)
+        self.assertTrue(
+            all(
+                point.purchase_cents == point.revenue_cents == point.profit_cents == 0
+                for point in snapshot.points
+            )
+        )
+        self.assertEqual(snapshot.summary.current_inventory_cents, 0)
+
+    def test_balance_dashboard_explicit_period_uses_one_aggregate_round_trip(self):
+        statements: list[str] = []
+        original_connect = Database.connect
+
+        def traced_connect(database, *args, **kwargs):
+            connection = original_connect(database, *args, **kwargs)
+            connection.set_trace_callback(statements.append)
+            return connection
+
+        with patch.object(Database, "connect", new=traced_connect):
+            self.services.balance_snapshot(date(2026, 8, 1), date(2026, 8, 31))
+
+        reads = [
+            statement
+            for statement in statements
+            if statement.lstrip().upper().startswith(("SELECT", "WITH"))
+        ]
+        self.assertEqual(len(reads), 1)
+        self.assertTrue(reads[0].lstrip().upper().startswith("WITH SALE_TOTALS"))
+
     def test_verified_backup_restore_and_retention(self):
         self.buy("Old state", "CPU", 10)
         backup_directory = Path(self.temporary_directory.name) / "backups"

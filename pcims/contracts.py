@@ -3,11 +3,20 @@
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Generic, Protocol, TypeVar
 
 from pcims.domain import NewExpense, SaleTerms
-from pcims.models import AssembledPC, Expense, FinancialSummary, SaleSummary
+from pcims.models import (
+    AssembledPC,
+    BalanceBucket,
+    BalancePoint,
+    BalanceSummary,
+    Expense,
+    FinancialSummary,
+    SaleSummary,
+)
 from pcims.proofs import NewProof
 
 RecordT = TypeVar("RecordT")
@@ -108,6 +117,15 @@ class SalesSnapshot:
     sales: HistoryPage[SaleSummary]
 
 
+@dataclass(frozen=True, slots=True)
+class BalanceSnapshot:
+    start_date: date
+    end_date: date
+    bucket: BalanceBucket
+    summary: BalanceSummary
+    points: tuple[BalancePoint, ...]
+
+
 class InventoryOperations(Protocol):
     def inventory_snapshot(self) -> InventorySnapshot: ...
     def delete_expenses(self, expense_ids: Iterable[int]) -> None: ...
@@ -165,6 +183,14 @@ class SalesOperations(Protocol):
         new_proofs: Iterable[NewProof],
     ) -> None: ...
     def proof_file(self, expense_id: int, proof_id: int) -> NewProof: ...
+
+
+class BalanceOperations(Protocol):
+    def balance_snapshot(
+        self,
+        start_date: date | None,
+        end_date: date,
+    ) -> BalanceSnapshot: ...
 
 
 class MaintenanceOperations(Protocol):

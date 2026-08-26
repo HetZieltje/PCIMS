@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from pcims.app.appearance import apply_application_theme
 from pcims.app.common import show_error
 from pcims.app.pages.assemble import AssemblePage
+from pcims.app.pages.balance import BalancePage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage
 from pcims.app.pages.sales import SalesPage
@@ -50,6 +51,7 @@ class MainWindow(QMainWindow):
         )
         self.assemble_page = AssemblePage(self.services, tasks=self.tasks)
         self.sales_page = SalesPage(self.services, tasks=self.tasks)
+        self.balance_page = BalancePage(self.services, tasks=self.tasks)
         self.settings_page = SettingsPage(
             self.services,
             theme=self.window_state.theme,
@@ -62,6 +64,7 @@ class MainWindow(QMainWindow):
             self.purchases_page,
             self.assemble_page,
             self.sales_page,
+            self.balance_page,
         )
         self.pages = (
             *self.data_pages,
@@ -89,6 +92,11 @@ class MainWindow(QMainWindow):
                 lambda snapshot: self.sales_page.apply_snapshot(snapshot),
             ),
             bind_refresh(
+                self.balance_page,
+                lambda: self.balance_page.load_snapshot(),
+                lambda snapshot: self.balance_page.apply_snapshot(snapshot),
+            ),
+            bind_refresh(
                 self.settings_page,
                 lambda: self.settings_page.load_snapshot(),
                 lambda snapshot: self.settings_page.apply_snapshot(snapshot),
@@ -108,12 +116,19 @@ class MainWindow(QMainWindow):
                 "Purchases",
                 "Assemble",
                 "Sales and History",
+                "Balance",
                 "Settings",
             ),
         ):
             self.tabs.addTab(page, title)
-        for page in self.data_pages:
+        for page in (
+            self.inventory_page,
+            self.purchases_page,
+            self.assemble_page,
+            self.sales_page,
+        ):
             page.data_changed.connect(self._on_data_changed)
+        self.balance_page.period_changed.connect(self._balance_period_changed)
         self.settings_page.theme_changed.connect(self.apply_theme)
         self.settings_page.backup_retention_changed.connect(self._set_backup_retention)
         self.settings_page.storage_changed.connect(self._storage_changed)
@@ -190,6 +205,11 @@ class MainWindow(QMainWindow):
         if self.tabs.currentWidget() is self.settings_page:
             self.refreshes.start_if_dirty(self.settings_page)
 
+    def _balance_period_changed(self) -> None:
+        self.refreshes.mark_dirty(self.balance_page)
+        if self.tabs.currentWidget() is self.balance_page:
+            self.refreshes.start_if_dirty(self.balance_page)
+
     def _after_database_restore(self) -> None:
         self.purchases_page.discard_staged()
         self._on_data_changed()
@@ -203,6 +223,7 @@ class MainWindow(QMainWindow):
                 ("inventory", self.inventory_page.splitter),
                 ("sales", self.sales_page.splitter),
                 ("sales_details", self.sales_page.detail_splitter),
+                ("balance", self.balance_page.splitter),
             ),
             self._persistent_tables(),
         )
@@ -215,6 +236,7 @@ class MainWindow(QMainWindow):
                 ("inventory", self.inventory_page.splitter),
                 ("sales", self.sales_page.splitter),
                 ("sales_details", self.sales_page.detail_splitter),
+                ("balance", self.balance_page.splitter),
             ),
             self._persistent_tables(),
         )
@@ -227,6 +249,7 @@ class MainWindow(QMainWindow):
             ("purchase_history", self.sales_page.expense_table),
             ("sales", self.sales_page.sale_table),
             ("sale_items", self.sales_page.detail_table),
+            ("balance_periods", self.balance_page.table),
         )
 
     def apply_theme(self, theme: str) -> None:

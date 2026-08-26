@@ -35,6 +35,7 @@ from pcims.app.dialogs import (
 from pcims.app.errors import install_exception_hook, log_exception
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
+from pcims.app.pages.balance import BalancePage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.purchases import PurchasesPage, StagedPurchase
 from pcims.app.pages.sales import SalesPage
@@ -136,7 +137,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.show()
         self.wait_for_window(window)
 
-        self.assertEqual(window.tabs.count(), 5)
+        self.assertEqual(window.tabs.count(), 6)
         self.assertGreaterEqual(window.width(), 900)
         self.assertTrue(all(page.tasks is window.tasks for page in window.pages))
         for index in range(window.tabs.count()):
@@ -158,7 +159,8 @@ class QtWorkflowTests(unittest.TestCase):
         purchases = PurchasesPage(services, tasks=self.tasks)
         assemble = AssemblePage(services, tasks=self.tasks)
         sales = SalesPage(services, tasks=self.tasks)
-        pages = (inventory, purchases, assemble, sales)
+        balance = BalancePage(services, tasks=self.tasks)
+        pages = (inventory, purchases, assemble, sales, balance)
 
         self.assertEqual(services.mock_calls, [])
         context_views = (
@@ -237,6 +239,72 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(page.parts_model.rowCount(), 1)
         page.deleteLater()
 
+    def test_balance_dashboard_renders_selected_period_totals_and_chart(self):
+        old_item = self.services.add_expenses(
+            [NewExpense.create("CPU", "CPU", 100, date(2026, 1, 10))]
+        )[0]
+        self.services.add_expenses(
+            [NewExpense.create("RAM", "RAM", 50, date(2026, 8, 14))]
+        )
+        self.services.sell_items([old_item], SaleTerms.create(160, date(2026, 8, 20)))
+        page = BalancePage(self.services, tasks=self.tasks)
+        page._requested_range = (date(2026, 8, 1), date(2026, 8, 31))
+        snapshot = page.load_snapshot()
+        page.apply_snapshot(snapshot)
+
+        self.assertEqual(page.metric_labels["purchase"].text(), "€50.00")
+        self.assertEqual(page.metric_labels["revenue"].text(), "€160.00")
+        self.assertEqual(page.metric_labels["profit"].text(), "€60.00")
+        self.assertEqual(page.metric_labels["cash"].text(), "€110.00")
+        self.assertEqual(page.metric_labels["roi"].text(), "60.00%")
+        self.assertEqual(page.metric_labels["margin"].text(), "37.50%")
+        self.assertEqual(page.metric_labels["sales"].text(), "1")
+        self.assertEqual(page.metric_labels["items"].text(), "1")
+        self.assertEqual(page.metric_labels["inventory"].text(), "€50.00")
+        self.assertEqual(page.table_model.rowCount(), 31)
+        self.assertEqual(page.chart.points, snapshot.points)
+        self.assertIn("grouped by day", page.range_label.text())
+        page.resize(1100, 720)
+        page.show()
+        self.application.processEvents()
+        self.assertFalse(page.grab().isNull())
+        page.deleteLater()
+
+    def test_balance_custom_period_keeps_dates_ordered(self):
+        page = BalancePage(self.services, tasks=self.tasks)
+        changed = MagicMock()
+        page.period_changed.connect(changed)
+        page.period.setCurrentIndex(page.period.findData("custom"))
+        page.start_date.setDate(QDate(2026, 8, 20))
+        page.end_date.setDate(QDate(2026, 8, 10))
+
+        self.assertEqual(
+            page._requested_range,
+            (date(2026, 8, 10), date(2026, 8, 10)),
+        )
+        self.assertTrue(page.start_date.isEnabled())
+        self.assertTrue(page.end_date.isEnabled())
+        self.assertGreaterEqual(changed.call_count, 2)
+        page.deleteLater()
+
+    def test_visible_balance_period_change_refreshes_asynchronously(self):
+        window = MainWindow(self.services)
+        window.tabs.setCurrentWidget(window.balance_page)
+        self.wait_for_window(window)
+        with patch.object(
+            window.balance_page,
+            "load_snapshot",
+            wraps=window.balance_page.load_snapshot,
+        ) as load_snapshot:
+            window.balance_page.period.setCurrentIndex(
+                window.balance_page.period.findData("30_days")
+            )
+            self.wait_for_window(window)
+
+        load_snapshot.assert_called_once()
+        self.assertIn("grouped by day", window.balance_page.range_label.text())
+        window.deleteLater()
+
     def test_main_window_restores_geometry_tab_and_splitters(self):
         first = MainWindow(self.services)
         self.wait_for_window(first)
@@ -245,8 +313,11 @@ class QtWorkflowTests(unittest.TestCase):
         first.inventory_page.splitter.setSizes((800, 200))
         first.sales_page.splitter.setSizes((300, 700))
         first.sales_page.detail_splitter.setSizes((500, 100))
+        first.balance_page.splitter.setSizes((420, 180))
         first.sales_page.sale_table.horizontalHeader().resizeSection(3, 321)
         first.sales_page.sale_table.sortByColumn(6, Qt.SortOrder.DescendingOrder)
+        first.balance_page.table.horizontalHeader().resizeSection(0, 240)
+        first.balance_page.table.sortByColumn(4, Qt.SortOrder.DescendingOrder)
         first.settings_page.backup_retention.setValue(7)
         first.show()
         self.application.processEvents()
@@ -255,6 +326,7 @@ class QtWorkflowTests(unittest.TestCase):
             first.inventory_page.splitter.saveState(),
             first.sales_page.splitter.saveState(),
             first.sales_page.detail_splitter.saveState(),
+            first.balance_page.splitter.saveState(),
         )
         expected_sale_table = first.sales_page.sale_table.horizontalHeader().saveState()
         expected_ratios = tuple(
@@ -263,16 +335,18 @@ class QtWorkflowTests(unittest.TestCase):
                 first.inventory_page.splitter,
                 first.sales_page.splitter,
                 first.sales_page.detail_splitter,
+                first.balance_page.splitter,
             )
         )
         first._save_window_state()
         settings = QSettings("PCIMS", "PCIMS")
         self.assertEqual(settings.value("window/geometry"), expected_geometry)
         for key, state in zip(
-            ("inventory", "sales", "sales_details"), expected_splitters
+            ("inventory", "sales", "sales_details", "balance"), expected_splitters
         ):
             self.assertEqual(settings.value(f"window/splitters/{key}"), state)
         self.assertEqual(settings.value("window/tables/sales"), expected_sale_table)
+        self.assertIsNotNone(settings.value("window/tables/balance_periods"))
         self.assertEqual(settings.value("backups/retention"), 7)
         first.deleteLater()
 
@@ -290,12 +364,20 @@ class QtWorkflowTests(unittest.TestCase):
             second.sales_page.sale_table.horizontalHeader().sortIndicatorOrder(),
             Qt.SortOrder.DescendingOrder,
         )
+        self.assertEqual(
+            second.balance_page.table.horizontalHeader().sortIndicatorSection(), 4
+        )
+        self.assertEqual(
+            second.balance_page.table.horizontalHeader().sortIndicatorOrder(),
+            Qt.SortOrder.DescendingOrder,
+        )
         self.assertEqual(second.settings_page.backup_retention.value(), 7)
         for splitter, expected in zip(
             (
                 second.inventory_page.splitter,
                 second.sales_page.splitter,
                 second.sales_page.detail_splitter,
+                second.balance_page.splitter,
             ),
             expected_ratios,
         ):

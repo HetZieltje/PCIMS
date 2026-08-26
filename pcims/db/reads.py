@@ -12,6 +12,9 @@ from pcims.db.records import EXPENSE_SELECT, expense_from_row
 from pcims.domain import ItemType, SaleKind
 from pcims.models import (
     AssembledPC,
+    BalanceBucket,
+    BalancePoint,
+    BalanceSummary,
     Expense,
     FinancialSummary,
     Sale,
@@ -287,3 +290,103 @@ class ReadQueries:
             profit_cents=income_cents - cost_cents,
             inventory_cents=inventory_cents,
         )
+
+    def balance_date_bounds(self) -> tuple[date | None, date | None]:
+        row = self.connection.execute(
+            """SELECT MIN(event_date),MAX(event_date) FROM (
+                   SELECT purchase_date AS event_date FROM inventory_items
+                   UNION ALL SELECT sale_date FROM sales
+               )"""
+        ).fetchone()
+        earliest = date.fromisoformat(row[0]) if row[0] is not None else None
+        latest = date.fromisoformat(row[1]) if row[1] is not None else None
+        return earliest, latest
+
+    def balance_series(
+        self,
+        start_date: date,
+        end_date: date,
+        bucket: BalanceBucket,
+    ) -> tuple[BalanceSummary, tuple[BalancePoint, ...]]:
+        """Aggregate purchases and realized sales without loading raw history."""
+
+        start_text = start_date.isoformat()
+        end_text = end_date.isoformat()
+        rows = self.connection.execute(
+            """WITH sale_totals AS (
+                   SELECT s.id,s.sale_date AS event_date,s.selling_price_cents,
+                          SUM(i.price_cents) AS realized_cost_cents,
+                          COUNT(si.item_id) AS sold_item_count
+                     FROM sales s
+                     JOIN sale_items si ON si.sale_id=s.id
+                     JOIN inventory_items i ON i.id=si.item_id
+                    WHERE s.sale_date BETWEEN ? AND ?
+                    GROUP BY s.id,s.sale_date,s.selling_price_cents
+               ), events AS (
+                   SELECT purchase_date AS event_date,price_cents AS purchase_cents,
+                          0 AS revenue_cents,0 AS realized_cost_cents,
+                          1 AS purchase_count,0 AS sale_count,0 AS sold_item_count
+                     FROM inventory_items WHERE purchase_date BETWEEN ? AND ?
+                   UNION ALL
+                   SELECT event_date,0,selling_price_cents,realized_cost_cents,
+                          0,1,sold_item_count FROM sale_totals
+               ), bucketed AS (
+                   SELECT CASE ?
+                            WHEN 'day' THEN event_date
+                            WHEN 'week' THEN date(
+                                event_date,
+                                '-' || ((CAST(strftime('%w',event_date) AS INTEGER)+6)%7)
+                                || ' days')
+                            WHEN 'month' THEN substr(event_date,1,7) || '-01'
+                            ELSE substr(event_date,1,4) || '-01-01'
+                          END AS period_start,
+                          SUM(purchase_cents) AS purchase_cents,
+                          SUM(revenue_cents) AS revenue_cents,
+                          SUM(realized_cost_cents) AS realized_cost_cents,
+                          SUM(purchase_count) AS purchase_count,
+                          SUM(sale_count) AS sale_count,
+                          SUM(sold_item_count) AS sold_item_count
+                     FROM events GROUP BY period_start
+               )
+               SELECT 0 AS row_kind,NULL AS period_start,
+                      COALESCE(SUM(purchase_cents),0) AS purchase_cents,
+                      COALESCE(SUM(revenue_cents),0) AS revenue_cents,
+                      COALESCE(SUM(realized_cost_cents),0) AS realized_cost_cents,
+                      COALESCE(SUM(purchase_count),0) AS purchase_count,
+                      COALESCE(SUM(sale_count),0) AS sale_count,
+                      COALESCE(SUM(sold_item_count),0) AS sold_item_count,
+                      (SELECT COALESCE(SUM(i.price_cents),0)
+                         FROM inventory_items i LEFT JOIN sale_items si
+                           ON si.item_id=i.id WHERE si.sale_id IS NULL)
+                          AS current_inventory_cents
+                 FROM events
+               UNION ALL
+               SELECT 1,period_start,purchase_cents,revenue_cents,
+                      realized_cost_cents,purchase_count,sale_count,sold_item_count,0
+                 FROM bucketed
+                ORDER BY row_kind,period_start""",
+            (start_text, end_text, start_text, end_text, bucket),
+        ).fetchall()
+        summary_row = rows[0]
+        summary = BalanceSummary(
+            purchase_cents=int(summary_row["purchase_cents"]),
+            revenue_cents=int(summary_row["revenue_cents"]),
+            realized_cost_cents=int(summary_row["realized_cost_cents"]),
+            current_inventory_cents=int(summary_row["current_inventory_cents"]),
+            purchase_count=int(summary_row["purchase_count"]),
+            sale_count=int(summary_row["sale_count"]),
+            sold_item_count=int(summary_row["sold_item_count"]),
+        )
+        points = tuple(
+            BalancePoint(
+                period_start=date.fromisoformat(row["period_start"]),
+                purchase_cents=int(row["purchase_cents"]),
+                revenue_cents=int(row["revenue_cents"]),
+                realized_cost_cents=int(row["realized_cost_cents"]),
+                purchase_count=int(row["purchase_count"]),
+                sale_count=int(row["sale_count"]),
+                sold_item_count=int(row["sold_item_count"]),
+            )
+            for row in rows[1:]
+        )
+        return summary, points

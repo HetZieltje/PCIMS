@@ -95,6 +95,12 @@ The financial summary and each sale report ROI on cost as profit divided by the
 purchase cost of the sold items. A zero-cost sale shows `N/A` instead of an
 undefined or infinite percentage.
 
+The Balance tab provides period presets and a custom date range, headline totals,
+and a trend chart with an exact period-by-period breakdown. It compares purchases,
+sales revenue, realized cost, profit, cash flow, ROI, profit margin, sale volume,
+and current inventory value. Depending on the selected span, activity is grouped
+automatically by day, week, month, or year so long histories remain readable.
+
 Each individual item can have up to 20 proofs of purchase in PDF, PNG, JPEG, or
 WebP format, with a 20 MiB limit per file. Proofs can be selected while staging
 a purchase or managed later from Inventory and purchase history, including for

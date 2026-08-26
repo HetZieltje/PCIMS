@@ -2,6 +2,7 @@
 
 import os
 import time
+from datetime import date
 from importlib.metadata import distribution
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -39,12 +40,23 @@ def main() -> None:
         services.update_sale(sale_id, SaleTerms.create("120.00", "2026-08-15"))
         if services.financial_summary().profit_cents != 2_000:
             raise RuntimeError("Installed wheel produced an invalid financial result.")
+        dashboard = services.balance_snapshot(None, date(2026, 8, 15))
+        if dashboard.summary.profit_cents != 2_000 or not dashboard.points:
+            raise RuntimeError("Installed wheel produced an invalid balance dashboard.")
         window = MainWindow(services)
+        window.balance_page.period.setCurrentIndex(
+            window.balance_page.period.findData("all")
+        )
+        window.tabs.setCurrentWidget(window.balance_page)
         deadline = time.monotonic() + 5
         while window.tasks.active and time.monotonic() < deadline:
             application.processEvents()
             time.sleep(0.005)
-        if window.tasks.active or window.tabs.count() != 5:
+        if (
+            window.tasks.active
+            or window.tabs.count() != 6
+            or window.balance_page.table_model.rowCount() == 0
+        ):
             raise RuntimeError("Installed Qt frontend did not initialize completely.")
         window.deleteLater()
         application.processEvents()
