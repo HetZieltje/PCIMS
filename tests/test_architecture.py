@@ -333,7 +333,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('if OPERATING_SYSTEM == "nt"', connection)
         self.assertIn("must be an absolute path", connection)
         self.assertIn("setApplicationVersion(application_version())", application)
-        self.assertIn('__version__ = "2.0.0b3"', version)
+        self.assertIn('__version__ = "2.0.0b4"', version)
         self.assertIn('version = {attr = "pcims.version.__version__"}', project)
         self.assertNotIn("importlib.metadata", version)
         self.assertNotIn("1.0.0", version)
