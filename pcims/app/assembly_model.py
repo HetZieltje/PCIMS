@@ -72,6 +72,53 @@ class AssemblyTreeModel(QAbstractItemModel):
         self._checked_ids = requested_ids
         self.endResetModel()
 
+    def expense_ids_at(
+        self, index: QModelIndex | QPersistentModelIndex
+    ) -> tuple[int, ...]:
+        """Return the component IDs represented by an item or category row."""
+
+        if not index.isValid():
+            return ()
+        record = index.internalPointer()
+        if isinstance(record, Expense):
+            return (record.id,)
+        if isinstance(record, ComponentGroup):
+            return tuple(expense.id for expense in record.expenses)
+        return ()
+
+    def set_expenses_checked(
+        self, expense_ids: tuple[int, ...], *, checked: bool
+    ) -> None:
+        """Set several visible component checkboxes without resetting the tree."""
+
+        requested_ids = set(expense_ids)
+        available_ids = {
+            expense.id for group in self._groups for expense in group.expenses
+        }
+        if not requested_ids <= available_ids:
+            return
+        changed_ids = (
+            requested_ids - self._checked_ids
+            if checked
+            else requested_ids & self._checked_ids
+        )
+        if not changed_ids:
+            return
+        if checked:
+            self._checked_ids.update(changed_ids)
+        else:
+            self._checked_ids.difference_update(changed_ids)
+        for group_row, group in enumerate(self._groups):
+            parent = self.index(group_row, 0)
+            for expense_row, expense in enumerate(group.expenses):
+                if expense.id in changed_ids:
+                    changed = self.index(expense_row, 0, parent)
+                    self.dataChanged.emit(
+                        changed,
+                        changed,
+                        [Qt.ItemDataRole.CheckStateRole],
+                    )
+
     def index(
         self,
         row: int,

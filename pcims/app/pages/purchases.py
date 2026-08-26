@@ -31,7 +31,9 @@ from pcims.app.formatting import (
 )
 from pcims.app.table_model import (
     Column,
+    ContextAction,
     RecordTableModel,
+    configure_context_menu,
     configure_table_view,
     selected_ids,
 )
@@ -175,6 +177,16 @@ class PurchasesPage(AsyncCommandPage):
         )
         self.table = QTableView()
         configure_table_view(self.table, self.table_model)
+        configure_context_menu(
+            self.table,
+            (
+                ContextAction(
+                    "Remove selected",
+                    self.remove_selected,
+                    lambda: bool(selected_ids(self.table)),
+                ),
+            ),
+        )
         self.table.setColumnHidden(0, True)
         remove_button = QPushButton("Remove selected")
         remove_button.clicked.connect(self.remove_selected)

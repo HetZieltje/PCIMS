@@ -87,6 +87,10 @@ sales can likewise be deleted with Undo, returning all of their items to stock.
 An existing sale's price and date can be corrected in place without changing its
 identity or sold-item membership. The sale date must remain on or after every
 included item's purchase date.
+Selection-aware right-click menus expose the relevant actions throughout the
+inventory, purchase draft, assembly, purchase history, sales, and sale-details
+views. Right-clicking a new row selects it without discarding an existing
+multi-row selection when that row is already selected.
 The financial summary and each sale report ROI on cost as profit divided by the
 purchase cost of the sold items. A zero-cost sale shows `N/A` instead of an
 undefined or infinite percentage.

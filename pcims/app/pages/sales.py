@@ -19,7 +19,9 @@ from pcims.app.dialogs import ProofEditDialog, SaleDialog
 from pcims.app.formatting import format_cents, format_percentage_basis_points
 from pcims.app.table_model import (
     Column,
+    ContextAction,
     RecordTableModel,
+    configure_context_menu,
     configure_table_view,
     selected_ids,
 )
@@ -125,6 +127,16 @@ class SalesPage(AsyncCommandPage):
         )
         self.expense_table = QTableView()
         configure_table_view(self.expense_table, self.expense_model)
+        configure_context_menu(
+            self.expense_table,
+            (
+                ContextAction(
+                    "Proofs of purchase…",
+                    self.edit_selected_expense_proofs,
+                    lambda: self._selected_expense(self.expense_table) is not None,
+                ),
+            ),
+        )
         self.expense_table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
         self.expense_newer = QPushButton("Newer")
         self.expense_newer.clicked.connect(lambda: self._change_expense_page(-1))
@@ -195,6 +207,22 @@ class SalesPage(AsyncCommandPage):
             stretch_column=3,
         )
         self.sale_table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
+        configure_context_menu(
+            self.sale_table,
+            (
+                ContextAction(
+                    "Edit sale…",
+                    self.edit_selected_sale,
+                    self._has_one_selected_sale,
+                ),
+                ContextAction(
+                    "Undo sale…",
+                    self.undo_selected,
+                    self._has_one_selected_sale,
+                    separator_before=True,
+                ),
+            ),
+        )
         self.sale_table.selectionModel().selectionChanged.connect(
             self._sale_selection_changed
         )
@@ -243,6 +271,16 @@ class SalesPage(AsyncCommandPage):
         )
         self.detail_table = QTableView()
         configure_table_view(self.detail_table, self.detail_model)
+        configure_context_menu(
+            self.detail_table,
+            (
+                ContextAction(
+                    "Proofs of purchase…",
+                    self.edit_selected_detail_proofs,
+                    lambda: self._selected_expense(self.detail_table) is not None,
+                ),
+            ),
+        )
         self.detail_newer = QPushButton("Newer")
         self.detail_newer.clicked.connect(lambda: self._change_detail_page(-1))
         self.detail_page_label = QLabel("Select one sale")
@@ -342,13 +380,35 @@ class SalesPage(AsyncCommandPage):
         self.apply_filter()
 
     def edit_selected_expense_proofs(self) -> None:
-        ids = selected_ids(self.expense_table)
-        if len(ids) != 1 or ids[0] not in self._expenses:
+        expense = self._selected_expense(self.expense_table)
+        if expense is None:
             QMessageBox.information(
                 self, "Select one item", "Select exactly one purchase-history item."
             )
             return
-        expense = self._expenses[ids[0]]
+        self._edit_expense_proofs(expense)
+
+    def edit_selected_detail_proofs(self) -> None:
+        expense = self._selected_expense(self.detail_table)
+        if expense is None:
+            QMessageBox.information(
+                self, "Select one item", "Select exactly one sold item."
+            )
+            return
+        self._edit_expense_proofs(expense)
+
+    def _selected_expense(self, table: QTableView) -> Expense | None:
+        ids = selected_ids(table)
+        if len(ids) != 1:
+            return None
+        if table is self.expense_table:
+            return self._expenses.get(ids[0])
+        return next(
+            (item for item in self._detail_page.records if item.id == ids[0]),
+            None,
+        )
+
+    def _edit_expense_proofs(self, expense: Expense) -> None:
         update = ProofEditDialog.get_update(
             expense.proofs,
             lambda proof_id: self.services.proof_file(expense.id, proof_id),
@@ -369,6 +429,10 @@ class SalesPage(AsyncCommandPage):
             self.data_changed.emit,
             "Unable to update proofs",
         )
+
+    def _has_one_selected_sale(self) -> bool:
+        ids = selected_ids(self.sale_table)
+        return len(ids) == 1 and ids[0] in self._sales
 
     def _change_sale_page(self, direction: int) -> None:
         offset = max(0, self._sale_page.offset + direction * self._sale_page.limit)

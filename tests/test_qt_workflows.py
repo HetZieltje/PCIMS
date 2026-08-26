@@ -40,8 +40,12 @@ from pcims.app.pages.purchases import PurchasesPage, StagedPurchase
 from pcims.app.pages.sales import SalesPage
 from pcims.app.table_model import (
     Column,
+    ContextAction,
     RecordTableModel,
+    build_context_menu,
+    configure_context_menu,
     configure_table_view,
+    select_context_row,
     selected_ids,
 )
 from pcims.app.tasks import TaskManager
@@ -150,14 +154,28 @@ class QtWorkflowTests(unittest.TestCase):
 
     def test_page_construction_performs_no_database_io(self):
         services = MagicMock(spec=ApplicationServices)
-        pages = (
-            InventoryPage(services, tasks=self.tasks),
-            PurchasesPage(services, tasks=self.tasks),
-            AssemblePage(services, tasks=self.tasks),
-            SalesPage(services, tasks=self.tasks),
-        )
+        inventory = InventoryPage(services, tasks=self.tasks)
+        purchases = PurchasesPage(services, tasks=self.tasks)
+        assemble = AssemblePage(services, tasks=self.tasks)
+        sales = SalesPage(services, tasks=self.tasks)
+        pages = (inventory, purchases, assemble, sales)
 
         self.assertEqual(services.mock_calls, [])
+        context_views = (
+            inventory.parts_table,
+            inventory.pc_table,
+            purchases.table,
+            assemble.tree,
+            sales.expense_table,
+            sales.sale_table,
+            sales.detail_table,
+        )
+        self.assertTrue(
+            all(
+                view.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+                for view in context_views
+            )
+        )
         for page in pages:
             page.deleteLater()
 
@@ -721,6 +739,72 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(selected_ids(table), [2, 1])
         table.deleteLater()
 
+    def test_table_context_menu_selects_clicked_row_and_preserves_multi_selection(
+        self,
+    ):
+        model = RecordTableModel[tuple[int, str]](
+            (
+                Column("ID", lambda item: str(item[0]), lambda item: item[0]),
+                Column("Name", lambda item: item[1], lambda item: item[1]),
+            ),
+            lambda item: item[0],
+        )
+        model.set_records(((1, "First"), (2, "Second")))
+        table = QTableView()
+        configure_table_view(table, model)
+        actions = (
+            ContextAction(
+                "Single action",
+                lambda: None,
+                lambda: len(selected_ids(table)) == 1,
+            ),
+            ContextAction(
+                "Multi action",
+                lambda: None,
+                lambda: len(selected_ids(table)) > 1,
+                separator_before=True,
+            ),
+        )
+        configure_context_menu(table, actions)
+        table.resize(500, 240)
+        table.show()
+        self.application.processEvents()
+
+        table.selectRow(0)
+        second_row = table.visualRect(model.index(1, 0)).center()
+        select_context_row(table, second_row)
+        first_menu = build_context_menu(table, actions)
+        first_actions = {
+            action.text(): action.isEnabled()
+            for action in first_menu.actions()
+            if not action.isSeparator()
+        }
+        self.assertEqual(selected_ids(table), [2])
+        self.assertEqual(
+            first_actions,
+            {"Single action": True, "Multi action": False},
+        )
+
+        table.selectAll()
+        select_context_row(table, second_row)
+        second_menu = build_context_menu(table, actions)
+        second_actions = {
+            action.text(): action.isEnabled()
+            for action in second_menu.actions()
+            if not action.isSeparator()
+        }
+        self.assertEqual(selected_ids(table), [1, 2])
+        self.assertEqual(
+            second_actions,
+            {"Single action": False, "Multi action": True},
+        )
+        self.assertEqual(
+            table.contextMenuPolicy(), Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        first_menu.deleteLater()
+        second_menu.deleteLater()
+        table.deleteLater()
+
     def test_table_model_resets_and_sorts_large_record_sets(self):
         model = RecordTableModel[tuple[int, str]](
             (
@@ -1250,6 +1334,41 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual([part.id for part in pc.parts], expected_ids)
         page.deleteLater()
 
+    def test_assembly_context_menu_selects_and_deselects_a_category(self):
+        expected_ids = (
+            self.purchase("RAM A", "RAM", 40),
+            self.purchase("RAM B", "RAM", 45),
+        )
+        page = AssemblePage(self.services, tasks=self.tasks)
+        page.refresh()
+        page.resize(800, 500)
+        page.show()
+        self.application.processEvents()
+        category = page.tree_model.index(0, 0)
+        expense_ids = page.tree_model.expense_ids_at(category)
+        select_menu = page._build_context_menu(expense_ids)
+        select_action = next(
+            action
+            for action in select_menu.actions()
+            if action.text() == "Select category"
+        )
+        self.assertTrue(select_action.isEnabled())
+        select_action.trigger()
+        self.assertEqual(page.tree_model.checked_ids, expected_ids)
+
+        deselect_menu = page._build_context_menu(expense_ids)
+        deselect_action = next(
+            action
+            for action in deselect_menu.actions()
+            if action.text() == "Deselect category"
+        )
+        self.assertTrue(deselect_action.isEnabled())
+        deselect_action.trigger()
+        self.assertEqual(page.tree_model.checked_ids, ())
+        select_menu.deleteLater()
+        deselect_menu.deleteLater()
+        page.deleteLater()
+
     def test_inventory_sale_and_sales_page_undo_workflow(self):
         ids = [self.purchase("Cable", "Extra", 5), self.purchase("Cable", "Extra", 6)]
         inventory = InventoryPage(self.services, tasks=self.tasks)
@@ -1520,6 +1639,20 @@ class QtWorkflowTests(unittest.TestCase):
         self.wait_for_page(sales)
         sold = self.services.list_expenses()[0]
         self.assertEqual([proof.file_name for proof in sold.proofs], ["receipt.pdf"])
+
+        sales.refresh()
+        sales.sale_table.selectRow(0)
+        self.wait_until(lambda: sales.detail_model.rowCount() == 1)
+        sales.detail_table.selectRow(0)
+        with patch.object(
+            ProofEditDialog,
+            "get_update",
+            return_value=((), (replacement,)),
+        ):
+            sales.edit_selected_detail_proofs()
+        self.wait_for_page(sales)
+        sold = self.services.list_expenses()[0]
+        self.assertEqual([proof.file_name for proof in sold.proofs], ["payment.png"])
         inventory.deleteLater()
         sales.deleteLater()
 

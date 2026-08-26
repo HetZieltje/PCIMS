@@ -4,8 +4,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeAlias, TypeVar
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt
-from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableView
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    QPoint,
+    Qt,
+)
+from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QMenu, QTableView
 
 T = TypeVar("T")
 SortKey: TypeAlias = int | str
@@ -20,6 +26,16 @@ class Column(Generic[T]):
     title: str
     display: Callable[[T], str]
     sort_key: Callable[[T], SortKey]
+
+
+@dataclass(frozen=True, slots=True)
+class ContextAction:
+    """One lazily enabled action in a table's row context menu."""
+
+    text: str
+    callback: Callable[[], None]
+    enabled: Callable[[], bool]
+    separator_before: bool = False
 
 
 class RecordTableModel(QAbstractTableModel, Generic[T]):
@@ -153,6 +169,56 @@ def configure_table_view(
         header.setSectionResizeMode(stretch_column, QHeaderView.ResizeMode.Stretch)
     table.setSortingEnabled(True)
     table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+
+
+def configure_context_menu(
+    table: QTableView,
+    actions: Sequence[ContextAction],
+) -> None:
+    """Attach a standard selection-aware context menu to a record table."""
+
+    configured_actions = tuple(actions)
+    table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
+    def show_menu(position: QPoint) -> None:
+        select_context_row(table, position)
+        menu = build_context_menu(table, configured_actions)
+        try:
+            menu.exec(table.viewport().mapToGlobal(position))
+        finally:
+            menu.deleteLater()
+
+    table.customContextMenuRequested.connect(show_menu)
+
+
+def select_context_row(table: QTableView, position: QPoint) -> None:
+    """Apply native-feeling row selection before opening a context menu."""
+
+    index = table.indexAt(position)
+    if index.isValid() and not table.selectionModel().isRowSelected(
+        index.row(), index.parent()
+    ):
+        table.clearSelection()
+        table.selectRow(index.row())
+        table.setCurrentIndex(index)
+    elif not index.isValid() and position.x() >= 0 and position.y() >= 0:
+        table.clearSelection()
+
+
+def build_context_menu(
+    table: QTableView,
+    actions: Sequence[ContextAction],
+) -> QMenu:
+    """Build a context menu using the selection state at opening time."""
+
+    menu = QMenu(table)
+    for configured in actions:
+        if configured.separator_before:
+            menu.addSeparator()
+        action = menu.addAction(configured.text)
+        action.setEnabled(configured.enabled())
+        action.triggered.connect(configured.callback)
+    return menu
 
 
 def selected_ids(table: QTableView) -> list[int]:

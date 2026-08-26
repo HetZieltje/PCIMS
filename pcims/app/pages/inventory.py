@@ -24,7 +24,9 @@ from pcims.app.dialogs import (
 from pcims.app.formatting import format_cents
 from pcims.app.table_model import (
     Column,
+    ContextAction,
     RecordTableModel,
+    configure_context_menu,
     configure_table_view,
     selected_ids,
 )
@@ -125,6 +127,39 @@ class InventoryPage(AsyncCommandPage):
         )
         self.parts_table = QTableView()
         configure_table_view(self.parts_table, self.parts_model)
+        configure_context_menu(
+            self.parts_table,
+            (
+                ContextAction(
+                    "Sell selected…",
+                    self.sell_selected_parts,
+                    lambda: (
+                        bool(self._selected_parts())
+                        and all(part.is_available for part in self._selected_parts())
+                    ),
+                ),
+                ContextAction(
+                    "Edit component…",
+                    self.edit_selected_part,
+                    lambda: len(self._selected_parts()) == 1,
+                    separator_before=True,
+                ),
+                ContextAction(
+                    "Proofs of purchase…",
+                    self.edit_selected_proofs,
+                    lambda: len(self._selected_parts()) == 1,
+                ),
+                ContextAction(
+                    "Delete selected…",
+                    self.delete_selected_parts,
+                    lambda: (
+                        bool(self._selected_parts())
+                        and all(part.is_available for part in self._selected_parts())
+                    ),
+                    separator_before=True,
+                ),
+            ),
+        )
         part_buttons = QHBoxLayout()
         for text, callback in (
             ("Sell selected", self.sell_selected_parts),
@@ -161,6 +196,28 @@ class InventoryPage(AsyncCommandPage):
         )
         self.pc_table = QTableView()
         configure_table_view(self.pc_table, self.pc_model)
+        configure_context_menu(
+            self.pc_table,
+            (
+                ContextAction(
+                    "Sell PC…",
+                    self.sell_selected_pc,
+                    lambda: self._has_one_selected_pc(),
+                ),
+                ContextAction(
+                    "Edit PC…",
+                    self.edit_selected_pc,
+                    lambda: self._has_one_selected_pc(),
+                    separator_before=True,
+                ),
+                ContextAction(
+                    "Disassemble…",
+                    self.disassemble_selected_pc,
+                    lambda: self._has_one_selected_pc(),
+                    separator_before=True,
+                ),
+            ),
+        )
         pc_buttons = QHBoxLayout()
         for text, callback in (
             ("Sell PC", self.sell_selected_pc),
@@ -259,6 +316,10 @@ class InventoryPage(AsyncCommandPage):
                 self, "Selection changed", "That PC is no longer in the current view."
             )
         return pc
+
+    def _has_one_selected_pc(self) -> bool:
+        ids = selected_ids(self.pc_table)
+        return len(ids) == 1 and ids[0] in self._pcs
 
     def sell_selected_parts(self) -> None:
         parts = self._selected_parts()
