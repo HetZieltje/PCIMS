@@ -13,6 +13,7 @@ from pcims.app.common import show_error
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.balance import BalancePage
 from pcims.app.pages.inventory import InventoryPage
+from pcims.app.pages.laptops import LaptopPage
 from pcims.app.pages.purchases import PurchasesPage
 from pcims.app.pages.sales import SalesPage
 from pcims.app.pages.settings import SettingsPage
@@ -50,12 +51,14 @@ class MainWindow(QMainWindow):
             draft_store=PurchaseDraftStore(self.services.database_path),
         )
         self.assemble_page = AssemblePage(self.services, tasks=self.tasks)
+        self.laptop_page = LaptopPage(self.services, tasks=self.tasks)
         self.sales_page = SalesPage(self.services, tasks=self.tasks)
         self.balance_page = BalancePage(self.services, tasks=self.tasks)
         self.settings_page = SettingsPage(
             self.services,
             theme=self.window_state.theme,
             backup_retention=self.window_state.backup_retention,
+            laptops_enabled=self.window_state.laptops_enabled,
             has_pending_changes=lambda: self.purchases_page.has_staged_items,
             tasks=self.tasks,
         )
@@ -63,6 +66,7 @@ class MainWindow(QMainWindow):
             self.inventory_page,
             self.purchases_page,
             self.assemble_page,
+            self.laptop_page,
             self.sales_page,
             self.balance_page,
         )
@@ -87,6 +91,11 @@ class MainWindow(QMainWindow):
                 lambda snapshot: self.assemble_page.apply_snapshot(snapshot),
             ),
             bind_refresh(
+                self.laptop_page,
+                lambda: self.laptop_page.load_snapshot(),
+                lambda snapshot: self.laptop_page.apply_snapshot(snapshot),
+            ),
+            bind_refresh(
                 self.sales_page,
                 lambda: self.sales_page.load_snapshot(),
                 lambda snapshot: self.sales_page.apply_snapshot(snapshot),
@@ -109,28 +118,26 @@ class MainWindow(QMainWindow):
         self.refreshes.failed.connect(
             lambda _page, error: show_error(self, "Unable to refresh data", error)
         )
-        for page, title in zip(
-            self.pages,
-            (
-                "Inventory",
-                "Purchases",
-                "Assemble",
-                "Sales and History",
-                "Balance",
-                "Settings",
-            ),
-        ):
-            self.tabs.addTab(page, title)
+        self.tabs.addTab(self.inventory_page, "Inventory")
+        self.tabs.addTab(self.purchases_page, "Purchases")
+        self.tabs.addTab(self.assemble_page, "Assemble")
+        if self.window_state.laptops_enabled:
+            self.tabs.addTab(self.laptop_page, "Laptops")
+        self.tabs.addTab(self.sales_page, "Sales and History")
+        self.tabs.addTab(self.balance_page, "Balance")
+        self.tabs.addTab(self.settings_page, "Settings")
         for page in (
             self.inventory_page,
             self.purchases_page,
             self.assemble_page,
+            self.laptop_page,
             self.sales_page,
         ):
             page.data_changed.connect(self._on_data_changed)
         self.balance_page.period_changed.connect(self._balance_period_changed)
         self.settings_page.theme_changed.connect(self.apply_theme)
         self.settings_page.backup_retention_changed.connect(self._set_backup_retention)
+        self.settings_page.laptops_enabled_changed.connect(self._set_laptops_enabled)
         self.settings_page.storage_changed.connect(self._storage_changed)
         self.settings_page.database_restored.connect(self._after_database_restore)
         self.tabs.currentChanged.connect(self.refresh_current)
@@ -200,6 +207,20 @@ class MainWindow(QMainWindow):
     def _set_backup_retention(self, keep: int) -> None:
         self.window_state.backup_retention = keep
 
+    def _set_laptops_enabled(self, enabled: bool) -> None:
+        self.window_state.laptops_enabled = enabled
+        current_index = self.tabs.indexOf(self.laptop_page)
+        if enabled and current_index < 0:
+            sales_index = self.tabs.indexOf(self.sales_page)
+            self.tabs.insertTab(sales_index, self.laptop_page, "Laptops")
+            self.tabs.setCurrentWidget(self.laptop_page)
+            self.refreshes.mark_dirty(self.laptop_page)
+            self.refreshes.start_if_dirty(self.laptop_page)
+        elif not enabled and current_index >= 0:
+            if self.tabs.currentWidget() is self.laptop_page:
+                self.tabs.setCurrentWidget(self.settings_page)
+            self.tabs.removeTab(current_index)
+
     def _storage_changed(self) -> None:
         self.refreshes.mark_dirty(self.settings_page)
         if self.tabs.currentWidget() is self.settings_page:
@@ -224,6 +245,7 @@ class MainWindow(QMainWindow):
                 ("sales", self.sales_page.splitter),
                 ("sales_details", self.sales_page.detail_splitter),
                 ("balance", self.balance_page.splitter),
+                ("laptops", self.laptop_page.splitter),
             ),
             self._persistent_tables(),
         )
@@ -237,6 +259,7 @@ class MainWindow(QMainWindow):
                 ("sales", self.sales_page.splitter),
                 ("sales_details", self.sales_page.detail_splitter),
                 ("balance", self.balance_page.splitter),
+                ("laptops", self.laptop_page.splitter),
             ),
             self._persistent_tables(),
         )
@@ -250,6 +273,8 @@ class MainWindow(QMainWindow):
             ("sales", self.sales_page.sale_table),
             ("sale_items", self.sales_page.detail_table),
             ("balance_periods", self.balance_page.table),
+            ("laptops", self.laptop_page.laptop_table),
+            ("laptop_changes", self.laptop_page.slot_table),
         )
 
     def apply_theme(self, theme: str) -> None:

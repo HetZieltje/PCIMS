@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal, TypeAlias
 
-from pcims.domain import ItemDetails, ItemType, SaleKind
+from pcims.domain import ItemDetails, ItemType, LaptopComponentType, SaleKind
 from pcims.proofs import ProofSummary
 
 BalanceBucket: TypeAlias = Literal["day", "week", "month", "year"]
@@ -27,15 +27,70 @@ class Expense:
     item_type: ItemType
     price_cents: int
     purchase_date: date
+    cash_paid_cents: int | None = None
+    cost_origin: Literal["purchase", "extracted"] = "purchase"
     pc_id: int | None = None
     pc_name: str | None = None
+    laptop_id: int | None = None
+    laptop_name: str | None = None
+    is_laptop: bool = False
     sale_id: int | None = None
     proofs: tuple[ProofSummary, ...] = ()
     details: ItemDetails = field(default_factory=ItemDetails)
 
     @property
     def is_available(self) -> bool:
-        return self.pc_id is None and self.sale_id is None
+        return (
+            self.pc_id is None
+            and self.laptop_id is None
+            and not self.is_laptop
+            and self.sale_id is None
+        )
+
+    @property
+    def purchase_cost_cents(self) -> int:
+        return (
+            self.price_cents if self.cash_paid_cents is None else self.cash_paid_cents
+        )
+
+    @property
+    def display_type(self) -> str:
+        return "Laptop" if self.is_laptop else self.item_type
+
+
+@dataclass(frozen=True, slots=True)
+class LaptopSlot:
+    component_type: LaptopComponentType
+    slot_number: int
+    extracted: Expense
+    installed: Expense | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Laptop:
+    item: Expense
+    original_cost_cents: int
+    slots: tuple[LaptopSlot, ...] = ()
+
+    @property
+    def id(self) -> int:
+        return self.item.id
+
+    @property
+    def name(self) -> str:
+        return self.item.name
+
+    @property
+    def current_cost_cents(self) -> int:
+        return self.item.price_cents + sum(
+            slot.installed.price_cents
+            for slot in self.slots
+            if slot.installed is not None
+        )
+
+    @property
+    def is_sold(self) -> bool:
+        return self.item.sale_id is not None
 
 
 @dataclass(frozen=True, slots=True)

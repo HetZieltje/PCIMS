@@ -1,7 +1,7 @@
 """Reusable Qt dialogs for PCIMS workflows."""
 
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -203,9 +204,18 @@ class ProofEditDialog(QDialog):
 
 
 class ExpenseEditDialog(QDialog):
-    def __init__(self, expense: Expense, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        expense: Expense,
+        parent: QWidget | None = None,
+        *,
+        title: str = "Edit component",
+        name_label: str = "Item name",
+        price_label: str | None = None,
+        show_type: bool = True,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Edit component")
+        self.setWindowTitle(title)
         self.setModal(True)
         self.name = QLineEdit(expense.name)
         self.item_type = QComboBox()
@@ -257,9 +267,18 @@ class ExpenseEditDialog(QDialog):
         self._replacement: NewExpense | None = None
 
         form = QFormLayout()
-        form.addRow("Item name", self.name)
-        form.addRow("Component type", self.item_type)
-        form.addRow("Purchase price", self.amount)
+        form.addRow(name_label, self.name)
+        if show_type:
+            form.addRow("Component type", self.item_type)
+        form.addRow(
+            price_label
+            or (
+                "Allocated value"
+                if expense.cost_origin == "extracted"
+                else "Purchase price"
+            ),
+            self.amount,
+        )
         form.addRow("Purchase date", self.purchase_date)
         form.addRow("Vendor", self.vendor)
         form.addRow("Serial number", self.serial_number)
@@ -313,6 +332,170 @@ class ExpenseEditDialog(QDialog):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
         return dialog._replacement
+
+
+class LaptopEditDialog(ExpenseEditDialog):
+    def __init__(
+        self, expense: Expense | None = None, parent: QWidget | None = None
+    ) -> None:
+        if expense is None:
+            today = datetime.now(UTC).astimezone().date()
+            expense = Expense(0, "", "Extra", 0, today, cash_paid_cents=0)
+        super().__init__(
+            expense,
+            parent,
+            title="Edit laptop" if expense.id else "Add laptop",
+            name_label="Model number",
+            price_label="Purchase price",
+            show_type=False,
+        )
+        self.item_type.setCurrentText("Extra")
+
+    @classmethod
+    def get_laptop(
+        cls, expense: Expense | None = None, parent: QWidget | None = None
+    ) -> NewExpense | None:
+        dialog = cls(expense, parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog._replacement
+
+
+class LaptopExtractionDialog(QDialog):
+    def __init__(
+        self,
+        available: tuple[Expense, ...],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Remove or replace factory component")
+        self.setModal(True)
+        self._available = available
+        self._result: tuple[str, int, NewExpense, int | None] | None = None
+        self.component_type = QComboBox()
+        self.component_type.addItems(("RAM", "SSD", "HDD"))
+        self.slot_number = QSpinBox()
+        self.slot_number.setRange(1, 32)
+        self.removed_name = QLineEdit()
+        self.removed_name.setPlaceholderText("e.g. Factory 16 GB module")
+        self.removed_value = QLineEdit()
+        self.removed_value.setPlaceholderText("0.00")
+        self.replacement = QComboBox()
+        self.error_label = QLabel()
+        self.error_label.setStyleSheet("color: #c62828")
+        self.component_type.currentTextChanged.connect(self._fill_replacements)
+        self._fill_replacements()
+        form = QFormLayout()
+        form.addRow("Component type", self.component_type)
+        form.addRow("Slot number", self.slot_number)
+        form.addRow("Removed factory part", self.removed_name)
+        form.addRow("Value transferred from laptop", self.removed_value)
+        form.addRow("Install replacement", self.replacement)
+        note = QLabel(
+            "Only explicitly removed RAM or storage is indexed. The entered value is "
+            "subtracted from the laptop and assigned to the removed component."
+        )
+        note.setWordWrap(True)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(note)
+        layout.addLayout(form)
+        layout.addWidget(self.error_label)
+        layout.addWidget(buttons)
+
+    def _fill_replacements(self) -> None:
+        selected = self.replacement.currentData()
+        self.replacement.clear()
+        self.replacement.addItem("Leave slot empty", None)
+        for item in self._available:
+            if item.item_type == self.component_type.currentText():
+                self.replacement.addItem(
+                    f"#{item.id} {item.name} ({item.price_cents / 100:.2f})", item.id
+                )
+        index = self.replacement.findData(selected)
+        if index >= 0:
+            self.replacement.setCurrentIndex(index)
+
+    def _validate(self) -> None:
+        try:
+            kind = cast(ItemType, self.component_type.currentText())
+            value = parse_money_cents(self.removed_value.text(), "Removed part value")
+            if value <= 0:
+                raise ValueError("Removed part value must be above zero.")
+            extracted = NewExpense(
+                self.removed_name.text(),
+                kind,
+                value,
+                datetime.now(UTC).astimezone().date(),
+                ItemDetails(),
+            )
+        except (TypeError, ValueError) as error:
+            self.error_label.setText(str(error))
+            return
+        self._result = (
+            self.component_type.currentText(),
+            self.slot_number.value(),
+            extracted,
+            self.replacement.currentData(),
+        )
+        self.accept()
+
+    @classmethod
+    def get_extraction(
+        cls, available: tuple[Expense, ...], parent: QWidget | None = None
+    ) -> tuple[str, int, NewExpense, int | None] | None:
+        dialog = cls(available, parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog._result
+
+
+class LaptopReplacementDialog(QDialog):
+    def __init__(
+        self,
+        component_type: str,
+        current_item_id: int | None,
+        available: tuple[Expense, ...],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Change laptop replacement")
+        self.replacement = QComboBox()
+        self.replacement.addItem("Leave slot empty", None)
+        for item in available:
+            if item.item_type == component_type or item.id == current_item_id:
+                self.replacement.addItem(
+                    f"#{item.id} {item.name} ({item.price_cents / 100:.2f})", item.id
+                )
+        index = self.replacement.findData(current_item_id)
+        self.replacement.setCurrentIndex(max(0, index))
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form = QFormLayout(self)
+        form.addRow("Replacement", self.replacement)
+        form.addRow(buttons)
+
+    @classmethod
+    def get_replacement(
+        cls,
+        component_type: str,
+        current_item_id: int | None,
+        available: tuple[Expense, ...],
+        parent: QWidget | None = None,
+    ) -> tuple[bool, int | None]:
+        dialog = cls(component_type, current_item_id, available, parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False, current_item_id
+        return True, dialog.replacement.currentData()
 
 
 class PCEditDialog(QDialog):

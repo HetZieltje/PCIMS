@@ -100,12 +100,14 @@ class SalesPage(AsyncCommandPage):
                     "Name", lambda item: item.name, lambda item: item.name.casefold()
                 ),
                 Column(
-                    "Type", lambda item: item.item_type, lambda item: item.item_type
+                    "Type",
+                    lambda item: item.display_type,
+                    lambda item: item.display_type,
                 ),
                 Column(
                     "Cost",
-                    lambda item: format_cents(item.price_cents),
-                    lambda item: item.price_cents,
+                    lambda item: format_cents(item.purchase_cost_cents),
+                    lambda item: item.purchase_cost_cents,
                 ),
                 Column(
                     "Purchased",
@@ -254,7 +256,9 @@ class SalesPage(AsyncCommandPage):
                     "Name", lambda item: item.name, lambda item: item.name.casefold()
                 ),
                 Column(
-                    "Type", lambda item: item.item_type, lambda item: item.item_type
+                    "Type",
+                    lambda item: item.display_type,
+                    lambda item: item.display_type,
                 ),
                 Column(
                     "Cost",

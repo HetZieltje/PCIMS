@@ -17,7 +17,7 @@ from pcims.proofs import (
     NewProof,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
@@ -191,18 +191,144 @@ SCHEMA_V1_DEFINITIONS: dict[tuple[str, str], str] = {
         BEGIN SELECT RAISE(ABORT,'duplicate proof file name for item'); END""",
 }
 
-SCHEMA_DEFINITIONS = {
+SCHEMA_V2_DEFINITIONS = {
     key: sql
     for key, sql in SCHEMA_V1_DEFINITIONS.items()
     if key[1] not in {"activity_events", "activity_events_newest"}
 }
-SCHEMA_DEFINITIONS[
+SCHEMA_V2_DEFINITIONS[
     ("trigger", "proof_total_size_limit")
 ] = f"""CREATE TRIGGER proof_total_size_limit
         BEFORE INSERT ON proof_files
         WHEN COALESCE((SELECT SUM(length(content)) FROM proof_files),0)
              + length(NEW.content)>{MAX_TOTAL_PROOF_BYTES}
         BEGIN SELECT RAISE(ABORT,'stored proofs exceed 512 MiB total'); END"""  # nosec B608
+
+SCHEMA_DEFINITIONS = dict(SCHEMA_V2_DEFINITIONS)
+SCHEMA_DEFINITIONS.update(
+    {
+        ("table", "item_costs"): f"""CREATE TABLE item_costs (
+            item_id INTEGER PRIMARY KEY REFERENCES inventory_items(id) ON DELETE CASCADE,
+            cash_paid_cents INTEGER NOT NULL
+                CHECK (cash_paid_cents BETWEEN 0 AND {MAX_MONEY_CENTS}),
+            origin TEXT NOT NULL CHECK (origin IN ('purchase','extracted'))
+        ) STRICT""",
+        ("table", "laptops"): """CREATE TABLE laptops (
+            item_id INTEGER PRIMARY KEY REFERENCES inventory_items(id) ON DELETE CASCADE
+        ) STRICT""",
+        ("table", "laptop_slots"): """CREATE TABLE laptop_slots (
+            laptop_id INTEGER NOT NULL REFERENCES laptops(item_id) ON DELETE CASCADE,
+            component_type TEXT NOT NULL CHECK (component_type IN ('RAM','SSD','HDD')),
+            slot_number INTEGER NOT NULL CHECK (slot_number>0),
+            extracted_item_id INTEGER NOT NULL UNIQUE
+                REFERENCES inventory_items(id) ON DELETE RESTRICT,
+            installed_item_id INTEGER UNIQUE
+                REFERENCES inventory_items(id) ON DELETE RESTRICT,
+            PRIMARY KEY (laptop_id,component_type,slot_number),
+            CHECK (installed_item_id IS NULL OR installed_item_id<>extracted_item_id)
+        ) STRICT""",
+        ("table", "laptop_sales"): """CREATE TABLE laptop_sales (
+            sale_id INTEGER PRIMARY KEY REFERENCES sales(id) ON DELETE CASCADE,
+            laptop_id INTEGER NOT NULL UNIQUE REFERENCES laptops(item_id) ON DELETE RESTRICT
+        ) STRICT""",
+        (
+            "trigger",
+            "laptop_base_must_be_available",
+        ): """CREATE TRIGGER laptop_base_must_be_available
+            BEFORE INSERT ON laptops
+            WHEN (SELECT item_type FROM inventory_items WHERE id=NEW.item_id)<>'Extra'
+              OR EXISTS (SELECT 1 FROM pc_parts WHERE item_id=NEW.item_id)
+              OR EXISTS (SELECT 1 FROM sale_items WHERE item_id=NEW.item_id)
+              OR EXISTS (SELECT 1 FROM laptop_slots WHERE installed_item_id=NEW.item_id)
+            BEGIN SELECT RAISE(ABORT,'laptop base must be an available Extra item'); END""",
+        (
+            "trigger",
+            "laptop_slot_assignment_valid",
+        ): """CREATE TRIGGER laptop_slot_assignment_valid
+            BEFORE INSERT ON laptop_slots
+            WHEN EXISTS (SELECT 1 FROM laptop_sales WHERE laptop_id=NEW.laptop_id)
+              OR NOT EXISTS (
+                  SELECT 1 FROM inventory_items e JOIN item_costs c ON c.item_id=e.id
+                   WHERE e.id=NEW.extracted_item_id AND e.item_type=NEW.component_type
+                     AND c.origin='extracted'
+                     AND NOT EXISTS (SELECT 1 FROM pc_parts WHERE item_id=e.id)
+                     AND NOT EXISTS (SELECT 1 FROM sale_items WHERE item_id=e.id))
+              OR (NEW.installed_item_id IS NOT NULL AND NOT EXISTS (
+                  SELECT 1 FROM inventory_items e
+                   WHERE e.id=NEW.installed_item_id AND e.item_type=NEW.component_type
+                     AND NOT EXISTS (SELECT 1 FROM laptops WHERE item_id=e.id)
+                     AND NOT EXISTS (SELECT 1 FROM pc_parts WHERE item_id=e.id)
+                     AND NOT EXISTS (SELECT 1 FROM sale_items WHERE item_id=e.id)
+                     AND NOT EXISTS (SELECT 1 FROM laptop_slots WHERE installed_item_id=e.id)))
+            BEGIN SELECT RAISE(ABORT,'invalid laptop component assignment'); END""",
+        (
+            "trigger",
+            "laptop_slot_update_valid",
+        ): """CREATE TRIGGER laptop_slot_update_valid
+            BEFORE UPDATE ON laptop_slots
+            WHEN EXISTS (SELECT 1 FROM laptop_sales WHERE laptop_id=OLD.laptop_id)
+              OR NEW.laptop_id<>OLD.laptop_id
+              OR NEW.component_type<>OLD.component_type
+              OR NEW.slot_number<>OLD.slot_number
+              OR NEW.extracted_item_id<>OLD.extracted_item_id
+              OR (NEW.installed_item_id IS NOT NULL AND NOT EXISTS (
+                  SELECT 1 FROM inventory_items e
+                   WHERE e.id=NEW.installed_item_id AND e.item_type=NEW.component_type
+                     AND NOT EXISTS (SELECT 1 FROM laptops WHERE item_id=e.id)
+                     AND NOT EXISTS (SELECT 1 FROM pc_parts WHERE item_id=e.id)
+                     AND NOT EXISTS (SELECT 1 FROM sale_items WHERE item_id=e.id)
+                     AND NOT EXISTS (SELECT 1 FROM laptop_slots ls
+                                      WHERE ls.installed_item_id=e.id
+                                        AND NOT (ls.laptop_id=OLD.laptop_id
+                                             AND ls.component_type=OLD.component_type
+                                             AND ls.slot_number=OLD.slot_number))))
+            BEGIN SELECT RAISE(ABORT,'invalid laptop component change'); END""",
+        (
+            "trigger",
+            "sold_laptop_slots_are_locked",
+        ): """CREATE TRIGGER sold_laptop_slots_are_locked
+            BEFORE DELETE ON laptop_slots
+            WHEN EXISTS (SELECT 1 FROM laptop_sales WHERE laptop_id=OLD.laptop_id)
+            BEGIN SELECT RAISE(ABORT,'sold laptop components cannot be changed'); END""",
+        (
+            "trigger",
+            "laptop_with_slots_cannot_be_deleted",
+        ): """CREATE TRIGGER laptop_with_slots_cannot_be_deleted
+            BEFORE DELETE ON laptops
+            WHEN EXISTS (SELECT 1 FROM laptop_slots WHERE laptop_id=OLD.item_id)
+            BEGIN SELECT RAISE(ABORT,'restore laptop components before deleting laptop'); END""",
+        (
+            "trigger",
+            "laptop_base_type_is_locked",
+        ): """CREATE TRIGGER laptop_base_type_is_locked
+            BEFORE UPDATE OF item_type ON inventory_items
+            WHEN EXISTS (SELECT 1 FROM laptops WHERE item_id=OLD.id)
+                 AND NEW.item_type<>'Extra'
+            BEGIN SELECT RAISE(ABORT,'laptop base type cannot be changed'); END""",
+    }
+)
+SCHEMA_DEFINITIONS[
+    ("trigger", "sale_item_assignment_valid")
+] = """CREATE TRIGGER sale_item_assignment_valid
+        BEFORE INSERT ON sale_items
+        WHEN NOT EXISTS (
+            SELECT 1 FROM sales s WHERE s.id=NEW.sale_id AND (
+                (s.kind='item' AND NOT EXISTS (
+                    SELECT 1 FROM laptop_sales WHERE sale_id=s.id)
+                 AND NOT EXISTS (SELECT 1 FROM pc_parts WHERE item_id=NEW.item_id)
+                 AND NOT EXISTS (SELECT 1 FROM laptops WHERE item_id=NEW.item_id)
+                 AND NOT EXISTS (SELECT 1 FROM laptop_slots WHERE installed_item_id=NEW.item_id))
+                OR (s.kind='pc' AND EXISTS (
+                    SELECT 1 FROM pc_parts WHERE pc_id=s.pc_id AND item_id=NEW.item_id))
+                OR (s.kind='item' AND EXISTS (
+                    SELECT 1 FROM laptop_sales ls WHERE ls.sale_id=s.id AND (
+                        ls.laptop_id=NEW.item_id OR EXISTS (
+                            SELECT 1 FROM laptop_slots lslot
+                             WHERE lslot.laptop_id=ls.laptop_id
+                               AND lslot.installed_item_id=NEW.item_id))))
+            )
+        )
+        BEGIN SELECT RAISE(ABORT,'item does not belong in this sale'); END"""
 
 
 def _normalize_schema_sql(sql: object) -> str:
@@ -219,6 +345,7 @@ def _schema_checksum(definitions: dict[tuple[str, str], str]) -> str:
 
 
 SCHEMA_V1_CHECKSUM = _schema_checksum(SCHEMA_V1_DEFINITIONS)
+SCHEMA_V2_CHECKSUM = _schema_checksum(SCHEMA_V2_DEFINITIONS)
 SCHEMA_CHECKSUM = _schema_checksum(SCHEMA_DEFINITIONS)
 SCHEMA_REVISIONS = {
     1: (
@@ -228,6 +355,11 @@ SCHEMA_REVISIONS = {
     ),
     2: (
         "streamline history and cap proof storage",
+        SCHEMA_V2_CHECKSUM,
+        SCHEMA_V2_DEFINITIONS,
+    ),
+    3: (
+        "add optional laptop inventory and split cash from cost basis",
         SCHEMA_CHECKSUM,
         SCHEMA_DEFINITIONS,
     ),
@@ -297,6 +429,7 @@ def _valid_iso_date(value: object) -> bool:
 
 def validate_current_data(database: sqlite3.Connection) -> None:
     """Reject structurally valid databases with inconsistent inventory state."""
+    has_laptop_schema = int(database.execute("PRAGMA user_version").fetchone()[0]) >= 3
     for item_id, purchase_date, warranty_until in database.execute(
         "SELECT id,purchase_date,warranty_until FROM inventory_items"
     ):
@@ -311,6 +444,39 @@ def validate_current_data(database: sqlite3.Connection) -> None:
     for sale_id, sale_date in database.execute("SELECT id,sale_date FROM sales"):
         if not _valid_iso_date(sale_date):
             raise DatabaseIntegrityError(f"Sale {sale_id} has an invalid sale date.")
+
+    if has_laptop_schema:
+        missing_cost = database.execute(
+            """SELECT e.id FROM inventory_items e LEFT JOIN item_costs c ON c.item_id=e.id
+               WHERE c.item_id IS NULL LIMIT 1"""
+        ).fetchone()
+        if missing_cost:
+            raise DatabaseIntegrityError(f"Item {missing_cost[0]} has no cost record.")
+        invalid_extracted = database.execute(
+            """SELECT c.item_id FROM item_costs c
+               LEFT JOIN laptop_slots ls ON ls.extracted_item_id=c.item_id
+               WHERE c.origin='extracted'
+                 AND (c.cash_paid_cents<>0 OR ls.laptop_id IS NULL) LIMIT 1"""
+        ).fetchone()
+        if invalid_extracted:
+            raise DatabaseIntegrityError(
+                f"Extracted item {invalid_extracted[0]} has invalid provenance."
+            )
+        invalid_laptop_value = database.execute(
+            """SELECT l.item_id FROM laptops l
+               JOIN inventory_items base ON base.id=l.item_id
+               JOIN item_costs c ON c.item_id=l.item_id
+               LEFT JOIN laptop_slots ls ON ls.laptop_id=l.item_id
+               LEFT JOIN inventory_items extracted ON extracted.id=ls.extracted_item_id
+               GROUP BY l.item_id
+               HAVING base.item_type<>'Extra' OR c.origin<>'purchase'
+                  OR base.price_cents+COALESCE(SUM(extracted.price_cents),0)
+                     <>c.cash_paid_cents LIMIT 1"""
+        ).fetchone()
+        if invalid_laptop_value:
+            raise DatabaseIntegrityError(
+                f"Laptop {invalid_laptop_value[0]} has an invalid transferred value."
+            )
 
     empty_pc = database.execute(
         """SELECT p.id FROM pcs p LEFT JOIN pc_parts pp ON pp.pc_id=p.id
@@ -339,14 +505,38 @@ def validate_current_data(database: sqlite3.Connection) -> None:
         raise DatabaseIntegrityError(
             f"Sale {invalid_sale[0]} has invalid items, cost, or dates."
         )
-    invalid_item_sale = database.execute(
-        """SELECT s.id FROM sales s JOIN sale_items si ON si.sale_id=s.id
-           JOIN pc_parts pp ON pp.item_id=si.item_id WHERE s.kind='item' LIMIT 1"""
-    ).fetchone()
+    if has_laptop_schema:
+        invalid_item_sale = database.execute(
+            """SELECT s.id FROM sales s JOIN sale_items si ON si.sale_id=s.id
+               JOIN pc_parts pp ON pp.item_id=si.item_id WHERE s.kind='item'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM laptop_sales ls WHERE ls.sale_id=s.id)
+               LIMIT 1"""
+        ).fetchone()
+    else:
+        invalid_item_sale = database.execute(
+            """SELECT s.id FROM sales s JOIN sale_items si ON si.sale_id=s.id
+               JOIN pc_parts pp ON pp.item_id=si.item_id
+               WHERE s.kind='item' LIMIT 1"""
+        ).fetchone()
     if invalid_item_sale:
         raise DatabaseIntegrityError(
             f"Item sale {invalid_item_sale[0]} contains a PC component."
         )
+    if has_laptop_schema:
+        invalid_plain_item_sale = database.execute(
+            """SELECT s.id FROM sales s JOIN sale_items si ON si.sale_id=s.id
+               LEFT JOIN laptop_sales sale_laptop ON sale_laptop.sale_id=s.id
+               LEFT JOIN laptops base ON base.item_id=si.item_id
+               LEFT JOIN laptop_slots installed ON installed.installed_item_id=si.item_id
+               WHERE s.kind='item' AND sale_laptop.sale_id IS NULL
+                 AND (base.item_id IS NOT NULL OR installed.laptop_id IS NOT NULL)
+               LIMIT 1"""
+        ).fetchone()
+        if invalid_plain_item_sale:
+            raise DatabaseIntegrityError(
+                f"Item sale {invalid_plain_item_sale[0]} contains a laptop or installed part."
+            )
     invalid_pc_sale = database.execute(
         """SELECT s.id FROM sales s WHERE s.kind='pc' AND (
              EXISTS (SELECT item_id FROM pc_parts WHERE pc_id=s.pc_id
@@ -358,6 +548,28 @@ def validate_current_data(database: sqlite3.Connection) -> None:
     if invalid_pc_sale:
         raise DatabaseIntegrityError(
             f"PC sale {invalid_pc_sale[0]} does not match its PC components."
+        )
+    invalid_laptop_sale = (
+        database.execute(
+            """SELECT ls.sale_id FROM laptop_sales ls WHERE
+             EXISTS (
+               SELECT laptop_id AS item_id FROM laptop_sales WHERE sale_id=ls.sale_id
+               UNION SELECT installed_item_id FROM laptop_slots
+                      WHERE laptop_id=ls.laptop_id AND installed_item_id IS NOT NULL
+               EXCEPT SELECT item_id FROM sale_items WHERE sale_id=ls.sale_id)
+             OR EXISTS (
+               SELECT item_id FROM sale_items WHERE sale_id=ls.sale_id
+               EXCEPT SELECT laptop_id FROM laptop_sales WHERE sale_id=ls.sale_id
+               EXCEPT SELECT installed_item_id FROM laptop_slots
+                      WHERE laptop_id=ls.laptop_id AND installed_item_id IS NOT NULL)
+           LIMIT 1"""
+        ).fetchone()
+        if has_laptop_schema
+        else None
+    )
+    if invalid_laptop_sale is not None:
+        raise DatabaseIntegrityError(
+            f"Laptop sale {invalid_laptop_sale[0]} does not match its tracked contents."
         )
     orphan = database.execute(
         """SELECT pf.id FROM proof_files pf LEFT JOIN item_proofs ip ON ip.proof_id=pf.id
@@ -431,8 +643,29 @@ def _upgrade_schema(connection: sqlite3.Connection, version: int) -> None:
         if version == 1:
             connection.execute("DROP TABLE activity_events")
             connection.execute(
-                SCHEMA_DEFINITIONS[("trigger", "proof_total_size_limit")]
+                SCHEMA_V2_DEFINITIONS[("trigger", "proof_total_size_limit")]
             )
+        elif version == 2:
+            for table in ("item_costs", "laptops", "laptop_slots", "laptop_sales"):
+                connection.execute(SCHEMA_DEFINITIONS[("table", table)])
+                if table == "item_costs":
+                    connection.execute(
+                        """INSERT INTO item_costs (item_id,cash_paid_cents,origin)
+                           SELECT id,price_cents,'purchase' FROM inventory_items"""
+                    )
+            connection.execute("DROP TRIGGER sale_item_assignment_valid")
+            connection.execute(
+                SCHEMA_DEFINITIONS[("trigger", "sale_item_assignment_valid")]
+            )
+            for trigger in (
+                "laptop_base_must_be_available",
+                "laptop_slot_assignment_valid",
+                "laptop_slot_update_valid",
+                "sold_laptop_slots_are_locked",
+                "laptop_with_slots_cannot_be_deleted",
+                "laptop_base_type_is_locked",
+            ):
+                connection.execute(SCHEMA_DEFINITIONS[("trigger", trigger)])
         else:  # pragma: no cover - every supported source has a registered step
             raise SchemaVersionError(
                 f"No database migration is registered after version {version}."

@@ -150,6 +150,32 @@ class QtWorkflowTests(unittest.TestCase):
         self.wait_for_window(window)
         window.deleteLater()
 
+    def test_laptop_tab_is_opt_in_and_hiding_it_preserves_data(self):
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        self.assertEqual(window.tabs.indexOf(window.laptop_page), -1)
+        self.assertFalse(window.window_state.laptops_enabled)
+
+        window.settings_page.laptops_enabled.setChecked(True)
+        self.wait_for_window(window)
+        self.assertGreaterEqual(window.tabs.indexOf(window.laptop_page), 0)
+        self.assertIs(window.tabs.currentWidget(), window.laptop_page)
+        self.assertTrue(window.window_state.laptops_enabled)
+
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("ThinkPad T480", "Extra", 300, TEST_DATE)
+        )
+        window.laptop_page.apply_snapshot(self.services.laptop_snapshot())
+        self.assertEqual(window.laptop_page.laptop_model.rowCount(), 1)
+
+        window.settings_page.laptops_enabled.setChecked(False)
+        self.wait_for_window(window)
+        self.assertEqual(window.tabs.indexOf(window.laptop_page), -1)
+        self.assertFalse(window.window_state.laptops_enabled)
+        self.assertEqual(self.services.laptop_snapshot().laptops[0].id, laptop_id)
+        self.wait_until(lambda: not window.tasks.active)
+        window.deleteLater()
+
     def test_qt_application_version_matches_application_source(self):
         self.assertEqual(self.application.applicationVersion(), application_version())
 

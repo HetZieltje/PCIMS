@@ -15,6 +15,7 @@ from pcims.models import (
     BalanceSummary,
     Expense,
     FinancialSummary,
+    Laptop,
     SaleSummary,
 )
 from pcims.proofs import NewProof
@@ -126,6 +127,12 @@ class BalanceSnapshot:
     points: tuple[BalancePoint, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class LaptopSnapshot:
+    laptops: tuple[Laptop, ...]
+    available_components: tuple[Expense, ...]
+
+
 class InventoryOperations(Protocol):
     def inventory_snapshot(self) -> InventorySnapshot: ...
     def delete_expenses(self, expense_ids: Iterable[int]) -> None: ...
@@ -213,3 +220,38 @@ class MaintenanceOperations(Protocol):
     ) -> RestoreResult: ...
 
     def export_csv(self, directory: str | os.PathLike[str]) -> tuple[Path, Path]: ...
+
+
+class LaptopOperations(Protocol):
+    def laptop_snapshot(self) -> LaptopSnapshot: ...
+    def add_laptop(
+        self, laptop: NewExpense, proofs: Iterable[NewProof] = ()
+    ) -> int: ...
+    def update_laptop(self, laptop_id: int, replacement: NewExpense) -> None: ...
+    def extract_laptop_component(
+        self,
+        laptop_id: int,
+        component_type: str,
+        slot_number: int,
+        extracted: NewExpense,
+        installed_item_id: int | None = None,
+    ) -> int: ...
+    def set_laptop_replacement(
+        self,
+        laptop_id: int,
+        component_type: str,
+        slot_number: int,
+        installed_item_id: int | None,
+    ) -> None: ...
+    def restore_laptop_component(
+        self, laptop_id: int, component_type: str, slot_number: int
+    ) -> None: ...
+    def delete_laptop(self, laptop_id: int) -> None: ...
+    def sell_laptop(self, laptop_id: int, terms: SaleTerms) -> int: ...
+    def replace_expense_proofs(
+        self,
+        expense_id: int,
+        retained_proof_ids: Iterable[int],
+        new_proofs: Iterable[NewProof],
+    ) -> None: ...
+    def proof_file(self, expense_id: int, proof_id: int) -> NewProof: ...

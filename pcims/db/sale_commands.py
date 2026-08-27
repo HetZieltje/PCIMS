@@ -33,7 +33,12 @@ def sell_items(
         if len(rows) != len(ids):
             raise NotFoundError("One or more selected items no longer exist.")
         for row in rows:
-            if row["pc_id"] is not None or row["sale_id"] is not None:
+            if (
+                row["pc_id"] is not None
+                or row["sale_id"] is not None
+                or row["laptop_id"] is not None
+                or row["is_laptop"]
+            ):
                 raise ValidationError(f"'{row['name']}' is not available for sale.")
         _validate_sale_date(rows, sale_day)
         names = {row["name"] for row in rows}

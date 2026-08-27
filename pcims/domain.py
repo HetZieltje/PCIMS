@@ -20,7 +20,8 @@ ItemType: TypeAlias = Literal[
     "Fan",
     "Extra",
 ]
-SaleKind: TypeAlias = Literal["item", "pc"]
+SaleKind: TypeAlias = Literal["item", "pc", "laptop"]
+LaptopComponentType: TypeAlias = Literal["RAM", "SSD", "HDD"]
 ItemCondition: TypeAlias = Literal["New", "Used", "Refurbished", "For parts"]
 MAX_NAME_LENGTH = 200
 MAX_NOTES_LENGTH = 4_000
@@ -45,6 +46,8 @@ ITEM_TYPES: tuple[ItemType, ...] = (
     "Fan",
     "Extra",
 )
+
+LAPTOP_COMPONENT_TYPES: tuple[LaptopComponentType, ...] = ("RAM", "SSD", "HDD")
 
 
 def normalized_text(value: object, label: str) -> str:
@@ -224,3 +227,15 @@ class SaleTerms:
             parse_money_cents(selling_price, "Selling price"),
             normalized_date(sale_date),
         )
+
+
+def normalized_laptop_component_type(value: object) -> LaptopComponentType:
+    normalized = normalized_text(value, "Laptop component type").casefold()
+    for item_type in LAPTOP_COMPONENT_TYPES:
+        if item_type.casefold() == normalized:
+            return item_type
+    raise ValueError(
+        "Laptop component type must be one of: "
+        + ", ".join(LAPTOP_COMPONENT_TYPES)
+        + "."
+    )

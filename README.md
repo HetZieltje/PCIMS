@@ -101,6 +101,18 @@ sales revenue, realized cost, profit, cash flow, ROI, profit margin, sale volume
 and current inventory value. Depending on the selected span, activity is grouped
 automatically by day, week, month, or year so long histories remain readable.
 
+Laptop inventory is an optional feature under Settings and is disabled by
+default. Enabling it adds a dedicated Laptops tab without mixing laptop records
+into component or assembled-PC workflows; disabling it again only hides the tab
+and preserves its data. A laptop initially exists as a single model-number record,
+so factory RAM and storage are not guessed or automatically indexed. When a
+factory RAM, SSD, or HDD is explicitly removed, its entered value is transferred
+from the laptop to the new component record. An optional replacement can then be
+installed from available inventory. Cash paid remains separate from this movable
+cost basis, preventing an extraction from being counted as another purchase.
+Laptop edits, proofs, sales, sale undo, replacement changes, and factory-state
+restoration all retain the original records and update inventory value atomically.
+
 Each individual item can have up to 20 proofs of purchase in PDF, PNG, JPEG, or
 WebP format, with a 20 MiB limit per file. Proofs can be selected while staging
 a purchase or managed later from Inventory and purchase history, including for

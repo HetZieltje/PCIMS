@@ -9,7 +9,7 @@ from typing import cast
 
 from pcims.db.errors import DatabaseIntegrityError, NotFoundError
 from pcims.db.records import EXPENSE_SELECT, expense_from_row
-from pcims.domain import ItemType, SaleKind
+from pcims.domain import ItemType, LaptopComponentType, SaleKind
 from pcims.models import (
     AssembledPC,
     BalanceBucket,
@@ -17,6 +17,8 @@ from pcims.models import (
     BalanceSummary,
     Expense,
     FinancialSummary,
+    Laptop,
+    LaptopSlot,
     Sale,
     SaleSummary,
 )
@@ -70,7 +72,9 @@ class ReadQueries:
         )
 
     def list_expenses(self) -> tuple[Expense, ...]:
-        rows = self.connection.execute(EXPENSE_SELECT + " ORDER BY e.id").fetchall()
+        rows = self.connection.execute(
+            EXPENSE_SELECT + " WHERE c.origin='purchase' ORDER BY e.id"
+        ).fetchall()
         return self._expenses_from_rows(rows)
 
     def count_expenses(self, search: str = "") -> int:
@@ -79,29 +83,31 @@ class ReadQueries:
             return int(
                 self.connection.execute(
                     """SELECT COUNT(*) FROM inventory_items e
-                       WHERE e.name LIKE ? OR e.item_type LIKE ? OR e.vendor LIKE ?
+                       JOIN item_costs c ON c.item_id=e.id
+                       WHERE c.origin='purchase' AND
+                            (e.name LIKE ? OR e.item_type LIKE ? OR e.vendor LIKE ?
                           OR e.serial_number LIKE ? OR e.storage_location LIKE ?
-                          OR e.notes LIKE ?""",
+                          OR e.notes LIKE ?)""",
                     (pattern,) * 6,
                 ).fetchone()[0]
             )
         return int(
-            self.connection.execute("SELECT COUNT(*) FROM inventory_items").fetchone()[
-                0
-            ]
+            self.connection.execute(
+                "SELECT COUNT(*) FROM item_costs WHERE origin='purchase'"
+            ).fetchone()[0]
         )
 
     def list_expense_page(
         self, offset: int, limit: int, search: str = ""
     ) -> tuple[Expense, ...]:
-        where = ""
+        where = " WHERE c.origin='purchase'"
         parameters: tuple[object, ...] = ()
         if search:
             pattern = f"%{search}%"
             where = (
-                " WHERE e.name LIKE ? OR e.item_type LIKE ? OR e.vendor LIKE ?"
+                " WHERE c.origin='purchase' AND (e.name LIKE ? OR e.item_type LIKE ? OR e.vendor LIKE ?"
                 " OR e.serial_number LIKE ? OR e.storage_location LIKE ?"
-                " OR e.notes LIKE ?"
+                " OR e.notes LIKE ?)"
             )
             parameters = (pattern,) * 6
         rows = self.connection.execute(
@@ -112,14 +118,16 @@ class ReadQueries:
 
     def list_expense_names(self) -> tuple[str, ...]:
         rows = self.connection.execute(
-            "SELECT DISTINCT name FROM inventory_items ORDER BY name COLLATE PCIMS_NOCASE,name"
+            """SELECT DISTINCT e.name FROM inventory_items e
+               JOIN item_costs c ON c.item_id=e.id WHERE c.origin='purchase'
+               ORDER BY e.name COLLATE PCIMS_NOCASE,e.name"""
         )
         return tuple(str(row[0]) for row in rows)
 
     def list_inventory(
         self, item_type: ItemType | None = None, available_only: bool = False
     ) -> tuple[Expense, ...]:
-        clauses = ["si.sale_id IS NULL"]
+        clauses = ["si.sale_id IS NULL", "l.item_id IS NULL", "ls.laptop_id IS NULL"]
         parameters: list[object] = []
         if item_type is not None:
             clauses.append("e.item_type=?")
@@ -151,9 +159,64 @@ class ReadQueries:
             for pc in pcs
         )
 
+    def list_laptops(self) -> tuple[Laptop, ...]:
+        laptop_rows = self.connection.execute(
+            """SELECT l.item_id,c.cash_paid_cents
+                 FROM laptops l JOIN item_costs c ON c.item_id=l.item_id
+                ORDER BY l.item_id"""
+        ).fetchall()
+        if not laptop_rows:
+            return ()
+        slot_rows = self.connection.execute(
+            """SELECT laptop_id,component_type,slot_number,
+                      extracted_item_id,installed_item_id
+                 FROM laptop_slots
+                ORDER BY laptop_id,component_type,slot_number"""
+        ).fetchall()
+        item_ids = {int(row["item_id"]) for row in laptop_rows}
+        for row in slot_rows:
+            item_ids.add(int(row["extracted_item_id"]))
+            if row["installed_item_id"] is not None:
+                item_ids.add(int(row["installed_item_id"]))
+        placeholders = ",".join("?" for _ in item_ids)
+        expenses = self._expenses_from_rows(
+            self.connection.execute(
+                EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})",  # nosec B608
+                tuple(sorted(item_ids)),
+            )
+        )
+        by_id = {expense.id: expense for expense in expenses}
+        slots_by_laptop: dict[int, list[LaptopSlot]] = {
+            int(row["item_id"]): [] for row in laptop_rows
+        }
+        for row in slot_rows:
+            slots_by_laptop[int(row["laptop_id"])].append(
+                LaptopSlot(
+                    component_type=cast(LaptopComponentType, row["component_type"]),
+                    slot_number=int(row["slot_number"]),
+                    extracted=by_id[int(row["extracted_item_id"])],
+                    installed=(
+                        by_id[int(row["installed_item_id"])]
+                        if row["installed_item_id"] is not None
+                        else None
+                    ),
+                )
+            )
+        return tuple(
+            Laptop(
+                item=by_id[int(row["item_id"])],
+                original_cost_cents=int(row["cash_paid_cents"]),
+                slots=tuple(slots_by_laptop[int(row["item_id"])]),
+            )
+            for row in laptop_rows
+        )
+
     def list_sales(self) -> tuple[Sale, ...]:
         sales = self.connection.execute(
-            "SELECT id,name,kind,selling_price_cents,sale_date FROM sales ORDER BY id"
+            """SELECT s.id,s.name,
+                      CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END AS kind,
+                      s.selling_price_cents,s.sale_date
+                 FROM sales s LEFT JOIN laptop_sales ls ON ls.sale_id=s.id ORDER BY s.id"""
         ).fetchall()
         items_by_sale: dict[int, list[Expense]] = {
             int(sale["id"]): [] for sale in sales
@@ -186,7 +249,11 @@ class ReadQueries:
         pattern = f"%{search}%"
         return int(
             self.connection.execute(
-                "SELECT COUNT(*) FROM sales WHERE name LIKE ? OR kind LIKE ?",
+                """SELECT COUNT(*) FROM sales s
+                   LEFT JOIN laptop_sales ls ON ls.sale_id=s.id
+                   WHERE s.name LIKE ? OR
+                         CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END
+                         LIKE ?""",
                 (pattern, pattern),
             ).fetchone()[0]
         )
@@ -200,9 +267,13 @@ class ReadQueries:
         pattern = f"%{search}%"
         sales = self.connection.execute(
             """WITH page AS (
-                   SELECT id,name,kind,selling_price_cents,sale_date
-                     FROM sales
-                    WHERE ?='' OR name LIKE ? OR kind LIKE ?
+                   SELECT s.id,s.name,
+                          CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END AS kind,
+                          s.selling_price_cents,s.sale_date
+                     FROM sales s LEFT JOIN laptop_sales ls ON ls.sale_id=s.id
+                    WHERE ?='' OR s.name LIKE ? OR
+                          CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END
+                          LIKE ?
                     ORDER BY id DESC LIMIT ? OFFSET ?
                )
                SELECT p.id,p.name,p.kind,p.selling_price_cents,p.sale_date,
@@ -275,7 +346,7 @@ class ReadQueries:
         expense_cents, income_cents, cost_cents, inventory_cents = (
             self.connection.execute(
                 """SELECT
-                   (SELECT COALESCE(SUM(price_cents),0) FROM inventory_items),
+                   (SELECT COALESCE(SUM(cash_paid_cents),0) FROM item_costs),
                    (SELECT COALESCE(SUM(selling_price_cents),0) FROM sales),
                    (SELECT COALESCE(SUM(e.price_cents),0)
                       FROM sale_items si JOIN inventory_items e ON e.id=si.item_id),
@@ -294,7 +365,8 @@ class ReadQueries:
     def balance_date_bounds(self) -> tuple[date | None, date | None]:
         row = self.connection.execute(
             """SELECT MIN(event_date),MAX(event_date) FROM (
-                   SELECT purchase_date AS event_date FROM inventory_items
+                   SELECT e.purchase_date AS event_date FROM inventory_items e
+                   JOIN item_costs c ON c.item_id=e.id WHERE c.origin='purchase'
                    UNION ALL SELECT sale_date FROM sales
                )"""
         ).fetchone()
@@ -323,10 +395,11 @@ class ReadQueries:
                     WHERE s.sale_date BETWEEN ? AND ?
                     GROUP BY s.id,s.sale_date,s.selling_price_cents
                ), events AS (
-                   SELECT purchase_date AS event_date,price_cents AS purchase_cents,
+                   SELECT e.purchase_date AS event_date,c.cash_paid_cents AS purchase_cents,
                           0 AS revenue_cents,0 AS realized_cost_cents,
                           1 AS purchase_count,0 AS sale_count,0 AS sold_item_count
-                     FROM inventory_items WHERE purchase_date BETWEEN ? AND ?
+                     FROM inventory_items e JOIN item_costs c ON c.item_id=e.id
+                    WHERE c.origin='purchase' AND e.purchase_date BETWEEN ? AND ?
                    UNION ALL
                    SELECT event_date,0,selling_price_cents,realized_cost_cents,
                           0,1,sold_item_count FROM sale_totals

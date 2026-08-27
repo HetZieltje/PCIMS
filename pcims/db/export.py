@@ -64,8 +64,8 @@ def export_csv(
             (
                 item.id,
                 item.name,
-                item.item_type,
-                f"{item.price_cents / 100:.2f}",
+                item.display_type,
+                f"{item.purchase_cost_cents / 100:.2f}",
                 item.purchase_date.isoformat(),
                 "sold"
                 if item.sale_id is not None

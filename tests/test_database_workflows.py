@@ -498,6 +498,10 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 "sale_items",
                 "proof_files",
                 "item_proofs",
+                "item_costs",
+                "laptops",
+                "laptop_slots",
+                "laptop_sales",
             },
         )
         self.assertEqual(
@@ -716,7 +720,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 "SELECT name FROM inventory_items WHERE id=1"
             ).fetchone()[0]
         self.assertEqual(name, "Migrated CPU")
-        self.assertEqual([row[0] for row in markers], [1, 2])
+        self.assertEqual([row[0] for row in markers], [1, 2, 3])
         self.assertNotIn("activity_events", tables)
         backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
         self.assertEqual(len(backups), 1)
@@ -2019,6 +2023,136 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 Path(self.temporary_directory.name) / "invalid-backups",
                 database=self.database,
             )
+
+    def test_laptop_value_transfer_is_not_counted_as_an_extra_purchase(self):
+        proof = NewProof("receipt.pdf", "application/pdf", b"%PDF-1.7\nLaptop receipt")
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("ThinkPad T480", "Extra", 500, TEST_DATE), (proof,)
+        )
+        ram_a = self.buy("8 GB RAM", "RAM", 10)
+        self.buy("Spare RAM", "RAM", 15)
+        ssd = self.buy("Replacement SSD", "SSD", 20)
+
+        first_removed = self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Factory RAM A", "RAM", 30, TEST_DATE),
+            ram_a,
+        )
+        self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            2,
+            NewExpense.create("Factory RAM B", "RAM", 20, TEST_DATE),
+        )
+        self.services.extract_laptop_component(
+            laptop_id,
+            "SSD",
+            1,
+            NewExpense.create("Factory SSD", "SSD", 50, TEST_DATE),
+            ssd,
+        )
+
+        laptop = self.services.laptop_snapshot().laptops[0]
+        self.assertEqual(laptop.original_cost_cents, 50_000)
+        self.assertEqual(laptop.item.price_cents, 40_000)
+        self.assertEqual(laptop.current_cost_cents, 43_000)
+        self.assertEqual(
+            [(slot.component_type, slot.slot_number) for slot in laptop.slots],
+            [("RAM", 1), ("RAM", 2), ("SSD", 1)],
+        )
+        self.assertEqual(len(laptop.item.proofs), 1)
+
+        summary = self.services.financial_summary()
+        self.assertEqual(summary.expense_cents, 54_500)
+        self.assertEqual(summary.inventory_cents, 54_500)
+        dashboard = self.services.balance_snapshot(TEST_DATE, TEST_DATE).summary
+        self.assertEqual(dashboard.purchase_cents, 54_500)
+        self.assertEqual(dashboard.purchase_count, 4)
+        self.assertNotIn(
+            "Factory RAM A", {item.name for item in self.services.list_expenses()}
+        )
+        inventory_names = {item.name for item in self.services.list_inventory()}
+        self.assertIn("Factory RAM A", inventory_names)
+        self.assertIn("Spare RAM", inventory_names)
+        self.assertNotIn("ThinkPad T480", inventory_names)
+        self.assertNotIn("8 GB RAM", inventory_names)
+
+        removed = next(
+            item for item in self.services.list_inventory() if item.id == first_removed
+        )
+        self.services.update_expense(
+            removed.id,
+            NewExpense.create(removed.name, "RAM", 35, TEST_DATE),
+        )
+        adjusted = self.services.laptop_snapshot().laptops[0]
+        self.assertEqual(adjusted.item.price_cents, 39_500)
+        self.assertEqual(self.services.financial_summary().inventory_cents, 54_500)
+
+        with self.assertRaisesRegex(ValidationError, "not available for sale"):
+            self.services.sell_items([laptop_id], SaleTerms.create(600, TEST_DATE))
+        with self.assertRaisesRegex(ValidationError, "Restore all"):
+            self.services.delete_laptop(laptop_id)
+
+    def test_laptop_sale_undo_replacement_and_factory_restore_are_reversible(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Latitude 7490", "Extra", 300, TEST_DATE)
+        )
+        replacement_id = self.buy("Replacement RAM", "RAM", 25)
+        extracted_id = self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Factory RAM", "RAM", 40, TEST_DATE),
+            replacement_id,
+        )
+
+        sale_id = self.services.sell_laptop(laptop_id, SaleTerms.create(400, TEST_DATE))
+        sale = self.services.list_sales()[0]
+        self.assertEqual(sale.kind, "laptop")
+        self.assertEqual({item.id for item in sale.items}, {laptop_id, replacement_id})
+        self.assertEqual(sale.cost_cents, 28_500)
+        self.assertEqual(self.services.financial_summary().inventory_cents, 4_000)
+        extracted = next(
+            item for item in self.services.list_inventory() if item.id == extracted_id
+        )
+        self.services.update_expense(
+            extracted_id,
+            NewExpense.create(extracted.name, "RAM", 45, TEST_DATE),
+        )
+        self.assertEqual(self.services.list_sales()[0].cost_cents, 28_000)
+        self.services.update_laptop(
+            laptop_id,
+            NewExpense.create("Latitude 7490 corrected", "Extra", 310, TEST_DATE),
+        )
+        corrected_sale = self.services.list_sales()[0]
+        self.assertEqual(corrected_sale.name, "Latitude 7490 corrected")
+        self.assertEqual(corrected_sale.cost_cents, 29_000)
+        with self.assertRaisesRegex(ValidationError, "cannot be after"):
+            self.services.update_laptop(
+                laptop_id,
+                NewExpense.create(
+                    "Too late", "Extra", 310, TEST_DATE + timedelta(days=1)
+                ),
+            )
+        with self.assertRaisesRegex(ValidationError, "Undo the laptop sale"):
+            self.services.restore_laptop_component(laptop_id, "RAM", 1)
+
+        self.services.undo_sale(sale_id)
+        self.services.set_laptop_replacement(laptop_id, "RAM", 1, None)
+        self.services.restore_laptop_component(laptop_id, "RAM", 1)
+        restored = self.services.laptop_snapshot().laptops[0]
+        self.assertEqual(restored.item.price_cents, 31_000)
+        self.assertEqual(restored.slots, ())
+        self.assertNotIn(
+            extracted_id, {item.id for item in self.services.list_inventory()}
+        )
+        self.assertIn(
+            replacement_id, {item.id for item in self.services.list_inventory()}
+        )
+        self.services.delete_laptop(laptop_id)
+        self.assertEqual(self.services.laptop_snapshot().laptops, ())
 
 
 if __name__ == "__main__":

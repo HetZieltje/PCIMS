@@ -3,6 +3,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -40,6 +41,7 @@ class SettingsPage(QWidget):
     theme_changed = Signal(str)
     backup_retention_changed = Signal(int)
     storage_changed = Signal()
+    laptops_enabled_changed = Signal(bool)
 
     def __init__(
         self,
@@ -48,6 +50,7 @@ class SettingsPage(QWidget):
         tasks: TaskManager,
         theme: str = "system",
         backup_retention: int = 14,
+        laptops_enabled: bool = False,
         has_pending_changes: Callable[[], bool] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -87,6 +90,24 @@ class SettingsPage(QWidget):
         appearance_box = QGroupBox("Appearance")
         appearance_box.setLayout(appearance_form)
 
+        self.laptops_enabled = QCheckBox("Enable laptop inventory")
+        self.laptops_enabled.setChecked(laptops_enabled)
+        self.laptops_enabled.setToolTip(
+            "Adds a dedicated Laptops tab. Factory RAM and storage remain unindexed "
+            "until you explicitly remove or replace them."
+        )
+        self.laptops_enabled.toggled.connect(self.laptops_enabled_changed.emit)
+        features_layout = QVBoxLayout()
+        features_layout.addWidget(self.laptops_enabled)
+        features_note = QLabel(
+            "When enabled, laptops are kept separate from component and assembled-PC "
+            "workflows. You can turn the tab off without deleting its data."
+        )
+        features_note.setWordWrap(True)
+        features_layout.addWidget(features_note)
+        features_box = QGroupBox("Optional features")
+        features_box.setLayout(features_layout)
+
         self.backup_button = QPushButton("Create backup now")
         self.backup_button.clicked.connect(self.create_backup)
         self.restore_button = QPushButton("Restore backup…")
@@ -121,6 +142,7 @@ class SettingsPage(QWidget):
         note.setWordWrap(True)
         layout = QVBoxLayout(self)
         layout.addWidget(appearance_box)
+        layout.addWidget(features_box)
         layout.addWidget(maintenance_box)
         layout.addWidget(note)
         layout.addStretch()

@@ -38,6 +38,19 @@ class WindowStateStore:
             raise ValueError("Backup retention must be between 1 and 30.")
         self._settings.setValue("backups/retention", value)
 
+    @property
+    def laptops_enabled(self) -> bool:
+        value = self._settings.value("features/laptops", False)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().casefold() in {"1", "true", "yes", "on"}
+
+    @laptops_enabled.setter
+    def laptops_enabled(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise TypeError("Laptop support setting must be a boolean.")
+        self._settings.setValue("features/laptops", value)
+
     def restore(
         self,
         window: QMainWindow,

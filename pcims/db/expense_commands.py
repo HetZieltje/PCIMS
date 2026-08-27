@@ -22,6 +22,47 @@ from pcims.proofs import (
 )
 
 
+def insert_expense_record(
+    connection: sqlite3.Connection,
+    expense: NewExpense,
+    *,
+    cash_paid_cents: int | None = None,
+    origin: str = "purchase",
+) -> int:
+    """Insert one item plus its independent cash/cost-basis record."""
+    expense_id = inserted_id(
+        connection.execute(
+            "INSERT INTO inventory_items "
+            "(name,item_type,price_cents,purchase_date,vendor,serial_number,"
+            "storage_location,condition,warranty_until,notes) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                expense.name,
+                expense.item_type,
+                expense.price_cents,
+                expense.purchase_date.isoformat(),
+                expense.details.vendor,
+                expense.details.serial_number,
+                expense.details.storage_location,
+                expense.details.condition,
+                expense.details.warranty_until.isoformat()
+                if expense.details.warranty_until
+                else None,
+                expense.details.notes,
+            ),
+        )
+    )
+    connection.execute(
+        "INSERT INTO item_costs (item_id,cash_paid_cents,origin) VALUES (?,?,?)",
+        (
+            expense_id,
+            expense.price_cents if cash_paid_cents is None else cash_paid_cents,
+            origin,
+        ),
+    )
+    return expense_id
+
+
 def _proof_id(
     connection: sqlite3.Connection,
     proof: NewProof,
@@ -106,28 +147,7 @@ def add_expenses(
         identifiers: list[int] = []
         proof_id_cache: dict[int, int] = {}
         for expense, proofs in zip(expenses, proof_groups, strict=True):
-            expense_id = inserted_id(
-                connection.execute(
-                    "INSERT INTO inventory_items "
-                    "(name,item_type,price_cents,purchase_date,vendor,serial_number,"
-                    "storage_location,condition,warranty_until,notes) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        expense.name,
-                        expense.item_type,
-                        expense.price_cents,
-                        expense.purchase_date.isoformat(),
-                        expense.details.vendor,
-                        expense.details.serial_number,
-                        expense.details.storage_location,
-                        expense.details.condition,
-                        expense.details.warranty_until.isoformat()
-                        if expense.details.warranty_until
-                        else None,
-                        expense.details.notes,
-                    ),
-                )
-            )
+            expense_id = insert_expense_record(connection, expense)
             _link_new_proofs(
                 connection,
                 expense_id,
@@ -219,6 +239,20 @@ def delete_expenses(expense_ids: Iterable[int], *, database: Database) -> None:
                 raise ValidationError(
                     f"Item {row['id']} has sale history. Undo the sale first."
                 )
+            if row["is_laptop"]:
+                raise ValidationError("Delete laptops from the Laptops tab.")
+            extracted = connection.execute(
+                "SELECT laptop_id FROM laptop_slots WHERE extracted_item_id=?",
+                (row["id"],),
+            ).fetchone()
+            if extracted is not None:
+                raise ValidationError(
+                    "Restore this factory component from the Laptops tab before deleting it."
+                )
+            if row["laptop_id"] is not None:
+                raise ValidationError(
+                    f"Item {row['id']} is installed in laptop '{row['laptop_name']}'."
+                )
         connection.executemany(
             "DELETE FROM inventory_items WHERE id=?", ((i,) for i in ids)
         )
@@ -237,6 +271,16 @@ def update_expense(
         if not rows:
             raise NotFoundError(f"Item {expense_id} does not exist.")
         row = rows[0]
+        cost = connection.execute(
+            "SELECT cash_paid_cents,origin FROM item_costs WHERE item_id=?",
+            (expense_id,),
+        ).fetchone()
+        if cost is None:
+            raise ValidationError(f"Item {expense_id} has no cost record.")
+        if row["is_laptop"]:
+            raise ValidationError("Edit laptops from the Laptops tab.")
+        if cost["origin"] == "extracted" and replacement.item_type != row["item_type"]:
+            raise ValidationError("An extracted factory component cannot change type.")
         pc_id = int(row["pc_id"]) if row["pc_id"] is not None else None
         if pc_id is not None:
             membership = connection.execute(
@@ -285,6 +329,29 @@ def update_expense(
                 "Combined sale cost",
             )
 
+        source_slot = (
+            connection.execute(
+                "SELECT laptop_id FROM laptop_slots WHERE extracted_item_id=?",
+                (expense_id,),
+            ).fetchone()
+            if cost["origin"] == "extracted"
+            else None
+        )
+        if source_slot is not None:
+            difference = replacement.price_cents - int(row["price_cents"])
+            laptop_sale_cost = connection.execute(
+                """SELECT SUM(e.price_cents) FROM laptop_sales ls
+                   JOIN sale_items si ON si.sale_id=ls.sale_id
+                   JOIN inventory_items e ON e.id=si.item_id
+                   WHERE ls.laptop_id=?""",
+                (source_slot["laptop_id"],),
+            ).fetchone()[0]
+            if laptop_sale_cost is not None:
+                bounded_cents_total(
+                    (int(laptop_sale_cost) - difference,),
+                    "Combined laptop sale cost",
+                )
+
         result = connection.execute(
             """UPDATE inventory_items
                   SET name=?,item_type=?,price_cents=?,purchase_date=?,vendor=?,
@@ -308,3 +375,24 @@ def update_expense(
         )
         if result.rowcount != 1:
             raise NotFoundError(f"Item {expense_id} does not exist.")
+        if cost["origin"] == "purchase":
+            connection.execute(
+                "UPDATE item_costs SET cash_paid_cents=? WHERE item_id=?",
+                (replacement.price_cents, expense_id),
+            )
+        else:
+            slot = source_slot
+            if slot is None:
+                raise ValidationError("Extracted component has no source laptop.")
+            difference = replacement.price_cents - int(row["price_cents"])
+            laptop = connection.execute(
+                "SELECT price_cents FROM inventory_items WHERE id=?", (slot[0],)
+            ).fetchone()
+            if laptop is None or int(laptop[0]) < difference:
+                raise ValidationError(
+                    "The extracted value cannot exceed the laptop's remaining value."
+                )
+            connection.execute(
+                "UPDATE inventory_items SET price_cents=price_cents-? WHERE id=?",
+                (difference, slot[0]),
+            )

@@ -26,7 +26,12 @@ def assemble_pc(name: str, expense_ids: Iterable[int], *, database: Database) ->
         if len(rows) != len(ids):
             raise NotFoundError("One or more selected items no longer exist.")
         for row in rows:
-            if row["pc_id"] is not None or row["sale_id"] is not None:
+            if (
+                row["pc_id"] is not None
+                or row["sale_id"] is not None
+                or row["laptop_id"] is not None
+                or row["is_laptop"]
+            ):
                 raise ValidationError(f"'{row['name']}' is not available for assembly.")
         bounded_cents_total((row["price_cents"] for row in rows), "Combined PC cost")
         pc_id = inserted_id(
@@ -87,6 +92,8 @@ def update_pc(
             assigned_pc_id = row["pc_id"]
             if row["sale_id"] is not None:
                 raise ValidationError(f"'{row['name']}' has already been sold.")
+            if row["laptop_id"] is not None or row["is_laptop"]:
+                raise ValidationError(f"'{row['name']}' belongs to a laptop workflow.")
             if assigned_pc_id is not None and int(assigned_pc_id) != pc_id:
                 raise ValidationError(
                     f"'{row['name']}' belongs to PC '{row['pc_name']}'."
