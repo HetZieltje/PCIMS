@@ -281,6 +281,27 @@ def update_expense(
             raise ValidationError("Edit laptops from the Laptops tab.")
         if cost["origin"] == "extracted" and replacement.item_type != row["item_type"]:
             raise ValidationError("An extracted factory component cannot change type.")
+        if row["laptop_id"] is not None and replacement.item_type != row["item_type"]:
+            raise ValidationError(
+                "An installed laptop component cannot change type. Remove it first."
+            )
+        source_slot = (
+            connection.execute(
+                """SELECT ls.laptop_id,base.purchase_date
+                     FROM laptop_slots ls JOIN inventory_items base
+                       ON base.id=ls.laptop_id WHERE ls.extracted_item_id=?""",
+                (expense_id,),
+            ).fetchone()
+            if cost["origin"] == "extracted"
+            else None
+        )
+        if (
+            source_slot is not None
+            and replacement.purchase_date.isoformat() != source_slot["purchase_date"]
+        ):
+            raise ValidationError(
+                "An extracted factory component keeps its source laptop purchase date."
+            )
         pc_id = int(row["pc_id"]) if row["pc_id"] is not None else None
         if pc_id is not None:
             membership = connection.execute(
@@ -329,16 +350,41 @@ def update_expense(
                 "Combined sale cost",
             )
 
-        source_slot = (
-            connection.execute(
-                "SELECT laptop_id FROM laptop_slots WHERE extracted_item_id=?",
-                (expense_id,),
-            ).fetchone()
-            if cost["origin"] == "extracted"
-            else None
-        )
+        if row["laptop_id"] is not None:
+            laptop_costs = connection.execute(
+                """SELECT e.id,e.price_cents FROM inventory_items e
+                    WHERE e.id=? OR e.id IN (
+                        SELECT installed_item_id FROM laptop_slots
+                         WHERE laptop_id=? AND installed_item_id IS NOT NULL)""",
+                (row["laptop_id"], row["laptop_id"]),
+            ).fetchall()
+            bounded_cents_total(
+                (
+                    replacement.price_cents
+                    if int(item["id"]) == expense_id
+                    else int(item["price_cents"])
+                    for item in laptop_costs
+                ),
+                "Combined laptop cost",
+            )
         if source_slot is not None:
             difference = replacement.price_cents - int(row["price_cents"])
+            laptop_parts = connection.execute(
+                """SELECT e.id,e.price_cents FROM inventory_items e
+                    WHERE e.id=? OR e.id IN (
+                        SELECT installed_item_id FROM laptop_slots
+                         WHERE laptop_id=? AND installed_item_id IS NOT NULL)""",
+                (source_slot["laptop_id"], source_slot["laptop_id"]),
+            ).fetchall()
+            bounded_cents_total(
+                (
+                    int(item["price_cents"]) - difference
+                    if int(item["id"]) == int(source_slot["laptop_id"])
+                    else int(item["price_cents"])
+                    for item in laptop_parts
+                ),
+                "Combined laptop cost",
+            )
             laptop_sale_cost = connection.execute(
                 """SELECT SUM(e.price_cents) FROM laptop_sales ls
                    JOIN sale_items si ON si.sale_id=ls.sale_id

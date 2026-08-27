@@ -17,7 +17,7 @@ from pcims.proofs import (
     NewProof,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
@@ -330,6 +330,100 @@ SCHEMA_DEFINITIONS[
         )
         BEGIN SELECT RAISE(ABORT,'item does not belong in this sale'); END"""
 
+# Revision definitions are immutable once shipped: older databases must still
+# validate byte-for-byte before a migration is allowed to touch them.
+SCHEMA_V3_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+
+SCHEMA_DEFINITIONS = dict(SCHEMA_V3_DEFINITIONS)
+SCHEMA_DEFINITIONS[
+    ("trigger", "pc_part_item_must_be_available")
+] = """CREATE TRIGGER pc_part_item_must_be_available
+        BEFORE INSERT ON pc_parts
+        WHEN EXISTS (SELECT 1 FROM sale_items WHERE item_id=NEW.item_id)
+          OR EXISTS (SELECT 1 FROM laptops WHERE item_id=NEW.item_id)
+          OR EXISTS (SELECT 1 FROM laptop_slots WHERE installed_item_id=NEW.item_id)
+        BEGIN SELECT RAISE(ABORT,'unavailable item cannot be assigned to a PC'); END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "laptop_component_type_is_locked")
+] = """CREATE TRIGGER laptop_component_type_is_locked
+        BEFORE UPDATE OF item_type ON inventory_items
+        WHEN EXISTS (
+            SELECT 1 FROM laptop_slots
+             WHERE (extracted_item_id=OLD.id OR installed_item_id=OLD.id)
+               AND component_type<>NEW.item_type)
+        BEGIN SELECT RAISE(ABORT,'laptop component type cannot be changed'); END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "laptop_slot_delete_restores_factory")
+] = """CREATE TRIGGER laptop_slot_delete_restores_factory
+        AFTER DELETE ON laptop_slots
+        BEGIN
+          UPDATE inventory_items
+             SET price_cents=price_cents+(
+                 SELECT price_cents FROM inventory_items
+                  WHERE id=OLD.extracted_item_id)
+           WHERE id=OLD.laptop_id;
+          DELETE FROM inventory_items WHERE id=OLD.extracted_item_id;
+        END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "laptop_slot_insert_cost_limit")
+] = f"""CREATE TRIGGER laptop_slot_insert_cost_limit
+        BEFORE INSERT ON laptop_slots
+        WHEN (SELECT base.price_cents
+                     +COALESCE((SELECT SUM(part.price_cents)
+                                  FROM laptop_slots existing
+                                  JOIN inventory_items part
+                                    ON part.id=existing.installed_item_id
+                                 WHERE existing.laptop_id=NEW.laptop_id),0)
+                     +COALESCE((SELECT price_cents FROM inventory_items
+                                 WHERE id=NEW.installed_item_id),0)
+                FROM inventory_items base WHERE base.id=NEW.laptop_id)
+             >{MAX_MONEY_CENTS}
+        BEGIN SELECT RAISE(ABORT,'combined laptop cost is too large'); END"""  # nosec B608
+SCHEMA_DEFINITIONS[
+    ("trigger", "laptop_slot_update_cost_limit")
+] = f"""CREATE TRIGGER laptop_slot_update_cost_limit
+        BEFORE UPDATE OF installed_item_id ON laptop_slots
+        WHEN (SELECT base.price_cents
+                     +COALESCE((SELECT SUM(part.price_cents)
+                                  FROM laptop_slots existing
+                                  JOIN inventory_items part
+                                    ON part.id=existing.installed_item_id
+                                 WHERE existing.laptop_id=OLD.laptop_id
+                                   AND NOT (existing.component_type=OLD.component_type
+                                        AND existing.slot_number=OLD.slot_number)),0)
+                     +COALESCE((SELECT price_cents FROM inventory_items
+                                 WHERE id=NEW.installed_item_id),0)
+                FROM inventory_items base WHERE base.id=OLD.laptop_id)
+             >{MAX_MONEY_CENTS}
+        BEGIN SELECT RAISE(ABORT,'combined laptop cost is too large'); END"""  # nosec B608
+SCHEMA_DEFINITIONS[
+    ("trigger", "item_cost_origin_is_locked")
+] = """CREATE TRIGGER item_cost_origin_is_locked
+        BEFORE UPDATE OF origin,cash_paid_cents ON item_costs
+        WHEN NEW.origin<>OLD.origin
+          OR (OLD.origin='extracted' AND NEW.cash_paid_cents<>0)
+        BEGIN SELECT RAISE(ABORT,'item cost provenance cannot be changed'); END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "pc_part_membership_is_locked")
+] = """CREATE TRIGGER pc_part_membership_is_locked
+        BEFORE UPDATE ON pc_parts
+        BEGIN SELECT RAISE(ABORT,'PC membership rows cannot be updated'); END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "sale_item_membership_is_locked")
+] = """CREATE TRIGGER sale_item_membership_is_locked
+        BEFORE UPDATE ON sale_items
+        BEGIN SELECT RAISE(ABORT,'sale membership rows cannot be updated'); END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "laptop_extracted_date_is_locked")
+] = """CREATE TRIGGER laptop_extracted_date_is_locked
+        BEFORE UPDATE OF purchase_date ON inventory_items
+        WHEN EXISTS (
+            SELECT 1 FROM laptop_slots ls
+            JOIN inventory_items base ON base.id=ls.laptop_id
+            WHERE ls.extracted_item_id=OLD.id
+              AND NEW.purchase_date<>base.purchase_date)
+        BEGIN SELECT RAISE(ABORT,'extracted component date must match laptop'); END"""
+
 
 def _normalize_schema_sql(sql: object) -> str:
     return " ".join(str(sql).split()).casefold()
@@ -346,6 +440,7 @@ def _schema_checksum(definitions: dict[tuple[str, str], str]) -> str:
 
 SCHEMA_V1_CHECKSUM = _schema_checksum(SCHEMA_V1_DEFINITIONS)
 SCHEMA_V2_CHECKSUM = _schema_checksum(SCHEMA_V2_DEFINITIONS)
+SCHEMA_V3_CHECKSUM = _schema_checksum(SCHEMA_V3_DEFINITIONS)
 SCHEMA_CHECKSUM = _schema_checksum(SCHEMA_DEFINITIONS)
 SCHEMA_REVISIONS = {
     1: (
@@ -360,6 +455,11 @@ SCHEMA_REVISIONS = {
     ),
     3: (
         "add optional laptop inventory and split cash from cost basis",
+        SCHEMA_V3_CHECKSUM,
+        SCHEMA_V3_DEFINITIONS,
+    ),
+    4: (
+        "harden laptop membership and component types",
         SCHEMA_CHECKSUM,
         SCHEMA_DEFINITIONS,
     ),
@@ -429,7 +529,9 @@ def _valid_iso_date(value: object) -> bool:
 
 def validate_current_data(database: sqlite3.Connection) -> None:
     """Reject structurally valid databases with inconsistent inventory state."""
-    has_laptop_schema = int(database.execute("PRAGMA user_version").fetchone()[0]) >= 3
+    schema_version = int(database.execute("PRAGMA user_version").fetchone()[0])
+    has_laptop_schema = schema_version >= 3
+    has_hardened_laptop_schema = schema_version >= 4
     for item_id, purchase_date, warranty_until in database.execute(
         "SELECT id,purchase_date,warranty_until FROM inventory_items"
     ):
@@ -477,6 +579,56 @@ def validate_current_data(database: sqlite3.Connection) -> None:
             raise DatabaseIntegrityError(
                 f"Laptop {invalid_laptop_value[0]} has an invalid transferred value."
             )
+        if has_hardened_laptop_schema:
+            invalid_slot_type = database.execute(
+                """SELECT ls.laptop_id FROM laptop_slots ls
+                   JOIN inventory_items extracted ON extracted.id=ls.extracted_item_id
+                   LEFT JOIN inventory_items installed ON installed.id=ls.installed_item_id
+                   WHERE extracted.item_type<>ls.component_type
+                      OR (installed.id IS NOT NULL
+                          AND installed.item_type<>ls.component_type)
+                   LIMIT 1"""
+            ).fetchone()
+            if invalid_slot_type:
+                raise DatabaseIntegrityError(
+                    f"Laptop {invalid_slot_type[0]} has a component in the wrong slot type."
+                )
+            invalid_slot_provenance = database.execute(
+                """SELECT ls.extracted_item_id FROM laptop_slots ls
+                   JOIN item_costs c ON c.item_id=ls.extracted_item_id
+                   WHERE c.origin<>'extracted' OR c.cash_paid_cents<>0 LIMIT 1"""
+            ).fetchone()
+            if invalid_slot_provenance:
+                raise DatabaseIntegrityError(
+                    f"Extracted item {invalid_slot_provenance[0]} has invalid provenance."
+                )
+            invalid_pc_laptop_item = database.execute(
+                """SELECT pp.item_id FROM pc_parts pp
+                   LEFT JOIN laptops l ON l.item_id=pp.item_id
+                   LEFT JOIN laptop_slots ls ON ls.installed_item_id=pp.item_id
+                   WHERE l.item_id IS NOT NULL OR ls.installed_item_id IS NOT NULL
+                   LIMIT 1"""
+            ).fetchone()
+            if invalid_pc_laptop_item:
+                raise DatabaseIntegrityError(
+                    f"Laptop item {invalid_pc_laptop_item[0]} is also assigned to a PC."
+                )
+            oversized_laptop = database.execute(
+                """SELECT l.item_id FROM laptops l
+                   JOIN inventory_items base ON base.id=l.item_id
+                   LEFT JOIN laptop_slots ls ON ls.laptop_id=l.item_id
+                   LEFT JOIN inventory_items installed
+                          ON installed.id=ls.installed_item_id
+                   GROUP BY l.item_id
+                   HAVING base.price_cents
+                          +COALESCE(SUM(installed.price_cents),0)>?
+                   LIMIT 1""",
+                (MAX_MONEY_CENTS,),
+            ).fetchone()
+            if oversized_laptop:
+                raise DatabaseIntegrityError(
+                    f"Laptop {oversized_laptop[0]} has an excessive current cost."
+                )
 
     empty_pc = database.execute(
         """SELECT p.id FROM pcs p LEFT JOIN pc_parts pp ON pp.pc_id=p.id
@@ -647,7 +799,7 @@ def _upgrade_schema(connection: sqlite3.Connection, version: int) -> None:
             )
         elif version == 2:
             for table in ("item_costs", "laptops", "laptop_slots", "laptop_sales"):
-                connection.execute(SCHEMA_DEFINITIONS[("table", table)])
+                connection.execute(SCHEMA_V3_DEFINITIONS[("table", table)])
                 if table == "item_costs":
                     connection.execute(
                         """INSERT INTO item_costs (item_id,cash_paid_cents,origin)
@@ -655,7 +807,7 @@ def _upgrade_schema(connection: sqlite3.Connection, version: int) -> None:
                     )
             connection.execute("DROP TRIGGER sale_item_assignment_valid")
             connection.execute(
-                SCHEMA_DEFINITIONS[("trigger", "sale_item_assignment_valid")]
+                SCHEMA_V3_DEFINITIONS[("trigger", "sale_item_assignment_valid")]
             )
             for trigger in (
                 "laptop_base_must_be_available",
@@ -664,6 +816,32 @@ def _upgrade_schema(connection: sqlite3.Connection, version: int) -> None:
                 "sold_laptop_slots_are_locked",
                 "laptop_with_slots_cannot_be_deleted",
                 "laptop_base_type_is_locked",
+            ):
+                connection.execute(SCHEMA_V3_DEFINITIONS[("trigger", trigger)])
+        elif version == 3:
+            connection.execute("DROP TRIGGER pc_part_item_must_be_available")
+            connection.execute(
+                SCHEMA_DEFINITIONS[("trigger", "pc_part_item_must_be_available")]
+            )
+            connection.execute(
+                SCHEMA_DEFINITIONS[("trigger", "laptop_component_type_is_locked")]
+            )
+            connection.execute(
+                SCHEMA_DEFINITIONS[("trigger", "laptop_slot_delete_restores_factory")]
+            )
+            connection.execute(
+                SCHEMA_DEFINITIONS[("trigger", "laptop_slot_insert_cost_limit")]
+            )
+            connection.execute(
+                SCHEMA_DEFINITIONS[("trigger", "laptop_slot_update_cost_limit")]
+            )
+            connection.execute(
+                SCHEMA_DEFINITIONS[("trigger", "item_cost_origin_is_locked")]
+            )
+            for trigger in (
+                "pc_part_membership_is_locked",
+                "sale_item_membership_is_locked",
+                "laptop_extracted_date_is_locked",
             ):
                 connection.execute(SCHEMA_DEFINITIONS[("trigger", trigger)])
         else:  # pragma: no cover - every supported source has a registered step

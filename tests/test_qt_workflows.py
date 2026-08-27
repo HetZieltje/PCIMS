@@ -37,6 +37,7 @@ from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.balance import BalancePage
 from pcims.app.pages.inventory import InventoryPage
+from pcims.app.pages.laptops import LaptopPage
 from pcims.app.pages.purchases import PurchasesPage, StagedPurchase
 from pcims.app.pages.sales import SalesPage
 from pcims.app.table_model import (
@@ -435,6 +436,43 @@ class QtWorkflowTests(unittest.TestCase):
             [item.price_cents for item in self.services.list_expenses()],
             [334, 333, 333],
         )
+        page.deleteLater()
+
+    def test_purchase_page_reports_invalid_domain_input_without_partial_staging(self):
+        page = PurchasesPage(self.services, tasks=self.tasks)
+        page.name.setText("x" * 201)
+        page.price.setText("1.00")
+
+        with patch("pcims.app.pages.purchases.show_error") as show_error:
+            page.add_line()
+
+        self.assertEqual(page._staged, [])
+        show_error.assert_called_once()
+        self.assertIn("200 characters", str(show_error.call_args.args[2]))
+        page.deleteLater()
+
+    def test_sold_laptop_disables_component_change_controls(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("UI laptop", "Extra", 300, TEST_DATE)
+        )
+        self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("UI factory RAM", "RAM", 20, TEST_DATE),
+        )
+        page = LaptopPage(self.services, tasks=self.tasks)
+        page.apply_snapshot(self.services.laptop_snapshot())
+        page.slot_table.selectRow(0)
+        self.assertTrue(page.change_replacement_button.isEnabled())
+        self.assertTrue(page.restore_component_button.isEnabled())
+
+        self.services.sell_laptop(laptop_id, SaleTerms.create(350, TEST_DATE))
+        page.apply_snapshot(self.services.laptop_snapshot())
+        page.slot_table.selectRow(0)
+
+        self.assertFalse(page.change_replacement_button.isEnabled())
+        self.assertFalse(page.restore_component_button.isEnabled())
         page.deleteLater()
 
     def test_purchase_page_attaches_selected_proofs_to_every_quantity_item(self):
@@ -1013,6 +1051,31 @@ class QtWorkflowTests(unittest.TestCase):
         )
         component_dialog.deleteLater()
         pc_dialog.deleteLater()
+
+    def test_laptop_component_edit_dialog_locks_slot_type(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Dialog laptop", "Extra", 300, TEST_DATE)
+        )
+        replacement_id = self.purchase("Dialog replacement", "RAM", 20)
+        self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Dialog factory RAM", "RAM", 30, TEST_DATE),
+            replacement_id,
+        )
+        slot = self.services.laptop_snapshot().laptops[0].slots[0]
+        self.assertIsNotNone(slot.installed)
+
+        extracted_dialog = ExpenseEditDialog(slot.extracted)
+        installed_dialog = ExpenseEditDialog(slot.installed)
+
+        self.assertFalse(extracted_dialog.item_type.isEnabled())
+        self.assertFalse(extracted_dialog.purchase_date.isEnabled())
+        self.assertFalse(installed_dialog.item_type.isEnabled())
+        self.assertTrue(installed_dialog.purchase_date.isEnabled())
+        extracted_dialog.deleteLater()
+        installed_dialog.deleteLater()
 
     def test_database_lock_allows_only_one_application_instance(self):
         database_path = Path(self.temporary_directory.name) / "locked.db"

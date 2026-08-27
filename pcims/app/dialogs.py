@@ -221,6 +221,11 @@ class ExpenseEditDialog(QDialog):
         self.item_type = QComboBox()
         self.item_type.addItems(ITEM_TYPES)
         self.item_type.setCurrentText(expense.item_type)
+        if expense.cost_origin == "extracted" or expense.laptop_id is not None:
+            self.item_type.setEnabled(False)
+            self.item_type.setToolTip(
+                "Remove this component from its laptop workflow before changing type."
+            )
         self.amount = QLineEdit(
             f"{expense.price_cents // 100}.{expense.price_cents % 100:02d}"
         )
@@ -233,6 +238,11 @@ class ExpenseEditDialog(QDialog):
         )
         self.purchase_date.setCalendarPopup(True)
         self.purchase_date.setDisplayFormat("yyyy-MM-dd")
+        if expense.cost_origin == "extracted":
+            self.purchase_date.setEnabled(False)
+            self.purchase_date.setToolTip(
+                "Factory components keep the source laptop purchase date."
+            )
         self.vendor = QLineEdit(expense.details.vendor)
         self.serial_number = QLineEdit(expense.details.serial_number)
         self.storage_location = QLineEdit(expense.details.storage_location)

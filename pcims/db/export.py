@@ -7,6 +7,25 @@ from pathlib import Path
 
 from pcims.db.connection import Database
 from pcims.db.reads import ReadQueries
+from pcims.models import Expense
+
+
+def _plain_cents(cents: int) -> str:
+    sign = "-" if cents < 0 else ""
+    absolute = abs(cents)
+    return f"{sign}{absolute // 100}.{absolute % 100:02d}"
+
+
+def _inventory_status(item: Expense) -> str:
+    if item.sale_id is not None:
+        return "sold"
+    if item.is_laptop:
+        return "laptop"
+    if item.laptop_id is not None:
+        return "installed in laptop"
+    if item.pc_id is not None:
+        return "assembled"
+    return "available"
 
 
 def _publish_csv(
@@ -51,6 +70,7 @@ def export_csv(
             "purchase_date",
             "status",
             "pc_id",
+            "laptop_id",
             "sale_id",
             "vendor",
             "serial_number",
@@ -65,14 +85,11 @@ def export_csv(
                 item.id,
                 item.name,
                 item.display_type,
-                f"{item.purchase_cost_cents / 100:.2f}",
+                _plain_cents(item.purchase_cost_cents),
                 item.purchase_date.isoformat(),
-                "sold"
-                if item.sale_id is not None
-                else "assembled"
-                if item.pc_id is not None
-                else "available",
+                _inventory_status(item),
                 item.pc_id or "",
+                (item.id if item.is_laptop else item.laptop_id) or "",
                 item.sale_id or "",
                 item.details.vendor,
                 item.details.serial_number,
@@ -105,9 +122,9 @@ def export_csv(
                 sale.sale_date.isoformat(),
                 sale.kind,
                 sale.name,
-                f"{sale.cost_cents / 100:.2f}",
-                f"{sale.selling_price_cents / 100:.2f}",
-                f"{sale.profit_cents / 100:.2f}",
+                _plain_cents(sale.cost_cents),
+                _plain_cents(sale.selling_price_cents),
+                _plain_cents(sale.profit_cents),
                 ";".join(str(item.id) for item in sale.items),
             )
             for sale in sales

@@ -36,9 +36,8 @@ from pcims.contracts import LaptopOperations, LaptopSnapshot
 from pcims.models import Expense, Laptop, LaptopSlot
 
 
-def _slot_key(laptop_id: int, slot: LaptopSlot) -> int:
-    kind = {"RAM": 1, "SSD": 2, "HDD": 3}[slot.component_type]
-    return laptop_id * 10_000 + kind * 100 + slot.slot_number
+def _slot_key(slot: LaptopSlot) -> int:
+    return slot.extracted.id
 
 
 class LaptopPage(AsyncCommandPage):
@@ -195,25 +194,30 @@ class LaptopPage(AsyncCommandPage):
             self.slot_table,
             (
                 ContextAction(
-                    "Change replacement…", self.change_replacement, self._has_slot
+                    "Change replacement…",
+                    self.change_replacement,
+                    self._has_editable_slot,
                 ),
                 ContextAction(
                     "Restore factory component…",
                     self.restore_component,
-                    self._has_slot,
+                    self._has_editable_slot,
                     True,
                 ),
             ),
         )
         slot_buttons = QHBoxLayout()
-        for text, callback in (
-            ("Change replacement…", self.change_replacement),
-            ("Restore factory component…", self.restore_component),
-        ):
-            button = QPushButton(text)
-            button.clicked.connect(callback)
-            slot_buttons.addWidget(button)
+        self.change_replacement_button = QPushButton("Change replacement…")
+        self.change_replacement_button.clicked.connect(self.change_replacement)
+        self.restore_component_button = QPushButton("Restore factory component…")
+        self.restore_component_button.clicked.connect(self.restore_component)
+        slot_buttons.addWidget(self.change_replacement_button)
+        slot_buttons.addWidget(self.restore_component_button)
         slot_buttons.addStretch()
+        self.slot_table.selectionModel().selectionChanged.connect(
+            self._update_slot_actions
+        )
+        self._update_slot_actions()
         slot_layout = QVBoxLayout()
         slot_layout.addWidget(self.slot_table)
         slot_layout.addLayout(slot_buttons)
@@ -264,12 +268,13 @@ class LaptopPage(AsyncCommandPage):
         rows = (
             ()
             if laptop is None
-            else tuple((_slot_key(laptop.id, slot), slot) for slot in laptop.slots)
+            else tuple((_slot_key(slot), slot) for slot in laptop.slots)
         )
         self._slots = (
             {key: (laptop, slot) for key, slot in rows} if laptop is not None else {}
         )
         self.slot_model.set_records(rows)
+        self._update_slot_actions()
 
     def _selected_slot(self) -> tuple[Laptop, LaptopSlot] | None:
         identifiers = selected_ids(self.slot_table)
@@ -283,6 +288,18 @@ class LaptopPage(AsyncCommandPage):
     def _has_slot(self) -> bool:
         identifiers = selected_ids(self.slot_table)
         return len(identifiers) == 1 and identifiers[0] in self._slots
+
+    def _has_editable_slot(self) -> bool:
+        if not self._has_slot():
+            return False
+        identifiers = selected_ids(self.slot_table)
+        laptop, _slot = self._slots[identifiers[0]]
+        return not laptop.is_sold
+
+    def _update_slot_actions(self, *_: object) -> None:
+        enabled = self._has_editable_slot()
+        self.change_replacement_button.setEnabled(enabled)
+        self.restore_component_button.setEnabled(enabled)
 
     def add_laptop(self) -> None:
         laptop = LaptopEditDialog.get_laptop(parent=self)
@@ -352,6 +369,8 @@ class LaptopPage(AsyncCommandPage):
         if selected is None:
             return
         laptop, slot = selected
+        if laptop.is_sold:
+            return
         accepted, replacement_id = LaptopReplacementDialog.get_replacement(
             slot.component_type,
             slot.installed.id if slot.installed else None,
@@ -374,6 +393,8 @@ class LaptopPage(AsyncCommandPage):
         if selected is None:
             return
         laptop, slot = selected
+        if laptop.is_sold:
+            return
         if not ask_confirmation(
             self,
             "Restore factory component",

@@ -272,17 +272,25 @@ class PurchasesPage(AsyncCommandPage):
         except (TypeError, ValueError) as error:
             show_error(self, "Invalid item details", error)
             return
-        for price_cents in prices:
+        try:
+            expenses = tuple(
+                NewExpense(
+                    name,
+                    cast(ItemType, self.type.currentText()),
+                    price_cents,
+                    purchase_date,
+                    details,
+                )
+                for price_cents in prices
+            )
+        except (TypeError, ValueError) as error:
+            show_error(self, "Invalid purchase", error)
+            return
+        for expense in expenses:
             self._staged.append(
                 DraftPurchase(
                     self._next_staged_id,
-                    NewExpense(
-                        name,
-                        cast(ItemType, self.type.currentText()),
-                        price_cents,
-                        purchase_date,
-                        details,
-                    ),
+                    expense,
                     self._pending_proofs,
                 )
             )
@@ -336,7 +344,7 @@ class PurchasesPage(AsyncCommandPage):
         if self._draft_store is not None:
             try:
                 self._draft_store.save(tuple(self._staged))
-            except OSError as error:
+            except (OSError, TypeError, ValueError) as error:
                 show_error(self, "Unable to save purchase draft", error)
         self.table_model.set_records(self._staged)
         self.total_label.setText(

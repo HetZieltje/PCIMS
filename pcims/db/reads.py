@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
+from pcims.db.command_support import id_batches
 from pcims.db.errors import DatabaseIntegrityError, NotFoundError
 from pcims.db.records import EXPENSE_SELECT, expense_from_row
 from pcims.domain import ItemType, LaptopComponentType, SaleKind
@@ -37,10 +38,7 @@ class ReadQueries:
         grouped: dict[int, list[ProofSummary]] = {
             expense_id: [] for expense_id in expense_ids
         }
-        for start in range(0, len(expense_ids), 900):
-            chunk = expense_ids[start : start + 900]
-            if not chunk:
-                continue
+        for chunk in id_batches(list(expense_ids)):
             placeholders = ",".join("?" for _ in chunk)
             rows = self.connection.execute(
                 # Only the internally generated placeholder count changes SQL.
@@ -178,13 +176,16 @@ class ReadQueries:
             item_ids.add(int(row["extracted_item_id"]))
             if row["installed_item_id"] is not None:
                 item_ids.add(int(row["installed_item_id"]))
-        placeholders = ",".join("?" for _ in item_ids)
-        expenses = self._expenses_from_rows(
-            self.connection.execute(
-                EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})",  # nosec B608
-                tuple(sorted(item_ids)),
+        item_rows: list[sqlite3.Row] = []
+        for batch in id_batches(sorted(item_ids)):
+            placeholders = ",".join("?" for _ in batch)
+            item_rows.extend(
+                self.connection.execute(
+                    EXPENSE_SELECT + f" WHERE e.id IN ({placeholders})",  # nosec B608
+                    batch,
+                )
             )
-        )
+        expenses = self._expenses_from_rows(item_rows)
         by_id = {expense.id: expense for expense in expenses}
         slots_by_laptop: dict[int, list[LaptopSlot]] = {
             int(row["item_id"]): [] for row in laptop_rows

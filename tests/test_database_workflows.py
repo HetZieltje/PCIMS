@@ -1,4 +1,6 @@
+import csv
 import gc
+import json
 import os
 import sqlite3
 import stat
@@ -12,6 +14,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pcims.db.backup as backup_module
 from pcims.contracts import BackupResult
 from pcims.db.backup import (
     create_backup,
@@ -31,6 +34,9 @@ from pcims.db.reads import ReadQueries
 from pcims.db.schema import (
     SCHEMA_V1_CHECKSUM,
     SCHEMA_V1_DEFINITIONS,
+    SCHEMA_V2_CHECKSUM,
+    SCHEMA_V3_CHECKSUM,
+    SCHEMA_V3_DEFINITIONS,
     SCHEMA_VERSION,
     initialize_database,
 )
@@ -465,8 +471,87 @@ class DatabaseWorkflowTests(unittest.TestCase):
         store.save((line,))
 
         self.assertEqual(store.load(), (line,))
+        payload = json.loads(store.path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["version"], 2)
+        self.assertEqual(len(payload["proof_files"]), 1)
         store.discard()
         self.assertEqual(store.load(), ())
+
+    def test_purchase_draft_deduplicates_proofs_across_quantity_lines(self):
+        store = PurchaseDraftStore(
+            self.database_path,
+            Path(self.temporary_directory.name) / "deduplicated-draft-storage",
+        )
+        proof = NewProof("shared.pdf", "application/pdf", b"%PDF-1.4\nshared")
+        lines = tuple(
+            DraftPurchase(
+                index,
+                NewExpense.create(f"RAM {index}", "RAM", 10, TEST_DATE),
+                (proof,),
+            )
+            for index in range(1, 101)
+        )
+
+        store.save(lines)
+
+        payload = json.loads(store.path.read_text(encoding="utf-8"))
+        self.assertEqual(len(payload["proof_files"]), 1)
+        self.assertEqual(len(payload["lines"]), 100)
+        self.assertEqual(store.load(), lines)
+
+    def test_purchase_draft_rejects_invalid_and_duplicate_line_identity(self):
+        store = PurchaseDraftStore(
+            self.database_path,
+            Path(self.temporary_directory.name) / "invalid-draft-storage",
+        )
+        store.path.parent.mkdir(parents=True)
+        store.path.write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "proof_files": {},
+                    "lines": [{"details": {}, "price_cents": 100}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(TypeError, "line ID"):
+            store.load()
+
+        line = DraftPurchase(
+            1,
+            NewExpense.create("Duplicate draft", "RAM", 1, TEST_DATE),
+        )
+        store.save((line, line))
+        with self.assertRaisesRegex(ValueError, "IDs must be unique"):
+            store.load()
+
+    def test_csv_export_identifies_laptop_membership_and_exact_losses(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Export laptop", "Extra", "300.00", TEST_DATE)
+        )
+        replacement_id = self.buy("Export RAM", "RAM", "0.01")
+        self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Factory export RAM", "RAM", "20.00", TEST_DATE),
+            replacement_id,
+        )
+        loss_item_id = self.buy("Loss item", "Extra", "0.01")
+        self.services.sell_items([loss_item_id], SaleTerms.create(0, TEST_DATE))
+        destination = Path(self.temporary_directory.name) / "laptop-export"
+
+        purchases, sales = self.services.export_csv(destination)
+
+        with purchases.open("r", encoding="utf-8-sig", newline="") as purchase_file:
+            purchase_rows = list(csv.DictReader(purchase_file))
+        by_id = {int(row["item_id"]): row for row in purchase_rows}
+        self.assertEqual(by_id[laptop_id]["status"], "laptop")
+        self.assertEqual(by_id[laptop_id]["laptop_id"], str(laptop_id))
+        self.assertEqual(by_id[replacement_id]["status"], "installed in laptop")
+        self.assertEqual(by_id[replacement_id]["laptop_id"], str(laptop_id))
+        self.assertIn(",0.01,0.00,-0.01,", sales.read_text(encoding="utf-8-sig"))
 
     def test_schema_contains_only_authoritative_current_tables_and_columns(self):
         with self.database.transaction() as database:
@@ -720,7 +805,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 "SELECT name FROM inventory_items WHERE id=1"
             ).fetchone()[0]
         self.assertEqual(name, "Migrated CPU")
-        self.assertEqual([row[0] for row in markers], [1, 2, 3])
+        self.assertEqual([row[0] for row in markers], [1, 2, 3, 4])
         self.assertNotIn("activity_events", tables)
         backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
         self.assertEqual(len(backups), 1)
@@ -739,6 +824,74 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         with self.assertRaisesRegex(SchemaVersionError, "incompatible"):
             initialize_database(self.database)
+
+    def test_v3_laptop_schema_is_backed_up_and_hardened_in_place(self):
+        migration_path = Path(self.temporary_directory.name) / "schema-v3.db"
+        migration_database = Database.at(migration_path)
+        with closing(migration_database.connect(create=True)) as database:
+            for statement in SCHEMA_V3_DEFINITIONS.values():
+                database.execute(statement)
+            database.executemany(
+                """INSERT INTO schema_migrations
+                   (version,name,checksum,applied_at) VALUES (?,?,?,?)""",
+                (
+                    (
+                        1,
+                        "initial inventory baseline",
+                        SCHEMA_V1_CHECKSUM,
+                        "2026-08-14T12:00:00Z",
+                    ),
+                    (
+                        2,
+                        "streamline history and cap proof storage",
+                        SCHEMA_V2_CHECKSUM,
+                        "2026-08-14T12:00:01Z",
+                    ),
+                    (
+                        3,
+                        "add optional laptop inventory and split cash from cost basis",
+                        SCHEMA_V3_CHECKSUM,
+                        "2026-08-14T12:00:02Z",
+                    ),
+                ),
+            )
+            database.execute("PRAGMA user_version=3")
+            laptop_id = database.execute(
+                """INSERT INTO inventory_items
+                   (name,item_type,price_cents,purchase_date)
+                   VALUES ('Migrated laptop','Extra',30000,'2026-08-14')"""
+            ).lastrowid
+            database.execute(
+                """INSERT INTO item_costs (item_id,cash_paid_cents,origin)
+                   VALUES (?,30000,'purchase')""",
+                (laptop_id,),
+            )
+            database.execute("INSERT INTO laptops (item_id) VALUES (?)", (laptop_id,))
+            database.commit()
+
+        initialize_database(migration_database)
+
+        with migration_database.transaction() as database:
+            self.assertEqual(
+                database.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+            )
+            self.assertEqual(
+                database.execute("SELECT name FROM inventory_items").fetchone()[0],
+                "Migrated laptop",
+            )
+            markers = database.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            trigger = database.execute(
+                """SELECT 1 FROM sqlite_master WHERE type='trigger'
+                     AND name='laptop_component_type_is_locked'"""
+            ).fetchone()
+        self.assertEqual([row[0] for row in markers], [1, 2, 3, 4])
+        self.assertIsNotNone(trigger)
+        backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
+        self.assertEqual(len(backups), 1)
+        with closing(sqlite3.connect(backups[0])) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 3)
 
     def test_current_schema_rejects_extra_tables_and_missing_triggers(self):
         with self.database.transaction() as database:
@@ -1383,6 +1536,33 @@ class DatabaseWorkflowTests(unittest.TestCase):
             [component_id, spare_id],
         )
 
+    def test_membership_rows_cannot_bypass_rules_through_updates(self):
+        first_id = self.buy("Original PC part", "CPU", 100)
+        second_id = self.buy("Other item", "RAM", 40)
+        pc_id = self.services.assemble_pc("Immutable membership PC", [first_id])
+
+        with (
+            self.database.transaction(write=True) as database,
+            self.assertRaisesRegex(sqlite3.IntegrityError, "cannot be updated"),
+        ):
+            database.execute(
+                "UPDATE pc_parts SET item_id=? WHERE pc_id=? AND item_id=?",
+                (second_id, pc_id, first_id),
+            )
+
+        sale_id = self.services.sell_pc(pc_id, SaleTerms.create(150, TEST_DATE))
+        with (
+            self.database.transaction(write=True) as database,
+            self.assertRaisesRegex(sqlite3.IntegrityError, "cannot be updated"),
+        ):
+            database.execute(
+                "UPDATE sale_items SET position=position+1 WHERE sale_id=?",
+                (sale_id,),
+            )
+
+        sale = self.services.list_sales()[0]
+        self.assertEqual([item.id for item in sale.items], [first_id])
+
     def test_semantic_validation_rejects_empty_aggregate_records(self):
         with self.database.transaction(write=True) as database:
             database.execute("INSERT INTO pcs (name) VALUES ('Empty PC')")
@@ -1803,6 +1983,32 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(second.reused)
         self.assertEqual(len(tuple(first.path.parent.glob("pcims_*.db"))), 1)
 
+    def test_backup_reuse_hashes_large_candidate_at_most_once(self):
+        directory = Path(self.temporary_directory.name) / "hash-scan"
+        directory.mkdir()
+        candidate = directory / "candidate.tmp"
+        candidate.write_bytes(b"match")
+        (directory / "pcims_test_z.db").write_bytes(b"other")
+        (directory / "pcims_test_y.db").write_bytes(b"third")
+        match = directory / "pcims_test_x.db"
+        match.write_bytes(b"match")
+        candidate_hashes = 0
+        original_hash = backup_module._file_hash
+
+        def observed_hash(path):
+            nonlocal candidate_hashes
+            if path == candidate:
+                candidate_hashes += 1
+            return original_hash(path)
+
+        with patch("pcims.db.backup._file_hash", side_effect=observed_hash):
+            result = backup_module._identical_backup(
+                directory, "pcims_test_", candidate
+            )
+
+        self.assertEqual(result, match)
+        self.assertEqual(candidate_hashes, 1)
+
     def test_non_file_cannot_consume_a_backup_retention_slot(self):
         first = create_backup(keep=2, database=self.database)
         matching_directory = first.path.with_name(
@@ -2153,6 +2359,247 @@ class DatabaseWorkflowTests(unittest.TestCase):
         )
         self.services.delete_laptop(laptop_id)
         self.assertEqual(self.services.laptop_snapshot().laptops, ())
+
+    def test_laptop_component_types_and_pc_memberships_are_locked(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Locked laptop", "Extra", 300, TEST_DATE)
+        )
+        replacement_id = self.buy("Installed RAM", "RAM", 20)
+        extracted_id = self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Factory RAM", "RAM", 30, TEST_DATE),
+            replacement_id,
+        )
+        pc_part_id = self.buy("PC CPU", "CPU", 10)
+        pc_id = self.services.assemble_pc("Membership PC", [pc_part_id])
+
+        with self.assertRaisesRegex(ValidationError, "cannot change type"):
+            self.services.update_expense(
+                replacement_id,
+                NewExpense.create("Wrong type", "SSD", 20, TEST_DATE),
+            )
+        with self.assertRaisesRegex(ValidationError, "cannot change type"):
+            self.services.update_expense(
+                extracted_id,
+                NewExpense.create("Wrong factory type", "SSD", 30, TEST_DATE),
+            )
+        with self.database.transaction(write=True) as database:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "component type"):
+                database.execute(
+                    "UPDATE inventory_items SET item_type='SSD' WHERE id=?",
+                    (replacement_id,),
+                )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "unavailable item"):
+                database.execute(
+                    "INSERT INTO pc_parts (pc_id,item_id,position) VALUES (?,?,1)",
+                    (pc_id, laptop_id),
+                )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "unavailable item"):
+                database.execute(
+                    "INSERT INTO pc_parts (pc_id,item_id,position) VALUES (?,?,1)",
+                    (pc_id, replacement_id),
+                )
+
+        laptop = self.services.laptop_snapshot().laptops[0]
+        self.assertEqual(laptop.slots[0].component_type, "RAM")
+        self.assertEqual(laptop.slots[0].installed.id, replacement_id)
+
+    def test_item_cost_provenance_cannot_be_reclassified(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Provenance laptop", "Extra", 300, TEST_DATE)
+        )
+        extracted_id = self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Provenance RAM", "RAM", 20, TEST_DATE),
+        )
+        purchased_id = self.buy("Purchased RAM", "RAM", 10)
+
+        with self.database.transaction(write=True) as database:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "provenance"):
+                database.execute(
+                    "UPDATE item_costs SET origin='purchase' WHERE item_id=?",
+                    (extracted_id,),
+                )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "provenance"):
+                database.execute(
+                    "UPDATE item_costs SET cash_paid_cents=1 WHERE item_id=?",
+                    (extracted_id,),
+                )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "provenance"):
+                database.execute(
+                    "UPDATE item_costs SET origin='extracted' WHERE item_id=?",
+                    (purchased_id,),
+                )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "date must match"):
+                database.execute(
+                    "UPDATE inventory_items SET purchase_date='2026-08-13' WHERE id=?",
+                    (extracted_id,),
+                )
+
+        validate_database(self.database_path)
+
+    def test_factory_component_restore_reports_conflicting_assignments(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Source laptop", "Extra", 300, TEST_DATE)
+        )
+        extracted_id = self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Factory RAM", "RAM", 30, TEST_DATE),
+        )
+        pc_id = self.services.assemble_pc("Uses factory RAM", [extracted_id])
+        with self.assertRaisesRegex(ValidationError, "Disassemble the PC"):
+            self.services.restore_laptop_component(laptop_id, "RAM", 1)
+        self.services.disassemble_pc(pc_id)
+
+        other_laptop_id = self.services.add_laptop(
+            NewExpense.create("Other laptop", "Extra", 200, TEST_DATE)
+        )
+        self.services.extract_laptop_component(
+            other_laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Other factory RAM", "RAM", 20, TEST_DATE),
+            extracted_id,
+        )
+        with self.assertRaisesRegex(ValidationError, "current laptop"):
+            self.services.restore_laptop_component(laptop_id, "RAM", 1)
+
+        source = next(
+            laptop
+            for laptop in self.services.laptop_snapshot().laptops
+            if laptop.id == laptop_id
+        )
+        self.assertEqual(source.slots[0].extracted.id, extracted_id)
+
+    def test_direct_slot_deletion_restores_value_without_orphans(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Direct restore laptop", "Extra", 300, TEST_DATE)
+        )
+        replacement_id = self.buy("Direct restore RAM", "RAM", 15)
+        extracted_id = self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Direct factory RAM", "RAM", 25, TEST_DATE),
+            replacement_id,
+        )
+
+        with self.database.transaction(write=True) as database:
+            database.execute(
+                """DELETE FROM laptop_slots
+                    WHERE laptop_id=? AND component_type='RAM' AND slot_number=1""",
+                (laptop_id,),
+            )
+
+        laptop = self.services.laptop_snapshot().laptops[0]
+        self.assertEqual(laptop.item.price_cents, 30_000)
+        self.assertEqual(laptop.slots, ())
+        inventory_ids = {item.id for item in self.services.list_inventory()}
+        self.assertNotIn(extracted_id, inventory_ids)
+        self.assertIn(replacement_id, inventory_ids)
+        validate_database(self.database_path)
+
+    def test_laptop_cost_limits_are_enforced_atomically_across_edits(self):
+        maximum = f"{MAX_MONEY_CENTS // 100}.{MAX_MONEY_CENTS % 100:02d}"
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Maximum laptop", "Extra", maximum, TEST_DATE)
+        )
+        replacement_id = self.buy("One-cent RAM", "RAM", "0.01")
+        extracted_id = self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Factory RAM", "RAM", "0.02", TEST_DATE),
+            replacement_id,
+        )
+
+        with self.assertRaisesRegex(ValidationError, "Combined laptop cost"):
+            self.services.update_expense(
+                replacement_id,
+                NewExpense.create("Too expensive RAM", "RAM", "0.03", TEST_DATE),
+            )
+        with self.assertRaisesRegex(ValidationError, "Combined laptop cost"):
+            self.services.update_expense(
+                extracted_id,
+                NewExpense.create("Undervalued factory RAM", "RAM", 0, TEST_DATE),
+            )
+
+        laptop = self.services.laptop_snapshot().laptops[0]
+        self.assertEqual(laptop.current_cost_cents, MAX_MONEY_CENTS - 1)
+        self.assertEqual(laptop.slots[0].installed.price_cents, 1)
+        self.assertEqual(laptop.slots[0].extracted.price_cents, 2)
+
+    def test_database_rejects_laptop_slot_cost_overflow_directly(self):
+        maximum = f"{MAX_MONEY_CENTS // 100}.{MAX_MONEY_CENTS % 100:02d}"
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Direct maximum laptop", "Extra", maximum, TEST_DATE)
+        )
+        replacement_id = self.buy("Two-cent RAM", "RAM", "0.02")
+        with self.database.transaction(write=True) as database:
+            extracted_id = database.execute(
+                """INSERT INTO inventory_items
+                   (name,item_type,price_cents,purchase_date)
+                   VALUES ('Direct factory RAM','RAM',1,?)""",
+                (TEST_DATE.isoformat(),),
+            ).lastrowid
+            database.execute(
+                """INSERT INTO item_costs (item_id,cash_paid_cents,origin)
+                   VALUES (?,0,'extracted')""",
+                (extracted_id,),
+            )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "cost is too large"):
+                database.execute(
+                    """INSERT INTO laptop_slots
+                       (laptop_id,component_type,slot_number,
+                        extracted_item_id,installed_item_id)
+                       VALUES (?,'RAM',1,?,?)""",
+                    (laptop_id, extracted_id, replacement_id),
+                )
+            database.execute("DELETE FROM inventory_items WHERE id=?", (extracted_id,))
+
+        self.services.extract_laptop_component(
+            laptop_id,
+            "RAM",
+            1,
+            NewExpense.create("Tracked factory RAM", "RAM", "0.01", TEST_DATE),
+        )
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "cost is too large"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                """UPDATE laptop_slots SET installed_item_id=?
+                    WHERE laptop_id=? AND component_type='RAM' AND slot_number=1""",
+                (replacement_id, laptop_id),
+            )
+
+        self.assertIsNone(self.services.laptop_snapshot().laptops[0].slots[0].installed)
+
+    def test_laptop_snapshot_batches_large_item_sets(self):
+        for index in range(6):
+            self.services.add_laptop(
+                NewExpense.create(f"Laptop {index}", "Extra", 100, TEST_DATE)
+            )
+        original_connect = Database.connect
+
+        def limited_connect(database, *args, **kwargs):
+            connection = original_connect(database, *args, **kwargs)
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 4)
+            return connection
+
+        with (
+            patch.object(Database, "connect", new=limited_connect),
+            patch("pcims.db.command_support.SQLITE_ID_BATCH_SIZE", 2),
+        ):
+            snapshot = self.services.laptop_snapshot()
+
+        self.assertEqual(len(snapshot.laptops), 6)
 
 
 if __name__ == "__main__":

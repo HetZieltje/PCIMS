@@ -90,19 +90,11 @@ def update_laptop(
                 "Purchase price cannot be lower than the value already transferred "
                 "to extracted components."
             )
-        if laptop["sale_id"] is not None:
-            installed_total = int(
-                connection.execute(
-                    """SELECT COALESCE(SUM(e.price_cents),0)
-                         FROM laptop_slots ls JOIN inventory_items e
-                           ON e.id=ls.installed_item_id WHERE ls.laptop_id=?""",
-                    (laptop_id,),
-                ).fetchone()[0]
-            )
-            bounded_cents_total(
-                (replacement.price_cents - extracted_total, installed_total),
-                "Combined laptop sale cost",
-            )
+        installed_total = _installed_cost_cents(connection, laptop_id)
+        bounded_cents_total(
+            (replacement.price_cents - extracted_total, installed_total),
+            "Combined laptop cost",
+        )
         result = connection.execute(
             """UPDATE inventory_items SET name=?,price_cents=?,purchase_date=?,vendor=?,
                       serial_number=?,storage_location=?,condition=?,warranty_until=?,notes=?
@@ -161,6 +153,32 @@ def _validate_replacement(
         raise ValidationError(f"'{row['name']}' is not available as a replacement.")
 
 
+def _installed_cost_cents(
+    connection: sqlite3.Connection,
+    laptop_id: int,
+    *,
+    exclude_component_type: str | None = None,
+    exclude_slot_number: int | None = None,
+) -> int:
+    if exclude_component_type is None or exclude_slot_number is None:
+        row = connection.execute(
+            """SELECT COALESCE(SUM(e.price_cents),0)
+                 FROM laptop_slots ls JOIN inventory_items e
+                   ON e.id=ls.installed_item_id WHERE ls.laptop_id=?""",
+            (laptop_id,),
+        ).fetchone()
+    else:
+        row = connection.execute(
+            """SELECT COALESCE(SUM(e.price_cents),0)
+                 FROM laptop_slots ls JOIN inventory_items e
+                   ON e.id=ls.installed_item_id
+                WHERE ls.laptop_id=?
+                  AND NOT (ls.component_type=? AND ls.slot_number=?)""",
+            (laptop_id, exclude_component_type, exclude_slot_number),
+        ).fetchone()
+    return int(row[0])
+
+
 def extract_laptop_component(
     laptop_id: int,
     component_type: str,
@@ -206,6 +224,25 @@ def extract_laptop_component(
             raise ValidationError(f"{kind} slot {slot_number} is already tracked.")
         if replacement_id is not None:
             _validate_replacement(connection, replacement_id, kind)
+        installed_total = _installed_cost_cents(connection, laptop_id)
+        replacement_cost = (
+            int(
+                connection.execute(
+                    "SELECT price_cents FROM inventory_items WHERE id=?",
+                    (replacement_id,),
+                ).fetchone()[0]
+            )
+            if replacement_id is not None
+            else 0
+        )
+        bounded_cents_total(
+            (
+                int(laptop["price_cents"]) - extracted.price_cents,
+                installed_total,
+                replacement_cost,
+            ),
+            "Combined laptop cost",
+        )
         normalized_extracted = NewExpense(
             extracted.name,
             extracted.item_type,
@@ -220,14 +257,14 @@ def extract_laptop_component(
             origin="extracted",
         )
         connection.execute(
+            "UPDATE inventory_items SET price_cents=price_cents-? WHERE id=?",
+            (extracted.price_cents, laptop_id),
+        )
+        connection.execute(
             """INSERT INTO laptop_slots
                (laptop_id,component_type,slot_number,extracted_item_id,installed_item_id)
                VALUES (?,?,?,?,?)""",
             (laptop_id, kind, slot_number, extracted_id, replacement_id),
-        )
-        connection.execute(
-            "UPDATE inventory_items SET price_cents=price_cents-? WHERE id=?",
-            (extracted.price_cents, laptop_id),
         )
         return extracted_id
 
@@ -266,6 +303,29 @@ def set_laptop_replacement(
             raise NotFoundError(f"{kind} slot {slot_number} is not tracked.")
         if replacement_id is not None and replacement_id != slot["installed_item_id"]:
             _validate_replacement(connection, replacement_id, kind)
+        replacement_cost = (
+            int(
+                connection.execute(
+                    "SELECT price_cents FROM inventory_items WHERE id=?",
+                    (replacement_id,),
+                ).fetchone()[0]
+            )
+            if replacement_id is not None
+            else 0
+        )
+        bounded_cents_total(
+            (
+                int(laptop["price_cents"]),
+                _installed_cost_cents(
+                    connection,
+                    laptop_id,
+                    exclude_component_type=kind,
+                    exclude_slot_number=slot_number,
+                ),
+                replacement_cost,
+            ),
+            "Combined laptop cost",
+        )
         connection.execute(
             """UPDATE laptop_slots SET installed_item_id=?
                 WHERE laptop_id=? AND component_type=? AND slot_number=?""",
@@ -291,10 +351,13 @@ def restore_laptop_component(
         if laptop["sale_id"] is not None:
             raise ValidationError("Undo the laptop sale before restoring a component.")
         slot = connection.execute(
-            """SELECT ls.extracted_item_id,e.price_cents,si.sale_id
+            """SELECT ls.extracted_item_id,e.price_cents,si.sale_id,pp.pc_id,
+                      installed.laptop_id AS installed_laptop_id
                  FROM laptop_slots ls JOIN inventory_items e
                    ON e.id=ls.extracted_item_id
                  LEFT JOIN sale_items si ON si.item_id=e.id
+                 LEFT JOIN pc_parts pp ON pp.item_id=e.id
+                 LEFT JOIN laptop_slots installed ON installed.installed_item_id=e.id
                 WHERE ls.laptop_id=? AND ls.component_type=? AND ls.slot_number=?""",
             (laptop_id, kind, slot_number),
         ).fetchone()
@@ -304,6 +367,14 @@ def restore_laptop_component(
             raise ValidationError(
                 "Undo the extracted component sale before restoring it."
             )
+        if slot["pc_id"] is not None:
+            raise ValidationError(
+                "Disassemble the PC using this factory component before restoring it."
+            )
+        if slot["installed_laptop_id"] is not None:
+            raise ValidationError(
+                "Remove this factory component from its current laptop before restoring it."
+            )
         bounded_cents_total(
             (int(laptop["price_cents"]), int(slot["price_cents"])),
             "Restored laptop value",
@@ -312,13 +383,6 @@ def restore_laptop_component(
             """DELETE FROM laptop_slots
                 WHERE laptop_id=? AND component_type=? AND slot_number=?""",
             (laptop_id, kind, slot_number),
-        )
-        connection.execute(
-            "UPDATE inventory_items SET price_cents=price_cents+? WHERE id=?",
-            (slot["price_cents"], laptop_id),
-        )
-        connection.execute(
-            "DELETE FROM inventory_items WHERE id=?", (slot["extracted_item_id"],)
         )
 
 

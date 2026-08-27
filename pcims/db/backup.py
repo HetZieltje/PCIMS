@@ -59,14 +59,16 @@ def _identical_backup(
         paths = sorted(destination.glob(f"{prefix}*.db"), reverse=True)
     except OSError:
         return None
+    candidate_hash: bytes | None = None
     for path in paths:
         try:
-            if (
-                not any(_paths_alias(path, excluded) for excluded in excluded_paths)
-                and path.is_file()
-                and path.stat().st_size == candidate_size
-                and _file_hash(path) == _file_hash(candidate)
-            ):
+            if any(_paths_alias(path, excluded) for excluded in excluded_paths):
+                continue
+            if not path.is_file() or path.stat().st_size != candidate_size:
+                continue
+            if candidate_hash is None:
+                candidate_hash = _file_hash(candidate)
+            if _file_hash(path) == candidate_hash:
                 return path
         except OSError:
             continue
