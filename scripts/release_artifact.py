@@ -18,6 +18,7 @@ def copy_clean_source(destination: Path, project_root: Path = ROOT) -> None:
         "build",
         "dist",
         "dist-*",
+        ".release-*",
         "*.egg-info",
         "__pycache__",
         "*.pyc",

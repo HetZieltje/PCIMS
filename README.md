@@ -144,6 +144,19 @@ the hash-locked packaging environment:
 - `PCIMS-2.0.0b4-macOS-arm64.zip`
 - `PCIMS-2.0.0b4-Linux-x86_64.tar.gz`
 
+Each packaging run also publishes a deterministic `SHA256SUMS` manifest and an
+SPDX JSON software bill of materials beside every native package. GitHub signs
+build-provenance, SBOM, and checksum attestations with its short-lived workflow
+identity. A downloaded package can be verified against this public repository:
+
+```console
+gh attestation verify PCIMS-2.0.0b4-Windows-x64.zip --repo HetZieltje/PCIMS
+```
+
+These attestations prove which repository workflow and commit produced a file;
+they are an integrity and provenance layer, not an operating-system code-signing
+certificate.
+
 These beta packages are not code-signed, so Windows SmartScreen or macOS
 Gatekeeper may show a warning. The reproducible wheel remains the authoritative
 Python package. The repository also retains transactional, user-scoped Windows

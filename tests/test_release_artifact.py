@@ -24,12 +24,15 @@ class ReleaseArtifactTests(unittest.TestCase):
         (project / "build" / "lib" / "stale.py").write_text(
             "stale = True\n", encoding="utf-8"
         )
+        (project / ".release-preview").mkdir()
+        (project / ".release-preview" / "package.zip").write_bytes(b"temporary")
         destination = self.root / "clean"
 
         copy_clean_source(destination, project)
 
         self.assertTrue((destination / "pcims" / "asset.txt").is_file())
         self.assertFalse((destination / "build").exists())
+        self.assertFalse((destination / ".release-preview").exists())
 
     def test_wheel_manifest_must_exactly_match_package_files(self):
         project = self.root / "project"
