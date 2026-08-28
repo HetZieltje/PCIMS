@@ -3,7 +3,7 @@
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Generic, Protocol, TypeVar
 
@@ -76,6 +76,30 @@ class StorageSummary:
     proof_count: int
     backup_bytes: int
     backup_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticCheck:
+    id: int
+    name: str
+    status: str
+    detail: str
+    duration_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class StartupStage:
+    name: str
+    elapsed_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticsSnapshot:
+    generated_at: datetime
+    checks: tuple[DiagnosticCheck, ...]
+    storage: StorageSummary
+    startup: tuple[StartupStage, ...]
+    log_tail: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +235,8 @@ class MaintenanceOperations(Protocol):
     ) -> BackupResult: ...
 
     def storage_summary(self) -> StorageSummary: ...
+
+    def diagnostics_snapshot(self, thorough: bool = False) -> DiagnosticsSnapshot: ...
 
     def restore_backup(
         self,

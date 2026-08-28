@@ -12,6 +12,7 @@ from pcims.app.appearance import apply_application_theme
 from pcims.app.common import show_error
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.balance import BalancePage
+from pcims.app.pages.diagnostics import DiagnosticsPage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.laptops import LaptopPage
 from pcims.app.pages.purchases import PurchasesPage
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
             has_pending_changes=lambda: self.purchases_page.has_staged_items,
             tasks=self.tasks,
         )
+        self.diagnostics_page = DiagnosticsPage(self.services, tasks=self.tasks)
         self.data_pages = (
             self.inventory_page,
             self.purchases_page,
@@ -73,6 +75,7 @@ class MainWindow(QMainWindow):
         self.pages = (
             *self.data_pages,
             self.settings_page,
+            self.diagnostics_page,
         )
         bindings = (
             bind_refresh(
@@ -110,6 +113,11 @@ class MainWindow(QMainWindow):
                 lambda: self.settings_page.load_snapshot(),
                 lambda snapshot: self.settings_page.apply_snapshot(snapshot),
             ),
+            bind_refresh(
+                self.diagnostics_page,
+                lambda: self.diagnostics_page.load_snapshot(),
+                lambda snapshot: self.diagnostics_page.apply_snapshot(snapshot),
+            ),
         )
         self.refreshes = RefreshCoordinator(self.tasks, bindings, self)
         self.refreshes.refreshed.connect(
@@ -126,6 +134,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.sales_page, "Sales and History")
         self.tabs.addTab(self.balance_page, "Balance")
         self.tabs.addTab(self.settings_page, "Settings")
+        self.tabs.addTab(self.diagnostics_page, "Diagnostics")
         for page in (
             self.inventory_page,
             self.purchases_page,
@@ -223,6 +232,7 @@ class MainWindow(QMainWindow):
 
     def _storage_changed(self) -> None:
         self.refreshes.mark_dirty(self.settings_page)
+        self.refreshes.mark_dirty(self.diagnostics_page)
         if self.tabs.currentWidget() is self.settings_page:
             self.refreshes.start_if_dirty(self.settings_page)
 
@@ -275,6 +285,7 @@ class MainWindow(QMainWindow):
             ("balance_periods", self.balance_page.table),
             ("laptops", self.laptop_page.laptop_table),
             ("laptop_changes", self.laptop_page.slot_table),
+            ("diagnostics", self.diagnostics_page.table),
         )
 
     def apply_theme(self, theme: str) -> None:

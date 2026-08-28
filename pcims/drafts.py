@@ -104,6 +104,14 @@ class PurchaseDraftStore:
             os.replace(temporary, self.path)
             if os.name != "nt":
                 self.path.chmod(0o600)
+                descriptor = os.open(
+                    self.path.parent,
+                    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                )
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
         finally:
             try:
                 temporary.unlink()

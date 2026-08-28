@@ -5,6 +5,7 @@ from datetime import date
 from typing import Literal, TypeAlias
 
 from pcims.domain import ItemDetails, ItemType, LaptopComponentType, SaleKind
+from pcims.lifecycle import InventoryState, ItemPlacement
 from pcims.proofs import ProofSummary
 
 BalanceBucket: TypeAlias = Literal["day", "week", "month", "year"]
@@ -40,12 +41,20 @@ class Expense:
 
     @property
     def is_available(self) -> bool:
-        return (
-            self.pc_id is None
-            and self.laptop_id is None
-            and not self.is_laptop
-            and self.sale_id is None
+        return self.lifecycle_state is InventoryState.AVAILABLE
+
+    @property
+    def placement(self) -> ItemPlacement:
+        return ItemPlacement(
+            pc_id=self.pc_id,
+            laptop_id=self.laptop_id,
+            is_laptop=self.is_laptop,
+            sale_id=self.sale_id,
         )
+
+    @property
+    def lifecycle_state(self) -> InventoryState:
+        return self.placement.state
 
     @property
     def purchase_cost_cents(self) -> int:

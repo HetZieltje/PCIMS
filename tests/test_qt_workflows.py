@@ -24,7 +24,12 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox, QTableView, QWidget
 from shiboken6 import delete as delete_qt_object
 
-from pcims.app.application import acquire_instance_lock, create_application, main
+from pcims.app.application import (
+    _backup_after_first_page,
+    acquire_instance_lock,
+    create_application,
+    main,
+)
 from pcims.app.assembly_model import AssemblyTreeModel
 from pcims.app.dialogs import (
     ExpenseEditDialog,
@@ -36,6 +41,7 @@ from pcims.app.errors import install_exception_hook, log_exception
 from pcims.app.main_window import MainWindow
 from pcims.app.pages.assemble import AssemblePage
 from pcims.app.pages.balance import BalancePage
+from pcims.app.pages.diagnostics import DiagnosticsPage
 from pcims.app.pages.inventory import InventoryPage
 from pcims.app.pages.laptops import LaptopPage
 from pcims.app.pages.purchases import PurchasesPage, StagedPurchase
@@ -138,7 +144,7 @@ class QtWorkflowTests(unittest.TestCase):
         window.show()
         self.wait_for_window(window)
 
-        self.assertEqual(window.tabs.count(), 6)
+        self.assertEqual(window.tabs.count(), 7)
         self.assertGreaterEqual(window.width(), 900)
         self.assertTrue(all(page.tasks is window.tasks for page in window.pages))
         for index in range(window.tabs.count()):
@@ -149,6 +155,18 @@ class QtWorkflowTests(unittest.TestCase):
         window.apply_theme("light")
         window.refresh_all()
         self.wait_for_window(window)
+        window.deleteLater()
+
+    def test_startup_backup_waits_for_first_page_and_runs_only_once(self):
+        window = MainWindow(self.services)
+        with patch.object(window, "create_startup_backup") as backup:
+            _backup_after_first_page(window)
+            backup.assert_not_called()
+            self.wait_for_window(window)
+            backup.assert_called_once_with()
+            window.refresh_all()
+            self.wait_for_window(window)
+            backup.assert_called_once_with()
         window.deleteLater()
 
     def test_laptop_tab_is_opt_in_and_hiding_it_preserves_data(self):
@@ -187,7 +205,8 @@ class QtWorkflowTests(unittest.TestCase):
         assemble = AssemblePage(services, tasks=self.tasks)
         sales = SalesPage(services, tasks=self.tasks)
         balance = BalancePage(services, tasks=self.tasks)
-        pages = (inventory, purchases, assemble, sales, balance)
+        diagnostics = DiagnosticsPage(services, tasks=self.tasks)
+        pages = (inventory, purchases, assemble, sales, balance, diagnostics)
 
         self.assertEqual(services.mock_calls, [])
         context_views = (

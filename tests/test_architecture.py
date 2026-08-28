@@ -117,6 +117,38 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("def _money_cents", commands)
         self.assertNotIn("def _iso_date", commands)
 
+    def test_service_boundary_is_split_into_focused_domain_modules(self):
+        root = Path(__file__).parents[1] / "pcims"
+        facade = (root / "services.py").read_text(encoding="utf-8")
+        layer = root / "service_layer"
+        expected = {
+            "inventory.py": "class InventoryServices",
+            "laptops.py": "class LaptopServices",
+            "sales.py": "class SalesServices",
+            "balance.py": "class BalanceServices",
+            "maintenance.py": "class MaintenanceServices",
+        }
+        for name, declaration in expected.items():
+            with self.subTest(name=name):
+                self.assertIn(declaration, (layer / name).read_text(encoding="utf-8"))
+        self.assertLess(len(facade.splitlines()), 60)
+
+    def test_inventory_writes_share_one_explicit_lifecycle_vocabulary(self):
+        root = Path(__file__).parents[1] / "pcims"
+        lifecycle = (root / "lifecycle.py").read_text(encoding="utf-8")
+        self.assertIn("class InventoryState", lifecycle)
+        self.assertIn("class LifecycleEvent", lifecycle)
+        self.assertIn("_ALLOWED_TRANSITIONS", lifecycle)
+        for name in (
+            "assembly_commands.py",
+            "laptop_commands.py",
+            "sale_commands.py",
+        ):
+            with self.subTest(name=name):
+                source = (root / "db" / name).read_text(encoding="utf-8")
+                self.assertIn("LifecycleEvent", source)
+                self.assertIn("require_row_transition", source)
+
     def test_database_coordination_cannot_be_bypassed_by_low_level_workflows(self):
         root = Path(__file__).parents[1] / "pcims"
         connection = (root / "db" / "connection.py").read_text(encoding="utf-8")

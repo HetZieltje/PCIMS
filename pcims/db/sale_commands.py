@@ -11,8 +11,10 @@ from pcims.db.command_support import (
 )
 from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
+from pcims.db.lifecycle import placement_from_row, require_row_transition
 from pcims.db.records import EXPENSE_SELECT, inserted_id
 from pcims.domain import SaleTerms
+from pcims.lifecycle import InventoryState, LifecycleEvent
 
 
 def _validate_sale_date(rows: Iterable[sqlite3.Row], sale_day: str) -> None:
@@ -33,13 +35,14 @@ def sell_items(
         if len(rows) != len(ids):
             raise NotFoundError("One or more selected items no longer exist.")
         for row in rows:
-            if (
-                row["pc_id"] is not None
-                or row["sale_id"] is not None
-                or row["laptop_id"] is not None
-                or row["is_laptop"]
-            ):
-                raise ValidationError(f"'{row['name']}' is not available for sale.")
+            try:
+                require_row_transition(
+                    row, LifecycleEvent.SELL_ITEM, InventoryState.SOLD
+                )
+            except ValidationError as error:
+                raise ValidationError(
+                    f"'{row['name']}' is not available for sale."
+                ) from error
         _validate_sale_date(rows, sale_day)
         names = {row["name"] for row in rows}
         name = rows[0]["name"] if len(names) == 1 else f"{len(rows)} items"
@@ -75,6 +78,8 @@ def sell_pc(pc_id: int, terms: SaleTerms, *, database: Database) -> int:
         ).fetchall()
         if not rows:
             raise ValidationError(f"PC '{pc['name']}' has no components.")
+        for row in rows:
+            require_row_transition(row, LifecycleEvent.SELL_PC, InventoryState.SOLD)
         _validate_sale_date(rows, sale_day)
         bounded_cents_total((row["price_cents"] for row in rows), "Combined PC cost")
         item_ids = [row["id"] for row in rows]
@@ -128,13 +133,15 @@ def undo_sale(sale_id: int, *, database: Database) -> None:
         ).fetchone()
         if sale is None:
             raise NotFoundError(f"Sale {sale_id} does not exist.")
-        item_ids = [
-            row[0]
-            for row in connection.execute(
-                "SELECT item_id FROM sale_items WHERE sale_id=? ORDER BY position",
-                (sale_id,),
-            )
-        ]
-        if not item_ids:
+        rows = connection.execute(
+            EXPENSE_SELECT + " WHERE si.sale_id=? ORDER BY si.position", (sale_id,)
+        ).fetchall()
+        if not rows:
             raise ValidationError(f"Sale {sale_id} contains no recoverable items.")
+        for row in rows:
+            require_row_transition(
+                row,
+                LifecycleEvent.UNDO_SALE,
+                placement_from_row(row).home_state,
+            )
         connection.execute("DELETE FROM sales WHERE id=?", (sale_id,))

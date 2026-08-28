@@ -54,7 +54,7 @@ def main() -> None:
             time.sleep(0.005)
         if (
             window.tasks.active
-            or window.tabs.count() != 6
+            or window.tabs.count() != 7
             or window.balance_page.table_model.rowCount() == 0
         ):
             raise RuntimeError("Installed Qt frontend did not initialize completely.")

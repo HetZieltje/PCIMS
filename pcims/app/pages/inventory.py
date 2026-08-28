@@ -168,6 +168,8 @@ class InventoryPage(AsyncCommandPage):
             ("Delete", self.delete_selected_parts),
         ):
             button = QPushButton(text)
+            if text == "Delete":
+                button.setProperty("destructive", True)
             button.clicked.connect(callback)
             part_buttons.addWidget(button)
         part_buttons.addStretch()

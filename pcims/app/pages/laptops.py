@@ -133,6 +133,8 @@ class LaptopPage(AsyncCommandPage):
             ("Delete", self.delete_laptop),
         ):
             button = QPushButton(text)
+            if text == "Delete":
+                button.setProperty("destructive", True)
             button.clicked.connect(callback)
             laptop_buttons.addWidget(button)
         laptop_buttons.addStretch()

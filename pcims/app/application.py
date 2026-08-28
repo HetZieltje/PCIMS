@@ -1,5 +1,6 @@
 """PCIMS Qt application bootstrap."""
 
+import logging
 import os
 import sqlite3
 import sys
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QStyleFactory
 from pcims.app.errors import install_exception_hook
 from pcims.app.main_window import MainWindow
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
+from pcims.diagnostics import close_logging, configure_logging, mark_startup_stage
 from pcims.services import ApplicationServices, default_services
 from pcims.version import application_version
 
@@ -31,6 +33,7 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
     fusion = QStyleFactory.create("Fusion")
     if fusion is not None:
         application.setStyle(fusion)
+    mark_startup_stage("Qt ready")
     return application
 
 
@@ -73,9 +76,14 @@ def _run_application(
             "Another PCIMS window is already using this database.",
         )
         return 3
+    application_log: Path | None = None
     try:
+        application_log = configure_logging(services.database_path.parent)
+        logger = logging.getLogger("pcims.application")
+        logger.info("Starting PCIMS %s", application_version())
         try:
             services.initialize()
+            mark_startup_stage("Database ready")
         except (
             OSError,
             DatabaseIntegrityError,
@@ -87,6 +95,7 @@ def _run_application(
 
         try:
             window = MainWindow(services)
+            mark_startup_stage("Window constructed")
         except (OSError, sqlite3.DatabaseError) as error:
             QMessageBox.critical(
                 None,
@@ -95,6 +104,7 @@ def _run_application(
             )
             return 2
         window.show()
+        mark_startup_stage("Window shown")
         if packaged_smoke_test:
             QTimer.singleShot(30_000, lambda: application.exit(4))
             if window.tasks.active:
@@ -102,10 +112,33 @@ def _run_application(
             else:
                 QTimer.singleShot(0, application.quit)
         else:
-            window.create_startup_backup()
+            _backup_after_first_page(window)
         return application.exec()
     finally:
         instance_lock.unlock()
+        if application_log is not None:
+            close_logging(application_log)
+
+
+def _backup_after_first_page(window: MainWindow) -> None:
+    """Avoid making the exclusive startup backup contend with the first page query."""
+
+    started = False
+
+    def start(*_ignored: object) -> None:
+        nonlocal started
+        if started:
+            return
+        started = True
+        window.refreshes.refreshed.disconnect(start)
+        window.refreshes.failed.disconnect(start)
+        mark_startup_stage("First page loaded")
+        window.create_startup_backup()
+
+    window.refreshes.refreshed.connect(start)
+    window.refreshes.failed.connect(start)
+    if not window.refresh_running:
+        QTimer.singleShot(0, start)
 
 
 def main(

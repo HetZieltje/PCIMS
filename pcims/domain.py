@@ -239,3 +239,28 @@ def normalized_laptop_component_type(value: object) -> LaptopComponentType:
         + ", ".join(LAPTOP_COMPONENT_TYPES)
         + "."
     )
+
+
+@dataclass(frozen=True, slots=True)
+class LaptopSlotRef:
+    """A validated laptop RAM/storage slot identity."""
+
+    component_type: LaptopComponentType
+    slot_number: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "component_type",
+            normalized_laptop_component_type(self.component_type),
+        )
+        object.__setattr__(
+            self, "slot_number", normalized_id(self.slot_number, "Slot number")
+        )
+
+    @classmethod
+    def create(cls, component_type: object, slot_number: object) -> "LaptopSlotRef":
+        return cls(
+            normalized_laptop_component_type(component_type),
+            normalized_id(slot_number, "Slot number"),
+        )

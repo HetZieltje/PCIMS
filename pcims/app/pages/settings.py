@@ -111,6 +111,7 @@ class SettingsPage(QWidget):
         self.backup_button = QPushButton("Create backup now")
         self.backup_button.clicked.connect(self.create_backup)
         self.restore_button = QPushButton("Restore backup…")
+        self.restore_button.setProperty("destructive", True)
         self.restore_button.clicked.connect(self.restore_backup)
         self.export_button = QPushButton("Export purchases and sales…")
         self.export_button.clicked.connect(self.export_csv)

@@ -5,16 +5,22 @@ from collections.abc import Iterable
 from datetime import date
 from typing import cast
 
-from pcims.db.command_support import bounded_cents_total, positive_command_id
+from pcims.db.command_support import (
+    bounded_cents_total,
+    positive_command_id,
+    select_expense_rows,
+)
 from pcims.db.connection import Database
 from pcims.db.errors import NotFoundError, ValidationError
 from pcims.db.expense_commands import _link_new_proofs, insert_expense_record
+from pcims.db.lifecycle import require_row_transition
 from pcims.db.records import inserted_id
 from pcims.domain import (
+    LaptopSlotRef,
     NewExpense,
     SaleTerms,
-    normalized_laptop_component_type,
 )
+from pcims.lifecycle import InventoryState, LifecycleEvent
 from pcims.proofs import NewProof, validate_proof_collection
 
 
@@ -149,8 +155,9 @@ def _validate_replacement(
         raise NotFoundError(f"Replacement item {item_id} does not exist.")
     if row["item_type"] != component_type:
         raise ValidationError(f"Replacement must be a {component_type} item.")
-    if any((row["sale_id"], row["pc_id"], row["laptop_id"], row["is_laptop"])):
-        raise ValidationError(f"'{row['name']}' is not available as a replacement.")
+    require_row_transition(
+        row, LifecycleEvent.INSTALL_IN_LAPTOP, InventoryState.LAPTOP_COMPONENT
+    )
 
 
 def _installed_cost_cents(
@@ -181,19 +188,15 @@ def _installed_cost_cents(
 
 def extract_laptop_component(
     laptop_id: int,
-    component_type: str,
-    slot_number: int,
+    slot: LaptopSlotRef,
     extracted: NewExpense,
     installed_item_id: int | None = None,
     *,
     database: Database,
 ) -> int:
     laptop_id = positive_command_id(laptop_id, "Laptop ID")
-    try:
-        kind = normalized_laptop_component_type(component_type)
-    except ValueError as error:
-        raise ValidationError(str(error)) from error
-    slot_number = positive_command_id(slot_number, "Slot number")
+    kind = slot.component_type
+    slot_number = slot.slot_number
     if extracted.item_type != kind:
         raise ValidationError(f"Extracted component must be a {kind} item.")
     if extracted.price_cents <= 0:
@@ -271,18 +274,14 @@ def extract_laptop_component(
 
 def set_laptop_replacement(
     laptop_id: int,
-    component_type: str,
-    slot_number: int,
+    slot_ref: LaptopSlotRef,
     installed_item_id: int | None,
     *,
     database: Database,
 ) -> None:
     laptop_id = positive_command_id(laptop_id, "Laptop ID")
-    try:
-        kind = normalized_laptop_component_type(component_type)
-    except ValueError as error:
-        raise ValidationError(str(error)) from error
-    slot_number = positive_command_id(slot_number, "Slot number")
+    kind = slot_ref.component_type
+    slot_number = slot_ref.slot_number
     replacement_id = (
         positive_command_id(installed_item_id, "Replacement item ID")
         if installed_item_id is not None
@@ -294,15 +293,26 @@ def set_laptop_replacement(
             raise ValidationError(
                 "Undo the laptop sale before changing its components."
             )
-        slot = connection.execute(
+        slot_row = connection.execute(
             """SELECT installed_item_id FROM laptop_slots
                 WHERE laptop_id=? AND component_type=? AND slot_number=?""",
             (laptop_id, kind, slot_number),
         ).fetchone()
-        if slot is None:
+        if slot_row is None:
             raise NotFoundError(f"{kind} slot {slot_number} is not tracked.")
-        if replacement_id is not None and replacement_id != slot["installed_item_id"]:
+        previous_id = slot_row["installed_item_id"]
+        if (
+            replacement_id is not None
+            and replacement_id != slot_row["installed_item_id"]
+        ):
             _validate_replacement(connection, replacement_id, kind)
+        if previous_id is not None and previous_id != replacement_id:
+            previous = select_expense_rows(connection, [int(previous_id)])[0]
+            require_row_transition(
+                previous,
+                LifecycleEvent.REMOVE_FROM_LAPTOP,
+                InventoryState.AVAILABLE,
+            )
         replacement_cost = (
             int(
                 connection.execute(
@@ -335,23 +345,20 @@ def set_laptop_replacement(
 
 def restore_laptop_component(
     laptop_id: int,
-    component_type: str,
-    slot_number: int,
+    slot: LaptopSlotRef,
     *,
     database: Database,
 ) -> None:
     laptop_id = positive_command_id(laptop_id, "Laptop ID")
-    try:
-        kind = normalized_laptop_component_type(component_type)
-    except ValueError as error:
-        raise ValidationError(str(error)) from error
-    slot_number = positive_command_id(slot_number, "Slot number")
+    kind = slot.component_type
+    slot_number = slot.slot_number
     with database.transaction(write=True) as connection:
         laptop = _laptop_row(connection, laptop_id)
         if laptop["sale_id"] is not None:
             raise ValidationError("Undo the laptop sale before restoring a component.")
-        slot = connection.execute(
-            """SELECT ls.extracted_item_id,e.price_cents,si.sale_id,pp.pc_id,
+        slot_row = connection.execute(
+            """SELECT ls.extracted_item_id,ls.installed_item_id,e.price_cents,
+                      si.sale_id,pp.pc_id,
                       installed.laptop_id AS installed_laptop_id
                  FROM laptop_slots ls JOIN inventory_items e
                    ON e.id=ls.extracted_item_id
@@ -361,24 +368,33 @@ def restore_laptop_component(
                 WHERE ls.laptop_id=? AND ls.component_type=? AND ls.slot_number=?""",
             (laptop_id, kind, slot_number),
         ).fetchone()
-        if slot is None:
+        if slot_row is None:
             raise NotFoundError(f"{kind} slot {slot_number} is not tracked.")
-        if slot["sale_id"] is not None:
+        if slot_row["sale_id"] is not None:
             raise ValidationError(
                 "Undo the extracted component sale before restoring it."
             )
-        if slot["pc_id"] is not None:
+        if slot_row["pc_id"] is not None:
             raise ValidationError(
                 "Disassemble the PC using this factory component before restoring it."
             )
-        if slot["installed_laptop_id"] is not None:
+        if slot_row["installed_laptop_id"] is not None:
             raise ValidationError(
                 "Remove this factory component from its current laptop before restoring it."
             )
         bounded_cents_total(
-            (int(laptop["price_cents"]), int(slot["price_cents"])),
+            (int(laptop["price_cents"]), int(slot_row["price_cents"])),
             "Restored laptop value",
         )
+        if slot_row["installed_item_id"] is not None:
+            installed = select_expense_rows(
+                connection, [int(slot_row["installed_item_id"])]
+            )[0]
+            require_row_transition(
+                installed,
+                LifecycleEvent.REMOVE_FROM_LAPTOP,
+                InventoryState.AVAILABLE,
+            )
         connection.execute(
             """DELETE FROM laptop_slots
                 WHERE laptop_id=? AND component_type=? AND slot_number=?""",
@@ -422,6 +438,16 @@ def sell_laptop(laptop_id: int, terms: SaleTerms, *, database: Database) -> int:
                 ORDER BY position,id""",
             (laptop_id, laptop_id),
         ).fetchall()
+        lifecycle_rows = {
+            int(row["id"]): row
+            for row in select_expense_rows(connection, [int(row["id"]) for row in rows])
+        }
+        for row in rows:
+            require_row_transition(
+                lifecycle_rows[int(row["id"])],
+                LifecycleEvent.SELL_LAPTOP,
+                InventoryState.SOLD,
+            )
         if any(sale_day < row["purchase_date"] for row in rows):
             raise ValidationError(
                 "Sale date cannot be before an included purchase date."

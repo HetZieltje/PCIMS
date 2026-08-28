@@ -22,7 +22,7 @@ def apply_application_theme(theme: object) -> ThemeName:
         raise RuntimeError("A QApplication must exist before applying a theme.")
     application = cast(QApplication, existing)
     application.setPalette(application.style().standardPalette())
-    application.setStyleSheet("")
+    application.setStyleSheet(_application_style_sheet(normalized))
     if normalized == "light":
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(245, 245, 245))
@@ -62,8 +62,20 @@ def apply_application_theme(theme: object) -> ThemeName:
             QColor(130, 130, 130),
         )
         application.setPalette(palette)
-    if normalized != "system":
-        application.setStyleSheet(
-            "QGroupBox { font-weight: 600; } QPushButton { padding: 5px 10px; }"
-        )
+    application.setStyleSheet(_application_style_sheet(normalized))
     return normalized
+
+
+def _application_style_sheet(theme: ThemeName) -> str:
+    danger = "#ff6b5f" if theme == "dark" else "#c42b1c"
+    base = (
+        "QGroupBox { font-weight: 600; } QPushButton { padding: 5px 10px; } "
+        if theme != "system"
+        else ""
+    )
+    return (
+        base
+        + f'QPushButton[destructive="true"] {{ color: {danger}; font-weight: 600; }} '
+        f'QPushButton[destructive="true"]:hover {{ border-color: {danger}; }} '
+        'QLabel[heading="true"] { font-size: 14px; font-weight: 600; }'
+    )

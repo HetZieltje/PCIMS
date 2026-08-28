@@ -123,6 +123,11 @@ capped at 512 MiB so receipts cannot silently expand every backup without limit.
 Automatic backup retention is configurable from 1 to 30 copies. An unchanged
 database reuses its newest verified backup instead of storing a duplicate. The
 Settings page reports database, proof, and automatic-backup storage usage.
+The Diagnostics tab runs lightweight schema, relationship, storage, and backup
+checks only when opened. Its full check additionally verifies every stored proof
+signature and SHA-256 hash, and it exposes bounded application logs plus measured
+startup stages. The automatic startup backup waits for the first visible page to
+finish loading so it does not contend with the initial query.
 Window geometry, splitters, table widths, and table sorting are restored between
 sessions. The former Activity feed has been removed; unexpected application
 errors remain available in the bounded diagnostic log.
