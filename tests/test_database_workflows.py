@@ -488,7 +488,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
         def fail_sales_publish(source, target):
             source_path = Path(source)
             target_path = Path(target)
-            if target_path == sales and source_path.suffix == ".tmp":
+            if target_path.name == sales.name and source_path.suffix == ".tmp":
                 raise OSError("simulated second-file publication failure")
             return original_replace(source, target)
 
