@@ -17,7 +17,7 @@ from pcims.proofs import (
     NewProof,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
@@ -441,6 +441,38 @@ SCHEMA_DEFINITIONS[
               AND extracted.purchase_date=base.purchase_date)
         BEGIN SELECT RAISE(ABORT,'extracted component date must match laptop'); END"""
 
+SCHEMA_V5_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+
+SCHEMA_DEFINITIONS = dict(SCHEMA_V5_DEFINITIONS)
+SCHEMA_DEFINITIONS[
+    ("trigger", "inventory_dates_valid_on_insert")
+] = """CREATE TRIGGER inventory_dates_valid_on_insert
+        BEFORE INSERT ON inventory_items
+        WHEN NOT COALESCE(date(NEW.purchase_date,'+0 days')=NEW.purchase_date,0)
+          OR (NEW.warranty_until IS NOT NULL AND
+              NOT COALESCE(date(NEW.warranty_until,'+0 days')=NEW.warranty_until,0))
+        BEGIN SELECT RAISE(ABORT,'invalid inventory date'); END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "inventory_dates_valid_on_update")
+] = """CREATE TRIGGER inventory_dates_valid_on_update
+        BEFORE UPDATE OF purchase_date,warranty_until ON inventory_items
+        WHEN NOT COALESCE(date(NEW.purchase_date,'+0 days')=NEW.purchase_date,0)
+          OR (NEW.warranty_until IS NOT NULL AND
+              NOT COALESCE(date(NEW.warranty_until,'+0 days')=NEW.warranty_until,0))
+        BEGIN SELECT RAISE(ABORT,'invalid inventory date'); END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "sale_date_valid_on_insert")
+] = """CREATE TRIGGER sale_date_valid_on_insert
+        BEFORE INSERT ON sales
+        WHEN NOT COALESCE(date(NEW.sale_date,'+0 days')=NEW.sale_date,0)
+        BEGIN SELECT RAISE(ABORT,'invalid sale date'); END"""
+SCHEMA_DEFINITIONS[
+    ("trigger", "sale_date_valid_on_update")
+] = """CREATE TRIGGER sale_date_valid_on_update
+        BEFORE UPDATE OF sale_date ON sales
+        WHEN NOT COALESCE(date(NEW.sale_date,'+0 days')=NEW.sale_date,0)
+        BEGIN SELECT RAISE(ABORT,'invalid sale date'); END"""
+
 
 def _normalize_schema_sql(sql: object) -> str:
     return " ".join(str(sql).split()).casefold()
@@ -459,6 +491,7 @@ SCHEMA_V1_CHECKSUM = _schema_checksum(SCHEMA_V1_DEFINITIONS)
 SCHEMA_V2_CHECKSUM = _schema_checksum(SCHEMA_V2_DEFINITIONS)
 SCHEMA_V3_CHECKSUM = _schema_checksum(SCHEMA_V3_DEFINITIONS)
 SCHEMA_V4_CHECKSUM = _schema_checksum(SCHEMA_V4_DEFINITIONS)
+SCHEMA_V5_CHECKSUM = _schema_checksum(SCHEMA_V5_DEFINITIONS)
 SCHEMA_CHECKSUM = _schema_checksum(SCHEMA_DEFINITIONS)
 SCHEMA_REVISIONS = {
     1: (
@@ -483,6 +516,11 @@ SCHEMA_REVISIONS = {
     ),
     5: (
         "enforce extracted component dates on slot creation",
+        SCHEMA_V5_CHECKSUM,
+        SCHEMA_V5_DEFINITIONS,
+    ),
+    6: (
+        "normalize calendar date validation across SQLite versions",
         SCHEMA_CHECKSUM,
         SCHEMA_DEFINITIONS,
     ),
@@ -883,6 +921,14 @@ def _upgrade_schema(connection: sqlite3.Connection, version: int) -> None:
                     ("trigger", "laptop_extracted_date_matches_on_insert")
                 ]
             )
+        elif version == 5:
+            for trigger in (
+                "inventory_dates_valid_on_insert",
+                "inventory_dates_valid_on_update",
+                "sale_date_valid_on_insert",
+                "sale_date_valid_on_update",
+            ):
+                connection.execute(SCHEMA_DEFINITIONS[("trigger", trigger)])
         else:  # pragma: no cover - every supported source has a registered step
             raise SchemaVersionError(
                 f"No database migration is registered after version {version}."

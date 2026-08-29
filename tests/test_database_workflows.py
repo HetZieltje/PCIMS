@@ -32,6 +32,7 @@ from pcims.db.expense_commands import add_expenses
 from pcims.db.gate import gate_for
 from pcims.db.reads import ReadQueries
 from pcims.db.schema import (
+    SCHEMA_DEFINITIONS,
     SCHEMA_REVISIONS,
     SCHEMA_V1_CHECKSUM,
     SCHEMA_V1_DEFINITIONS,
@@ -39,6 +40,7 @@ from pcims.db.schema import (
     SCHEMA_V3_CHECKSUM,
     SCHEMA_V3_DEFINITIONS,
     SCHEMA_V4_DEFINITIONS,
+    SCHEMA_V5_DEFINITIONS,
     SCHEMA_VERSION,
     initialize_database,
 )
@@ -707,6 +709,26 @@ class DatabaseWorkflowTests(unittest.TestCase):
                     ("Impossible", "CPU", 100, invalid_date),
                 )
 
+    def test_schema_rejects_impossible_warranty_and_sale_date_updates(self):
+        item_id = self.buy("Date target", "Extra", 100)
+        sale_id = self.services.sell_items([item_id], SaleTerms.create(120, TEST_DATE))
+
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "invalid inventory date"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                "UPDATE inventory_items SET warranty_until='2025-02-30' WHERE id=?",
+                (item_id,),
+            )
+        with (
+            self.assertRaisesRegex(sqlite3.IntegrityError, "invalid sale date"),
+            self.database.transaction(write=True) as database,
+        ):
+            database.execute(
+                "UPDATE sales SET sale_date='2025-02-30' WHERE id=?", (sale_id,)
+            )
+
     def test_schema_rejects_oversized_and_control_character_names_directly(self):
         for invalid_name in ("x" * 201, "CPU\nrenamed"):
             with (
@@ -981,12 +1003,58 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 """SELECT 1 FROM sqlite_master WHERE type='trigger'
                      AND name='laptop_extracted_date_matches_on_insert'"""
             ).fetchone()
-        self.assertEqual([row[0] for row in markers], list(range(1, 6)))
+        self.assertEqual(
+            [row[0] for row in markers], list(range(1, SCHEMA_VERSION + 1))
+        )
         self.assertIsNotNone(trigger)
         backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
         self.assertEqual(len(backups), 1)
         with closing(sqlite3.connect(backups[0])) as backup:
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 4)
+
+    def test_v5_schema_is_backed_up_before_portable_date_migration(self):
+        migration_path = Path(self.temporary_directory.name) / "schema-v5.db"
+        migration_database = Database.at(migration_path)
+        with closing(migration_database.connect(create=True)) as database:
+            for statement in SCHEMA_V5_DEFINITIONS.values():
+                database.execute(statement)
+            database.executemany(
+                """INSERT INTO schema_migrations
+                   (version,name,checksum,applied_at) VALUES (?,?,?,?)""",
+                (
+                    (
+                        version,
+                        SCHEMA_REVISIONS[version][0],
+                        SCHEMA_REVISIONS[version][1],
+                        f"2026-08-14T12:00:0{version}Z",
+                    )
+                    for version in range(1, 6)
+                ),
+            )
+            database.execute("PRAGMA user_version=5")
+            database.commit()
+
+        initialize_database(migration_database)
+
+        with migration_database.transaction() as database:
+            markers = database.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            date_triggers = database.execute(
+                """SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'
+                     AND name IN ('inventory_dates_valid_on_insert',
+                                  'inventory_dates_valid_on_update',
+                                  'sale_date_valid_on_insert',
+                                  'sale_date_valid_on_update')"""
+            ).fetchone()[0]
+        self.assertEqual(
+            [row[0] for row in markers], list(range(1, SCHEMA_VERSION + 1))
+        )
+        self.assertEqual(date_triggers, 4)
+        backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
+        self.assertEqual(len(backups), 1)
+        with closing(sqlite3.connect(backups[0])) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 5)
 
     def test_current_schema_rejects_extra_tables_and_missing_triggers(self):
         with self.database.transaction() as database:
@@ -1016,9 +1084,13 @@ class DatabaseWorkflowTests(unittest.TestCase):
         item_id = self.buy("CPU", "CPU", 10)
         with closing(self.database.connect()) as database:
             database.execute("PRAGMA ignore_check_constraints=ON")
+            database.execute("DROP TRIGGER inventory_dates_valid_on_update")
             database.execute(
                 "UPDATE inventory_items SET purchase_date='2025-99-99' WHERE id=?",
                 (item_id,),
+            )
+            database.execute(
+                SCHEMA_DEFINITIONS[("trigger", "inventory_dates_valid_on_update")]
             )
             database.commit()
 
