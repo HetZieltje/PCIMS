@@ -442,3 +442,19 @@ def update_expense(
                 "UPDATE inventory_items SET price_cents=price_cents-? WHERE id=?",
                 (difference, slot[0]),
             )
+        if linked_sale is not None:
+            connection.execute(
+                """UPDATE sales
+                      SET name=(
+                          SELECT CASE
+                              WHEN COUNT(DISTINCT item.name)=1 THEN MIN(item.name)
+                              ELSE CAST(COUNT(*) AS TEXT) || ' items'
+                          END
+                          FROM sale_items membership
+                          JOIN inventory_items item ON item.id=membership.item_id
+                          WHERE membership.sale_id=sales.id)
+                    WHERE id=? AND kind='item'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM laptop_sales WHERE sale_id=sales.id)""",
+                (linked_sale["id"],),
+            )

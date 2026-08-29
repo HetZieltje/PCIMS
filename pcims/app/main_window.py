@@ -117,9 +117,16 @@ class MainWindow(QMainWindow):
                 self.diagnostics_page,
                 lambda: self.diagnostics_page.load_snapshot(),
                 lambda snapshot: self.diagnostics_page.apply_snapshot(snapshot),
+                self.diagnostics_page.coordinated_refresh_failed,
             ),
         )
         self.refreshes = RefreshCoordinator(self.tasks, bindings, self)
+        self.sales_page.set_refresh_request(
+            lambda: self.refreshes.start(self.sales_page)
+        )
+        self.diagnostics_page.set_refresh_request(
+            lambda: self.refreshes.start(self.diagnostics_page)
+        )
         self.refreshes.refreshed.connect(
             lambda: self.statusBar().showMessage("Data refreshed", 2500)
         )
@@ -300,11 +307,23 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self.purchases_page.has_staged_items:
+            if self.purchases_page.staged_work_is_saved:
+                draft_message = (
+                    "The Purchases tab contains items that have not been recorded. "
+                    "They are saved and will be restored next time. Close PCIMS?"
+                )
+                draft_title = "Saved purchase draft"
+            else:
+                draft_message = (
+                    "The Purchases tab has pending work that is not safely saved. "
+                    "Closing now may lose proof selections or leave a draft that cannot "
+                    "be restored automatically. Close PCIMS anyway?"
+                )
+                draft_title = "Unsaved purchase work"
             answer = QMessageBox.question(
                 self,
-                "Saved purchase draft",
-                "The Purchases tab contains items that have not been recorded. "
-                "They are saved and will be restored next time. Close PCIMS?",
+                draft_title,
+                draft_message,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )

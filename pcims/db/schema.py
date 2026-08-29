@@ -17,7 +17,7 @@ from pcims.proofs import (
     NewProof,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
@@ -424,6 +424,23 @@ SCHEMA_DEFINITIONS[
               AND NEW.purchase_date<>base.purchase_date)
         BEGIN SELECT RAISE(ABORT,'extracted component date must match laptop'); END"""
 
+# Revision definitions are immutable once shipped. Version 5 adds the missing
+# insert-side half of the extracted-component date invariant; version 4 only
+# protected later updates.
+SCHEMA_V4_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+
+SCHEMA_DEFINITIONS = dict(SCHEMA_V4_DEFINITIONS)
+SCHEMA_DEFINITIONS[
+    ("trigger", "laptop_extracted_date_matches_on_insert")
+] = """CREATE TRIGGER laptop_extracted_date_matches_on_insert
+        BEFORE INSERT ON laptop_slots
+        WHEN NOT EXISTS (
+            SELECT 1 FROM inventory_items extracted
+            JOIN inventory_items base ON base.id=NEW.laptop_id
+            WHERE extracted.id=NEW.extracted_item_id
+              AND extracted.purchase_date=base.purchase_date)
+        BEGIN SELECT RAISE(ABORT,'extracted component date must match laptop'); END"""
+
 
 def _normalize_schema_sql(sql: object) -> str:
     return " ".join(str(sql).split()).casefold()
@@ -441,6 +458,7 @@ def _schema_checksum(definitions: dict[tuple[str, str], str]) -> str:
 SCHEMA_V1_CHECKSUM = _schema_checksum(SCHEMA_V1_DEFINITIONS)
 SCHEMA_V2_CHECKSUM = _schema_checksum(SCHEMA_V2_DEFINITIONS)
 SCHEMA_V3_CHECKSUM = _schema_checksum(SCHEMA_V3_DEFINITIONS)
+SCHEMA_V4_CHECKSUM = _schema_checksum(SCHEMA_V4_DEFINITIONS)
 SCHEMA_CHECKSUM = _schema_checksum(SCHEMA_DEFINITIONS)
 SCHEMA_REVISIONS = {
     1: (
@@ -460,6 +478,11 @@ SCHEMA_REVISIONS = {
     ),
     4: (
         "harden laptop membership and component types",
+        SCHEMA_V4_CHECKSUM,
+        SCHEMA_V4_DEFINITIONS,
+    ),
+    5: (
+        "enforce extracted component dates on slot creation",
         SCHEMA_CHECKSUM,
         SCHEMA_DEFINITIONS,
     ),
@@ -601,6 +624,16 @@ def validate_current_data(database: sqlite3.Connection) -> None:
             if invalid_slot_provenance:
                 raise DatabaseIntegrityError(
                     f"Extracted item {invalid_slot_provenance[0]} has invalid provenance."
+                )
+            invalid_extracted_date = database.execute(
+                """SELECT ls.extracted_item_id FROM laptop_slots ls
+                   JOIN inventory_items extracted ON extracted.id=ls.extracted_item_id
+                   JOIN inventory_items base ON base.id=ls.laptop_id
+                   WHERE extracted.purchase_date<>base.purchase_date LIMIT 1"""
+            ).fetchone()
+            if invalid_extracted_date:
+                raise DatabaseIntegrityError(
+                    f"Extracted item {invalid_extracted_date[0]} has an invalid source date."
                 )
             invalid_pc_laptop_item = database.execute(
                 """SELECT pp.item_id FROM pc_parts pp
@@ -844,6 +877,12 @@ def _upgrade_schema(connection: sqlite3.Connection, version: int) -> None:
                 "laptop_extracted_date_is_locked",
             ):
                 connection.execute(SCHEMA_DEFINITIONS[("trigger", trigger)])
+        elif version == 4:
+            connection.execute(
+                SCHEMA_DEFINITIONS[
+                    ("trigger", "laptop_extracted_date_matches_on_insert")
+                ]
+            )
         else:  # pragma: no cover - every supported source has a registered step
             raise SchemaVersionError(
                 f"No database migration is registered after version {version}."

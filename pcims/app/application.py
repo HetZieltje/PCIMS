@@ -77,8 +77,14 @@ def _run_application(
         )
         return 3
     application_log: Path | None = None
+    logging_error: OSError | None = None
     try:
-        application_log = configure_logging(services.database_path.parent)
+        try:
+            application_log = configure_logging(services.database_path.parent)
+        except OSError as error:
+            # The bounded log is diagnostic support, not application data. A
+            # locked or unwritable optional log must not make inventory unusable.
+            logging_error = error
         logger = logging.getLogger("pcims.application")
         logger.info("Starting PCIMS %s", application_version())
         try:
@@ -104,6 +110,10 @@ def _run_application(
             )
             return 2
         window.show()
+        if logging_error is not None:
+            window.statusBar().showMessage(
+                f"Application logging is unavailable: {logging_error}", 10_000
+            )
         mark_startup_stage("Window shown")
         if packaged_smoke_test:
             QTimer.singleShot(30_000, lambda: application.exit(4))

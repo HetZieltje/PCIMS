@@ -30,9 +30,19 @@ def _unicode_nocase(left: str, right: str) -> int:
     return (left_folded > right_folded) - (left_folded < right_folded)
 
 
+def _unicode_contains(value: object, needle: object) -> int:
+    """Return whether *needle* occurs literally using Unicode case folding."""
+    if value is None or needle is None:
+        return 0
+    return int(str(needle).casefold() in str(value).casefold())
+
+
 def register_database_collations(connection: sqlite3.Connection) -> None:
-    """Install the deterministic Unicode comparison used by schema constraints."""
+    """Install deterministic Unicode helpers used by constraints and searches."""
     connection.create_collation("PCIMS_NOCASE", _unicode_nocase)
+    connection.create_function(
+        "PCIMS_CONTAINS", 2, _unicode_contains, deterministic=True
+    )
 
 
 def get_data_dir() -> Path:

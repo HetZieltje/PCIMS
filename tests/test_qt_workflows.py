@@ -61,6 +61,7 @@ from pcims.contracts import BackupResult
 from pcims.db.connection import Database
 from pcims.db.errors import ValidationError
 from pcims.domain import NewExpense, SaleTerms
+from pcims.drafts import PurchaseDraftStore
 from pcims.proofs import NewProof
 from pcims.services import ApplicationServices
 from pcims.version import application_version
@@ -542,6 +543,39 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertIn("simulated disk failure", str(show_error.call_args.args[2]))
         page.deleteLater()
 
+    def test_unreadable_purchase_draft_is_retained_until_explicit_discard(self):
+        store = PurchaseDraftStore(
+            self.database.path,
+            Path(self.temporary_directory.name) / "broken-draft-root",
+        )
+        store.path.parent.mkdir(parents=True)
+        original = b'{"version":999,"lines":[]}'
+        store.path.write_bytes(original)
+
+        with patch("pcims.app.pages.purchases.show_error") as show_error:
+            page = PurchasesPage(self.services, tasks=self.tasks, draft_store=store)
+            self.assertEqual(store.path.read_bytes(), original)
+            self.assertTrue(page.has_staged_items)
+            self.assertFalse(page.staged_work_is_saved)
+            page.apply_snapshot(self.services.purchases_snapshot())
+
+        show_error.assert_called_once()
+        self.assertEqual(store.path.read_bytes(), original)
+        page.discard_staged()
+        self.assertFalse(store.path.exists())
+        self.assertFalse(page.has_staged_items)
+        page.deleteLater()
+
+    def test_pending_proof_selection_is_not_reported_as_a_saved_draft(self):
+        page = PurchasesPage(self.services, tasks=self.tasks)
+        page._pending_proofs = (
+            NewProof("receipt.pdf", "application/pdf", b"%PDF-1.4\n%%EOF"),
+        )
+
+        self.assertTrue(page.has_staged_items)
+        self.assertFalse(page.staged_work_is_saved)
+        page.deleteLater()
+
     def test_expected_domain_conflict_is_reported_without_crash_traceback(self):
         page = PurchasesPage(self.services, tasks=self.tasks)
         page.name.setText("Conflicting item")
@@ -870,6 +904,33 @@ class QtWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(window.settings_page.restore_button.text(), "Restore backup…")
         show_error.assert_called_once()
+        window.deleteLater()
+
+    def test_restore_refuses_to_race_existing_background_work(self):
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        release_task = threading.Event()
+        window.tasks.run(
+            lambda: release_task.wait(2),
+            lambda _result: None,
+            lambda _error: None,
+            owner=window,
+        )
+        self.assertTrue(window.tasks.active)
+
+        with (
+            patch(
+                "pcims.app.pages.settings.QFileDialog.getOpenFileName"
+            ) as file_dialog,
+            patch("pcims.app.pages.settings.QMessageBox.information") as information,
+        ):
+            window.settings_page.restore_backup()
+
+        file_dialog.assert_not_called()
+        information.assert_called_once()
+        self.assertIn("background operation", information.call_args.args[2])
+        release_task.set()
+        self.wait_until(lambda: not window.tasks.active)
         window.deleteLater()
 
     def test_table_model_sorts_by_typed_values(self):
@@ -1259,6 +1320,31 @@ class QtWorkflowTests(unittest.TestCase):
         lock.unlock.assert_called_once()
         self.assertIs(sys.excepthook, previous_hook)
 
+    def test_optional_log_failure_does_not_block_application_startup(self):
+        lock = MagicMock()
+        window = MagicMock()
+        window.tasks.active = False
+        previous_hook = sys.excepthook
+        with (
+            patch.dict(os.environ, {"PCIMS_PACKAGED_SMOKE_TEST": "1"}),
+            patch(
+                "pcims.app.application.install_exception_hook",
+                return_value=previous_hook,
+            ),
+            patch("pcims.app.application.acquire_instance_lock", return_value=lock),
+            patch(
+                "pcims.app.application.configure_logging",
+                side_effect=PermissionError("log directory is read-only"),
+            ),
+            patch("pcims.app.application.MainWindow", return_value=window),
+        ):
+            result = main([], self.services)
+
+        self.assertEqual(result, 0)
+        window.show.assert_called_once()
+        window.statusBar.return_value.showMessage.assert_called_once()
+        lock.unlock.assert_called_once()
+
     def test_instance_lock_permission_failure_is_not_reported_as_another_session(self):
         lock = MagicMock()
         lock.tryLock.return_value = False
@@ -1628,6 +1714,84 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertFalse(page.expense_older.isEnabled())
         self.assertIn("501–501 of 501", page.expense_page_label.text())
         page.deleteLater()
+
+    def test_sales_search_supersedes_an_older_coordinator_refresh(self):
+        self.purchase("Ordinary item", "Extra", 1)
+        wanted_id = self.purchase("Élite result", "Extra", 2)
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        started = threading.Event()
+        release_first = threading.Event()
+        original = ApplicationServices.sales_snapshot
+        calls = 0
+
+        def delayed_snapshot(services, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                started.set()
+                release_first.wait(2)
+            return original(services, *args, **kwargs)
+
+        try:
+            with patch.object(
+                ApplicationServices, "sales_snapshot", new=delayed_snapshot
+            ):
+                window.tabs.setCurrentWidget(window.sales_page)
+                self.assertTrue(started.wait(1))
+                window.sales_page.search.setText("élite")
+                window.sales_page.apply_filter()
+                release_first.set()
+                self.wait_until(lambda: not window.tasks.active)
+        finally:
+            release_first.set()
+
+        self.assertGreaterEqual(calls, 2)
+        self.assertEqual(window.sales_page.expense_model.rowCount(), 1)
+        self.assertEqual(
+            window.sales_page.expense_model.index(0, 0).data(), str(wanted_id)
+        )
+        window.deleteLater()
+
+    def test_full_diagnostics_supersedes_an_older_lightweight_refresh(self):
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        page = window.diagnostics_page
+        started = threading.Event()
+        release_first = threading.Event()
+        original = ApplicationServices.diagnostics_snapshot
+        thorough_calls: list[bool] = []
+
+        def delayed_snapshot(services, thorough=False):
+            thorough_calls.append(thorough)
+            if len(thorough_calls) == 1:
+                started.set()
+                release_first.wait(2)
+            return original(services, thorough=thorough)
+
+        try:
+            with (
+                patch.object(
+                    ApplicationServices,
+                    "diagnostics_snapshot",
+                    new=delayed_snapshot,
+                ),
+                patch.object(
+                    page, "apply_snapshot", wraps=page.apply_snapshot
+                ) as apply,
+            ):
+                window.tabs.setCurrentWidget(page)
+                self.assertTrue(started.wait(1))
+                page.run_full_check()
+                release_first.set()
+                self.wait_until(lambda: not window.tasks.active)
+        finally:
+            release_first.set()
+
+        self.assertEqual(thorough_calls, [False, True])
+        apply.assert_called_once()
+        self.assertTrue(page.full_check.isEnabled())
+        window.deleteLater()
 
     def test_sales_page_pages_large_selected_sale_details(self):
         ids = self.services.add_expenses(

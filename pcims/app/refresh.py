@@ -17,19 +17,21 @@ class RefreshBinding:
     page: QWidget
     load: Callable[[], object]
     apply: Callable[[object], None]
+    fail: Callable[[Exception], None] | None = None
 
 
 def bind_refresh(
     page: QWidget,
     load: Callable[[], SnapshotT],
     apply: Callable[[SnapshotT], None],
+    fail: Callable[[Exception], None] | None = None,
 ) -> RefreshBinding:
     """Erase one snapshot type only at Qt's dynamic callback boundary."""
 
     def apply_typed(snapshot: object) -> None:
         apply(cast(SnapshotT, snapshot))
 
-    return RefreshBinding(page, load, apply_typed)
+    return RefreshBinding(page, load, apply_typed, fail)
 
 
 @dataclass(slots=True)
@@ -106,7 +108,9 @@ class RefreshCoordinator(QObject):
 
     def pause(self) -> None:
         self._accepting = False
-        for state in self._states.values():
+        for page, state in self._states.items():
+            if state.task is not None:
+                self._dirty_pages.add(page)
             state.requested_generation += 1
             state.pending = False
 
@@ -140,6 +144,9 @@ class RefreshCoordinator(QObject):
             return
         if state.requested_generation == generation:
             self._dirty_pages.add(page)
+            failure_handler = self._bindings[page].fail
+            if failure_handler is not None:
+                failure_handler(error)
             self.failed.emit(page, error)
         self._launch_pending(page, state)
 

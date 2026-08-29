@@ -1,5 +1,7 @@
 """On-demand application health and runtime diagnostics."""
 
+from collections.abc import Callable
+
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -78,9 +80,14 @@ class DiagnosticsPage(QWidget):
         layout.addWidget(QLabel("Recent application log"))
         layout.addWidget(self.logs, 1)
         self._snapshot: DiagnosticsSnapshot | None = None
+        self._requested_thorough = False
+        self._request_coordinated_refresh: Callable[[], None] | None = None
+
+    def set_refresh_request(self, request: Callable[[], None]) -> None:
+        self._request_coordinated_refresh = request
 
     def load_snapshot(self) -> DiagnosticsSnapshot:
-        return self.services.diagnostics_snapshot()
+        return self.services.diagnostics_snapshot(thorough=self._requested_thorough)
 
     def apply_snapshot(self, snapshot: DiagnosticsSnapshot) -> None:
         self._snapshot = snapshot
@@ -102,10 +109,17 @@ class DiagnosticsPage(QWidget):
         )
         self.logs.setPlainText(snapshot.log_tail)
         self.copy_report.setEnabled(True)
+        self._requested_thorough = False
+        self.full_check.setEnabled(True)
+        self.full_check.setText("Run full integrity check")
 
     def run_full_check(self) -> None:
         self.full_check.setEnabled(False)
         self.full_check.setText("Checking all proofs…")
+        self._requested_thorough = True
+        if self._request_coordinated_refresh is not None:
+            self._request_coordinated_refresh()
+            return
         self._diagnostic_task = self.tasks.run(
             lambda: self.services.diagnostics_snapshot(thorough=True),
             self._full_check_finished,
@@ -119,9 +133,13 @@ class DiagnosticsPage(QWidget):
         self.apply_snapshot(snapshot)
 
     def _full_check_failed(self, error: Exception) -> None:
+        self.coordinated_refresh_failed(error)
+        show_error(self, "Diagnostics failed", error)
+
+    def coordinated_refresh_failed(self, _error: Exception) -> None:
+        self._requested_thorough = False
         self.full_check.setEnabled(True)
         self.full_check.setText("Run full integrity check")
-        show_error(self, "Diagnostics failed", error)
 
     def _copy_report(self) -> None:
         if self._snapshot is None:

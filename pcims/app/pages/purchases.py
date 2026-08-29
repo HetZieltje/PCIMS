@@ -61,12 +61,14 @@ class PurchasesPage(AsyncCommandPage):
         self.services = services
         self._draft_store = draft_store
         self._draft_load_error: Exception | None = None
+        self._draft_save_error: Exception | None = None
         self._staged: list[DraftPurchase] = []
         if self._draft_store is not None:
             try:
                 self._staged = list(self._draft_store.load())
             except (OSError, TypeError, ValueError) as error:
                 self._draft_load_error = error
+                self._draft_save_error = error
         self._next_staged_id = 1
         if self._staged:
             self._next_staged_id = max(item.staged_id for item in self._staged) + 1
@@ -223,12 +225,29 @@ class PurchasesPage(AsyncCommandPage):
 
     @property
     def has_staged_items(self) -> bool:
-        return bool(self._staged or self._pending_proofs)
+        return bool(
+            self._staged
+            or self._pending_proofs
+            or self._draft_load_error
+            or self._draft_save_error
+        )
+
+    @property
+    def staged_work_is_saved(self) -> bool:
+        """Whether closing can truthfully promise to restore all pending work."""
+        return bool(
+            self._staged
+            and not self._pending_proofs
+            and self._draft_load_error is None
+            and self._draft_save_error is None
+        )
 
     def discard_staged(self) -> None:
         """Discard purchase lines that have not been written to the database."""
         self._staged.clear()
         self._pending_proofs = ()
+        self._draft_load_error = None
+        self._draft_save_error = None
         self._render_pending_proofs()
         self._render_staged()
 
@@ -341,11 +360,17 @@ class PurchasesPage(AsyncCommandPage):
         QMessageBox.information(self, "Purchase recorded", f"Recorded {count} item(s).")
 
     def _render_staged(self) -> None:
-        if self._draft_store is not None:
+        # Do not turn a failed load into an implicit delete during construction.
+        # The unreadable file remains available for inspection or recovery until
+        # the user explicitly replaces or discards the pending work.
+        if self._draft_store is not None and self._draft_load_error is None:
             try:
                 self._draft_store.save(tuple(self._staged))
             except (OSError, TypeError, ValueError) as error:
+                self._draft_save_error = error
                 show_error(self, "Unable to save purchase draft", error)
+            else:
+                self._draft_save_error = None
         self.table_model.set_records(self._staged)
         self.total_label.setText(
             "Staged total: "

@@ -32,11 +32,13 @@ from pcims.db.expense_commands import add_expenses
 from pcims.db.gate import gate_for
 from pcims.db.reads import ReadQueries
 from pcims.db.schema import (
+    SCHEMA_REVISIONS,
     SCHEMA_V1_CHECKSUM,
     SCHEMA_V1_DEFINITIONS,
     SCHEMA_V2_CHECKSUM,
     SCHEMA_V3_CHECKSUM,
     SCHEMA_V3_DEFINITIONS,
+    SCHEMA_V4_DEFINITIONS,
     SCHEMA_VERSION,
     initialize_database,
 )
@@ -427,6 +429,25 @@ class DatabaseWorkflowTests(unittest.TestCase):
         by_sale = self.services.sales_snapshot(search="Searchable GPU")
         self.assertEqual(by_sale.sales.records[0].name, "Searchable GPU")
 
+    def test_history_search_is_literal_and_unicode_case_insensitive(self):
+        unicode_id = self.services.add_expenses(
+            [NewExpense.create("Élite 100% GPU_", "GPU", 100, TEST_DATE)]
+        )[0]
+
+        folded = self.services.sales_snapshot(search="élite")
+        percent = self.services.sales_snapshot(search="100%")
+        underscore = self.services.sales_snapshot(search="GPU_")
+        wildcard_only = self.services.sales_snapshot(search="%")
+
+        self.assertEqual([item.id for item in folded.expenses.records], [unicode_id])
+        self.assertEqual([item.id for item in percent.expenses.records], [unicode_id])
+        self.assertEqual(
+            [item.id for item in underscore.expenses.records], [unicode_id]
+        )
+        self.assertEqual(
+            [item.id for item in wildcard_only.expenses.records], [unicode_id]
+        )
+
     def test_csv_export_contains_stable_ids_metadata_and_sales(self):
         expense_id = self.services.add_expenses(
             [
@@ -449,6 +470,37 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertIn(f"{expense_id},Exported,Extra,10.00", purchases_text)
         self.assertIn("Export Shop,CSV-1", purchases_text)
         self.assertIn("Exported,10.00,15.00,5.00", sales_text)
+
+    def test_csv_export_restores_both_previous_files_on_publication_failure(self):
+        self.buy("Export candidate", "Extra", 10)
+        destination = Path(self.temporary_directory.name) / "atomic-export"
+        destination.mkdir()
+        purchases = destination / "pcims-purchases.csv"
+        sales = destination / "pcims-sales.csv"
+        old_purchases = b"old purchases\r\n"
+        old_sales = b"old sales\r\n"
+        purchases.write_bytes(old_purchases)
+        sales.write_bytes(old_sales)
+        original_replace = os.replace
+
+        def fail_sales_publish(source, target):
+            source_path = Path(source)
+            target_path = Path(target)
+            if target_path == sales and source_path.suffix == ".tmp":
+                raise OSError("simulated second-file publication failure")
+            return original_replace(source, target)
+
+        with (
+            patch("pcims.db.export.os.replace", side_effect=fail_sales_publish),
+            self.assertRaisesRegex(OSError, "second-file"),
+        ):
+            self.services.export_csv(destination)
+
+        self.assertEqual(purchases.read_bytes(), old_purchases)
+        self.assertEqual(sales.read_bytes(), old_sales)
+        self.assertEqual(
+            [path for path in destination.iterdir() if path.name.startswith(".")], []
+        )
 
     def test_purchase_draft_round_trips_details_and_proof_content(self):
         store = PurchaseDraftStore(
@@ -805,7 +857,9 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 "SELECT name FROM inventory_items WHERE id=1"
             ).fetchone()[0]
         self.assertEqual(name, "Migrated CPU")
-        self.assertEqual([row[0] for row in markers], [1, 2, 3, 4])
+        self.assertEqual(
+            [row[0] for row in markers], list(range(1, SCHEMA_VERSION + 1))
+        )
         self.assertNotIn("activity_events", tables)
         backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
         self.assertEqual(len(backups), 1)
@@ -886,12 +940,53 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 """SELECT 1 FROM sqlite_master WHERE type='trigger'
                      AND name='laptop_component_type_is_locked'"""
             ).fetchone()
-        self.assertEqual([row[0] for row in markers], [1, 2, 3, 4])
+        self.assertEqual(
+            [row[0] for row in markers], list(range(1, SCHEMA_VERSION + 1))
+        )
         self.assertIsNotNone(trigger)
         backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
         self.assertEqual(len(backups), 1)
         with closing(sqlite3.connect(backups[0])) as backup:
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 3)
+
+    def test_v4_schema_is_backed_up_before_date_invariant_migration(self):
+        migration_path = Path(self.temporary_directory.name) / "schema-v4.db"
+        migration_database = Database.at(migration_path)
+        with closing(migration_database.connect(create=True)) as database:
+            for statement in SCHEMA_V4_DEFINITIONS.values():
+                database.execute(statement)
+            database.executemany(
+                """INSERT INTO schema_migrations
+                   (version,name,checksum,applied_at) VALUES (?,?,?,?)""",
+                (
+                    (
+                        version,
+                        SCHEMA_REVISIONS[version][0],
+                        SCHEMA_REVISIONS[version][1],
+                        f"2026-08-14T12:00:0{version}Z",
+                    )
+                    for version in range(1, 5)
+                ),
+            )
+            database.execute("PRAGMA user_version=4")
+            database.commit()
+
+        initialize_database(migration_database)
+
+        with migration_database.transaction() as database:
+            markers = database.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            trigger = database.execute(
+                """SELECT 1 FROM sqlite_master WHERE type='trigger'
+                     AND name='laptop_extracted_date_matches_on_insert'"""
+            ).fetchone()
+        self.assertEqual([row[0] for row in markers], list(range(1, 6)))
+        self.assertIsNotNone(trigger)
+        backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
+        self.assertEqual(len(backups), 1)
+        with closing(sqlite3.connect(backups[0])) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 4)
 
     def test_current_schema_rejects_extra_tables_and_missing_triggers(self):
         with self.database.transaction() as database:
@@ -1435,8 +1530,29 @@ class DatabaseWorkflowTests(unittest.TestCase):
         )
 
         sale = self.services.list_sales()[0]
+        self.assertEqual(sale.name, "Corrected CPU")
         self.assertEqual(sale.items[0].name, "Corrected CPU")
         self.assertEqual(sale.cost_cents, 4_000)
+
+    def test_group_sale_name_tracks_edited_item_names(self):
+        first_id = self.buy("Matching", "Extra", 10)
+        second_id = self.buy("Matching", "Extra", 20)
+        sale_id = self.services.sell_items(
+            [first_id, second_id], SaleTerms.create(40, TEST_DATE)
+        )
+        self.assertEqual(self.services.list_sales()[0].name, "Matching")
+
+        self.services.update_expense(
+            second_id, NewExpense.create("Different", "Extra", 20, TEST_DATE)
+        )
+        self.assertEqual(self.services.list_sales()[0].name, "2 items")
+
+        self.services.update_expense(
+            first_id, NewExpense.create("Different", "Extra", 10, TEST_DATE)
+        )
+        sale = self.services.list_sales()[0]
+        self.assertEqual(sale.id, sale_id)
+        self.assertEqual(sale.name, "Different")
 
     def test_sold_item_correction_cannot_overflow_combined_sale_cost(self):
         first_id = self.buy(
@@ -1874,6 +1990,24 @@ class DatabaseWorkflowTests(unittest.TestCase):
             ):
                 create_backup(backup_directory, keep=keep, database=self.database)
         self.assertFalse(backup_directory.exists())
+
+    def test_backup_retention_counts_a_reused_protected_backup(self):
+        backup_directory = Path(self.temporary_directory.name) / "prune-protected"
+        backup_directory.mkdir()
+        prefix = "pcims_test_"
+        protected = backup_directory / f"{prefix}old.db"
+        newer = backup_directory / f"{prefix}new.db"
+        protected.write_bytes(b"old")
+        newer.write_bytes(b"new")
+        os.utime(protected, ns=(1, 1))
+        os.utime(newer, ns=(2, 2))
+
+        warnings = backup_module._prune_backups(
+            backup_directory, prefix, 1, (protected,)
+        )
+
+        self.assertEqual(warnings, ())
+        self.assertEqual(tuple(backup_directory.glob(f"{prefix}*.db")), (protected,))
 
     def test_restore_retention_never_prunes_the_selected_source(self):
         self.buy("Protected source", "CPU", 10)
@@ -2439,6 +2573,32 @@ class DatabaseWorkflowTests(unittest.TestCase):
                     "UPDATE inventory_items SET purchase_date='2026-08-13' WHERE id=?",
                     (extracted_id,),
                 )
+
+        validate_database(self.database_path)
+
+    def test_laptop_slot_insert_requires_source_laptop_purchase_date(self):
+        laptop_id = self.services.add_laptop(
+            NewExpense.create("Date-locked laptop", "Extra", 300, TEST_DATE)
+        )
+        with self.database.transaction(write=True) as database:
+            extracted_id = database.execute(
+                """INSERT INTO inventory_items
+                   (name,item_type,price_cents,purchase_date)
+                   VALUES ('Wrong-date factory RAM','RAM',1000,'2026-08-13')"""
+            ).lastrowid
+            database.execute(
+                """INSERT INTO item_costs (item_id,cash_paid_cents,origin)
+                   VALUES (?,0,'extracted')""",
+                (extracted_id,),
+            )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "date must match"):
+                database.execute(
+                    """INSERT INTO laptop_slots
+                       (laptop_id,component_type,slot_number,extracted_item_id)
+                       VALUES (?,'RAM',1,?)""",
+                    (laptop_id, extracted_id),
+                )
+            database.execute("DELETE FROM inventory_items WHERE id=?", (extracted_id,))
 
         validate_database(self.database_path)
 

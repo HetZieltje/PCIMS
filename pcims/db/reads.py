@@ -77,16 +77,18 @@ class ReadQueries:
 
     def count_expenses(self, search: str = "") -> int:
         if search:
-            pattern = f"%{search}%"
             return int(
                 self.connection.execute(
                     """SELECT COUNT(*) FROM inventory_items e
                        JOIN item_costs c ON c.item_id=e.id
                        WHERE c.origin='purchase' AND
-                            (e.name LIKE ? OR e.item_type LIKE ? OR e.vendor LIKE ?
-                          OR e.serial_number LIKE ? OR e.storage_location LIKE ?
-                          OR e.notes LIKE ?)""",
-                    (pattern,) * 6,
+                            (PCIMS_CONTAINS(e.name,?)
+                          OR PCIMS_CONTAINS(e.item_type,?)
+                          OR PCIMS_CONTAINS(e.vendor,?)
+                          OR PCIMS_CONTAINS(e.serial_number,?)
+                          OR PCIMS_CONTAINS(e.storage_location,?)
+                          OR PCIMS_CONTAINS(e.notes,?))""",
+                    (search,) * 6,
                 ).fetchone()[0]
             )
         return int(
@@ -101,13 +103,14 @@ class ReadQueries:
         where = " WHERE c.origin='purchase'"
         parameters: tuple[object, ...] = ()
         if search:
-            pattern = f"%{search}%"
             where = (
-                " WHERE c.origin='purchase' AND (e.name LIKE ? OR e.item_type LIKE ? OR e.vendor LIKE ?"
-                " OR e.serial_number LIKE ? OR e.storage_location LIKE ?"
-                " OR e.notes LIKE ?)"
+                " WHERE c.origin='purchase' AND (PCIMS_CONTAINS(e.name,?)"
+                " OR PCIMS_CONTAINS(e.item_type,?) OR PCIMS_CONTAINS(e.vendor,?)"
+                " OR PCIMS_CONTAINS(e.serial_number,?)"
+                " OR PCIMS_CONTAINS(e.storage_location,?)"
+                " OR PCIMS_CONTAINS(e.notes,?))"
             )
-            parameters = (pattern,) * 6
+            parameters = (search,) * 6
         rows = self.connection.execute(
             EXPENSE_SELECT + where + " ORDER BY e.id DESC LIMIT ? OFFSET ?",
             (*parameters, limit, offset),
@@ -247,15 +250,14 @@ class ReadQueries:
             return int(
                 self.connection.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
             )
-        pattern = f"%{search}%"
         return int(
             self.connection.execute(
                 """SELECT COUNT(*) FROM sales s
                    LEFT JOIN laptop_sales ls ON ls.sale_id=s.id
-                   WHERE s.name LIKE ? OR
-                         CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END
-                         LIKE ?""",
-                (pattern, pattern),
+                   WHERE PCIMS_CONTAINS(s.name,?) OR PCIMS_CONTAINS(
+                         CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END,
+                         ?)""",
+                (search, search),
             ).fetchone()[0]
         )
 
@@ -265,16 +267,15 @@ class ReadQueries:
         limit: int,
         search: str = "",
     ) -> tuple[SaleSummary, ...]:
-        pattern = f"%{search}%"
         sales = self.connection.execute(
             """WITH page AS (
                    SELECT s.id,s.name,
                           CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END AS kind,
                           s.selling_price_cents,s.sale_date
                      FROM sales s LEFT JOIN laptop_sales ls ON ls.sale_id=s.id
-                    WHERE ?='' OR s.name LIKE ? OR
-                          CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END
-                          LIKE ?
+                    WHERE ?='' OR PCIMS_CONTAINS(s.name,?) OR PCIMS_CONTAINS(
+                          CASE WHEN ls.sale_id IS NULL THEN s.kind ELSE 'laptop' END,
+                          ?)
                     ORDER BY id DESC LIMIT ? OFFSET ?
                )
                SELECT p.id,p.name,p.kind,p.selling_price_cents,p.sale_date,
@@ -285,7 +286,7 @@ class ReadQueries:
                  JOIN inventory_items e ON e.id=si.item_id
                 GROUP BY p.id,p.name,p.kind,p.selling_price_cents,p.sale_date
                 ORDER BY p.id DESC""",
-            (search, pattern, pattern, limit, offset),
+            (search, search, search, limit, offset),
         )
         return tuple(
             SaleSummary(

@@ -44,14 +44,19 @@ def configure_logging(data_directory: Path) -> Path:
             backupCount=2,
             encoding="utf-8",
         )
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-        )
-        root.addHandler(handler)
-        root.setLevel(logging.INFO)
-        root.propagate = False
-        if os.name != "nt":
-            log_path.chmod(0o600)
+        try:
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+            )
+            root.addHandler(handler)
+            root.setLevel(logging.INFO)
+            root.propagate = False
+            if os.name != "nt":
+                log_path.chmod(0o600)
+        except BaseException:
+            root.removeHandler(handler)
+            handler.close()
+            raise
     return log_path
 
 
@@ -82,6 +87,8 @@ def read_log_tail(path: Path, *, maximum_bytes: int = 64 * 1024) -> str:
             content = stream.read(maximum_bytes)
     except FileNotFoundError:
         return "No application log has been written yet."
+    except OSError as error:
+        return f"Unable to read the application log: {error}"
     if size > maximum_bytes:
         content = content.partition(b"\n")[2]
     return content.decode("utf-8", errors="replace").strip()

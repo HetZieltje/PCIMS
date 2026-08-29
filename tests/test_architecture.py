@@ -302,9 +302,9 @@ class ArchitectureTests(unittest.TestCase):
         for runner in ("windows-latest", "ubuntu-22.04", "macos-15"):
             self.assertIn(runner, package_workflow)
         for artifact in (
-            "PCIMS-$env:PCIMS_VERSION-Windows-x64.zip",
-            "PCIMS-${PCIMS_VERSION}-macOS-arm64.zip",
-            "PCIMS-${PCIMS_VERSION}-Linux-x86_64.tar.gz",
+            "PCIMS-$env:PCIMS_PACKAGE_VERSION-Windows-x64.zip",
+            "PCIMS-${PCIMS_PACKAGE_VERSION}-macOS-arm64.zip",
+            "PCIMS-${PCIMS_PACKAGE_VERSION}-Linux-x86_64.tar.gz",
         ):
             self.assertIn(artifact, package_workflow)
         self.assertIn("from pcims.version import application_version", package_workflow)
@@ -334,6 +334,11 @@ class ArchitectureTests(unittest.TestCase):
         self.assertEqual(package_workflow.count("sbom-path:"), 1)
         self.assertIn("scripts/write_checksums.py release-artifacts", package_workflow)
         self.assertIn("release-artifacts/SHA256SUMS", package_workflow)
+        self.assertIn("package:\n    needs: gate", package_workflow)
+        self.assertIn("python scripts/verify.py --output-directory", package_workflow)
+        self.assertIn(
+            'package_version="${version}-preview.${GITHUB_SHA::7}"', package_workflow
+        )
 
     def test_purchase_staging_uses_immutable_domain_records(self):
         purchases = (
@@ -377,7 +382,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn('if OPERATING_SYSTEM == "nt"', connection)
         self.assertIn("must be an absolute path", connection)
         self.assertIn("setApplicationVersion(application_version())", application)
-        self.assertIn('__version__ = "2.0.0b4"', version)
+        self.assertIn('__version__ = "2.0.0b5.dev0"', version)
         self.assertIn('version = {attr = "pcims.version.__version__"}', project)
         self.assertNotIn("importlib.metadata", version)
         self.assertNotIn("1.0.0", version)

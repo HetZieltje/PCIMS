@@ -162,8 +162,21 @@ def _prune_backups(
         if stat.S_ISREG(metadata.st_mode):
             timestamped.append((metadata.st_mtime_ns, path.name, path))
     timestamped.sort(reverse=True)
-    for _timestamp, _name, old_backup in timestamped[keep:]:
-        if any(_paths_alias(old_backup, protected) for protected in protected_paths):
+
+    protected_backups = [
+        path
+        for _timestamp, _name, path in timestamped
+        if any(_paths_alias(path, protected) for protected in protected_paths)
+    ]
+    survivors = list(protected_backups)
+    for _timestamp, _name, path in timestamped:
+        if any(_paths_alias(path, survivor) for survivor in survivors):
+            continue
+        if len(survivors) < keep:
+            survivors.append(path)
+
+    for _timestamp, _name, old_backup in timestamped:
+        if any(_paths_alias(old_backup, survivor) for survivor in survivors):
             continue
         try:
             old_backup.unlink()

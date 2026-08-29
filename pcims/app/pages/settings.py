@@ -222,6 +222,13 @@ class SettingsPage(QWidget):
         show_error(self, "Backup failed", error)
 
     def restore_backup(self) -> None:
+        if self.tasks.active:
+            QMessageBox.information(
+                self,
+                "Background work in progress",
+                "Wait for the current background operation to finish before restoring a backup.",
+            )
+            return
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select PCIMS backup",
@@ -234,6 +241,14 @@ class SettingsPage(QWidget):
         if self._has_pending_changes():
             message += "\n\nUnrecorded purchase lines will be discarded after a successful restore."
         if not ask_confirmation(self, "Restore backup", message):
+            return
+        if self.tasks.active:
+            QMessageBox.information(
+                self,
+                "Background work in progress",
+                "Another background operation started while the restore was being prepared. "
+                "Wait for it to finish, then try again.",
+            )
             return
         self.window().setEnabled(False)
         self.restore_button.setText("Restoring backup…")

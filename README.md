@@ -4,8 +4,10 @@ PC Inventory Management Software is a cross-platform PySide6/Qt desktop
 application for purchases, component inventory, assembled PCs, sales, profit,
 return on investment (ROI), and verified SQLite backups.
 
-The PySide6 rewrite is currently available as a `2.0.0b4` prerelease. Beta
-builds use the current normalized database format and deliberately do not open
+The latest published PySide6 rewrite is the `2.0.0b4` prerelease. The rewrite
+branch now identifies itself as `2.0.0b5.dev0`; per-commit preview packages add
+the source commit to their filename. Beta builds use the current normalized
+database format and deliberately do not open
 databases created by the former Tkinter application.
 
 ## Platforms

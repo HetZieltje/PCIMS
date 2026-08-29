@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QGridLayout,
@@ -56,6 +58,8 @@ class SalesPage(AsyncCommandPage):
         self._detail_page = HistoryPage[Expense]((), 0, 0, 500)
         self._detail_sale_id: int | None = None
         self._detail_generation = 0
+        self._requested_query = (0, 0, 500, "")
+        self._request_coordinated_refresh: Callable[[], None] | None = None
         self.search = QLineEdit()
         self.search.setPlaceholderText(
             "Search purchases, serial numbers, vendors, locations, or sales…"
@@ -319,12 +323,17 @@ class SalesPage(AsyncCommandPage):
     def refresh(self) -> None:
         self.apply_snapshot(self.load_snapshot())
 
+    def set_refresh_request(self, request: Callable[[], None]) -> None:
+        """Route interactive history requests through the window coordinator."""
+        self._request_coordinated_refresh = request
+
     def load_snapshot(self) -> SalesSnapshot:
+        expense_offset, sale_offset, limit, search = self._requested_query
         return self.services.sales_snapshot(
-            self._expense_page.offset,
-            self._sale_page.offset,
-            self._expense_page.limit,
-            self.search.text(),
+            expense_offset,
+            sale_offset,
+            limit,
+            search,
         )
 
     def apply_snapshot(self, snapshot: SalesSnapshot) -> None:
@@ -355,6 +364,12 @@ class SalesPage(AsyncCommandPage):
         self.sale_page_label.setText(self._page_label(snapshot.sales))
         self.sale_newer.setEnabled(snapshot.sales.has_previous)
         self.sale_older.setEnabled(snapshot.sales.has_next)
+        self._requested_query = (
+            snapshot.expenses.offset,
+            snapshot.sales.offset,
+            snapshot.expenses.limit,
+            self._requested_query[3],
+        )
         self._clear_details()
 
     @staticmethod
@@ -443,13 +458,18 @@ class SalesPage(AsyncCommandPage):
         self._load_page(self._expense_page.offset, offset)
 
     def _load_page(self, expense_offset: int, sale_offset: int) -> None:
+        query = (
+            expense_offset,
+            sale_offset,
+            self._expense_page.limit,
+            self.search.text(),
+        )
+        self._requested_query = query
+        if self._request_coordinated_refresh is not None:
+            self._request_coordinated_refresh()
+            return
         self.run_operation(
-            lambda: self.services.sales_snapshot(
-                expense_offset,
-                sale_offset,
-                self._expense_page.limit,
-                self.search.text(),
-            ),
+            lambda: self.services.sales_snapshot(*query),
             self.apply_snapshot,
             "Unable to load history",
         )
