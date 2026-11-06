@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from pcims.app.async_page import AsyncCommandPage
 from pcims.app.common import ask_confirmation, show_error
-from pcims.app.dialogs import ProofEditDialog, SaleDialog
+from pcims.app.dialogs import ExpenseEditDialog, ProofEditDialog, SaleDialog
 from pcims.app.formatting import format_cents, format_percentage_basis_points
 from pcims.app.table_model import (
     Column,
@@ -137,9 +137,17 @@ class SalesPage(AsyncCommandPage):
             self.expense_table,
             (
                 ContextAction(
+                    "Edit component…",
+                    self.edit_selected_expense,
+                    lambda: (
+                        self._selected_editable_expense(self.expense_table) is not None
+                    ),
+                ),
+                ContextAction(
                     "Proofs of purchase…",
                     self.edit_selected_expense_proofs,
                     lambda: self._selected_expense(self.expense_table) is not None,
+                    separator_before=True,
                 ),
             ),
         )
@@ -154,6 +162,9 @@ class SalesPage(AsyncCommandPage):
         expense_navigation.addWidget(self.expense_page_label)
         expense_navigation.addWidget(self.expense_older)
         expense_navigation.addStretch()
+        expense_edit = QPushButton("Edit component…")
+        expense_edit.clicked.connect(self.edit_selected_expense)
+        expense_navigation.addWidget(expense_edit)
         expense_proofs = QPushButton("Proofs…")
         expense_proofs.clicked.connect(self.edit_selected_expense_proofs)
         expense_navigation.addWidget(expense_proofs)
@@ -283,9 +294,17 @@ class SalesPage(AsyncCommandPage):
             self.detail_table,
             (
                 ContextAction(
+                    "Edit component…",
+                    self.edit_selected_detail,
+                    lambda: (
+                        self._selected_editable_expense(self.detail_table) is not None
+                    ),
+                ),
+                ContextAction(
                     "Proofs of purchase…",
                     self.edit_selected_detail_proofs,
                     lambda: self._selected_expense(self.detail_table) is not None,
+                    separator_before=True,
                 ),
             ),
         )
@@ -299,6 +318,9 @@ class SalesPage(AsyncCommandPage):
         detail_navigation.addWidget(self.detail_page_label)
         detail_navigation.addWidget(self.detail_older)
         detail_navigation.addStretch()
+        detail_edit = QPushButton("Edit component…")
+        detail_edit.clicked.connect(self.edit_selected_detail)
+        detail_navigation.addWidget(detail_edit)
         detail_box = QGroupBox("Selected sale items")
         detail_layout = QVBoxLayout(detail_box)
         detail_layout.addWidget(self.detail_table)
@@ -407,6 +429,17 @@ class SalesPage(AsyncCommandPage):
             return
         self._edit_expense_proofs(expense)
 
+    def edit_selected_expense(self) -> None:
+        expense = self._selected_editable_expense(self.expense_table)
+        if expense is None:
+            QMessageBox.information(
+                self,
+                "Select one component",
+                "Select exactly one non-laptop purchase-history item.",
+            )
+            return
+        self._edit_expense(expense)
+
     def edit_selected_detail_proofs(self) -> None:
         expense = self._selected_expense(self.detail_table)
         if expense is None:
@@ -415,6 +448,17 @@ class SalesPage(AsyncCommandPage):
             )
             return
         self._edit_expense_proofs(expense)
+
+    def edit_selected_detail(self) -> None:
+        expense = self._selected_editable_expense(self.detail_table)
+        if expense is None:
+            QMessageBox.information(
+                self,
+                "Select one component",
+                "Select exactly one non-laptop sold item.",
+            )
+            return
+        self._edit_expense(expense)
 
     def _selected_expense(self, table: QTableView) -> Expense | None:
         ids = selected_ids(table)
@@ -425,6 +469,21 @@ class SalesPage(AsyncCommandPage):
         return next(
             (item for item in self._detail_page.records if item.id == ids[0]),
             None,
+        )
+
+    def _selected_editable_expense(self, table: QTableView) -> Expense | None:
+        expense = self._selected_expense(table)
+        return expense if expense is not None and not expense.is_laptop else None
+
+    def _edit_expense(self, expense: Expense) -> None:
+        replacement = ExpenseEditDialog.get_expense(expense, self)
+        if replacement is None:
+            return
+        self._clear_details()
+        self.run_command(
+            lambda: self.services.update_expense(expense.id, replacement),
+            self.data_changed.emit,
+            "Unable to edit component",
         )
 
     def _edit_expense_proofs(self, expense: Expense) -> None:
@@ -494,6 +553,15 @@ class SalesPage(AsyncCommandPage):
         self._detail_generation += 1
         generation = self._detail_generation
         self._detail_sale_id = sale_id
+        self._detail_page = HistoryPage(
+            (),
+            self._detail_page.offset,
+            self._detail_page.total,
+            self._detail_page.limit,
+        )
+        # Do not leave actions targeting the previously selected sale available
+        # while this asynchronous request is in flight.
+        self.detail_model.set_records(())
         self.detail_newer.setEnabled(False)
         self.detail_older.setEnabled(False)
         self.detail_page_label.setText("Loading...")

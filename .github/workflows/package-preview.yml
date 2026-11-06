@@ -3,13 +3,11 @@ name: Package preview
 on:
   push:
     branches: [pyside6-rewrite]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
-  attestations: write
-  artifact-metadata: write
 
 concurrency:
   group: package-preview-${{ github.ref }}
@@ -17,8 +15,17 @@ concurrency:
 
 jobs:
   gate:
-    runs-on: ubuntu-22.04
+    name: gate (${{ matrix.os }}, Python ${{ matrix.python-version }})
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.11", "3.13", "3.14"]
+        include:
+          - os: macos-15
+            python-version: "3.13"
+    runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
       SOURCE_DATE_EPOCH: "315532800"
@@ -26,23 +33,59 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: |
+            requirements.lock
             requirements-dev.lock
             requirements-build.lock
-      - name: Install Linux verification libraries
+      - name: Install Linux Qt runtime libraries
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y desktop-file-utils libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Validate Linux desktop integration
+        if: runner.os == 'Linux'
+        run: |
+          sed 's|@PCIMS_PYTHON@|/usr/bin/python3|' packaging/linux/pcims.desktop > /tmp/pcims.desktop
+          desktop-file-validate /tmp/pcims.desktop
       - run: python -m pip install --require-hashes -r requirements-dev.lock
       - run: python -m pip install --require-hashes -r requirements-build.lock
       - run: python -m pip install --no-build-isolation --no-deps -e .
       - run: python -m pip check
       - name: Run the complete release gate
         run: python scripts/verify.py --output-directory preview-gate-dist
+      - name: Install and smoke built wheel
+        shell: bash
+        run: |
+          wheel="$(find preview-gate-dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          smoke_script="$(pwd)/scripts/smoke-installed.py"
+          python -m pip uninstall -y pcims
+          python -m pip install --no-deps "$wheel"
+          python -m pip check
+          smoke_directory="$(mktemp -d)"
+          cd "$smoke_directory"
+          python "$smoke_script"
+      - name: Install the real Linux desktop application
+        if: runner.os == 'Linux' && matrix.python-version == '3.13'
+        run: |
+          install_data="$RUNNER_TEMP/pcims-linux-install"
+          XDG_DATA_HOME="$install_data" PYTHON=python sh scripts/install-linux.sh
+          desktop-file-validate "$install_data/applications/pcims.desktop"
+          test -x "$install_data/pcims/application/bin/python"
+      - name: Install the real Windows desktop application
+        if: runner.os == 'Windows' && matrix.python-version == '3.13'
+        env:
+          PCIMS_RUN_REAL_INSTALL: "1"
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test-windows-installer.ps1
 
   package:
     needs: gate
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +130,12 @@ jobs:
         shell: bash
         run: |
           version="$(python -c 'from pcims.version import application_version; print(application_version())')"
-          package_version="${version}-preview.${GITHUB_SHA::7}"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            python scripts/validate_release_tag.py "$GITHUB_REF_NAME"
+            package_version="$version"
+          else
+            package_version="${version}-preview.${GITHUB_SHA::7}"
+          fi
           echo "PCIMS_VERSION=$version" >> "$GITHUB_ENV"
           echo "PCIMS_PACKAGE_VERSION=$package_version" >> "$GITHUB_ENV"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -157,6 +205,11 @@ jobs:
   checksums:
     needs: package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download native packages and SBOMs
@@ -177,3 +230,41 @@ jobs:
           path: release-artifacts/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
+
+  release:
+    needs: [package, checksums]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: '*-*'
+          path: release-assets
+          merge-multiple: true
+      - name: Validate tag and publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="$(PYTHONPATH=. python scripts/validate_release_tag.py "$GITHUB_REF_NAME")"
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tagged_commit="$(git rev-parse "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          test "$tagged_commit" = "$GITHUB_SHA"
+          git fetch --no-tags origin pyside6-rewrite
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD
+          release_flags=()
+          if [[ "$version" =~ (a|b|rc)[0-9]+$ ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --verify-tag \
+            --title "PCIMS $version" \
+            --generate-notes \
+            "${release_flags[@]}"

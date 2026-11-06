@@ -6,6 +6,7 @@ from PySide6.QtCore import QByteArray, QSettings
 from PySide6.QtWidgets import QMainWindow, QSplitter, QTableView, QTabWidget
 
 from pcims.app.appearance import ThemeName, normalize_theme
+from pcims.contracts import DEFAULT_BACKUP_RETENTION, MAX_BACKUP_RETENTION
 
 
 class WindowStateStore:
@@ -23,19 +24,23 @@ class WindowStateStore:
     @property
     def backup_retention(self) -> int:
         try:
-            value = int(str(self._settings.value("backups/retention", 14)))
+            value = int(
+                str(self._settings.value("backups/retention", DEFAULT_BACKUP_RETENTION))
+            )
         except (TypeError, ValueError):
-            return 14
-        return value if 1 <= value <= 30 else 14
+            return DEFAULT_BACKUP_RETENTION
+        return value if 1 <= value <= MAX_BACKUP_RETENTION else DEFAULT_BACKUP_RETENTION
 
     @backup_retention.setter
     def backup_retention(self, value: int) -> None:
         if (
             isinstance(value, bool)
             or not isinstance(value, int)
-            or not 1 <= value <= 30
+            or not 1 <= value <= MAX_BACKUP_RETENTION
         ):
-            raise ValueError("Backup retention must be between 1 and 30.")
+            raise ValueError(
+                f"Backup retention must be between 1 and {MAX_BACKUP_RETENTION}."
+            )
         self._settings.setValue("backups/retention", value)
 
     @property

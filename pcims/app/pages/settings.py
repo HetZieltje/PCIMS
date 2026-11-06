@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 from pcims.app.common import ask_confirmation, show_error
 from pcims.app.tasks import TaskManager
 from pcims.contracts import (
+    DEFAULT_BACKUP_RETENTION,
+    MAX_BACKUP_RETENTION,
     BackupResult,
     MaintenanceOperations,
     RestoreResult,
@@ -49,7 +51,7 @@ class SettingsPage(QWidget):
         *,
         tasks: TaskManager,
         theme: str = "system",
-        backup_retention: int = 14,
+        backup_retention: int = DEFAULT_BACKUP_RETENTION,
         laptops_enabled: bool = False,
         has_pending_changes: Callable[[], bool] | None = None,
         parent: QWidget | None = None,
@@ -116,7 +118,7 @@ class SettingsPage(QWidget):
         self.export_button = QPushButton("Export purchases and sales…")
         self.export_button.clicked.connect(self.export_csv)
         self.backup_retention = QSpinBox()
-        self.backup_retention.setRange(1, 30)
+        self.backup_retention.setRange(1, MAX_BACKUP_RETENTION)
         self.backup_retention.setValue(backup_retention)
         self.backup_retention.setSuffix(" backups")
         self.backup_retention.valueChanged.connect(self.backup_retention_changed.emit)

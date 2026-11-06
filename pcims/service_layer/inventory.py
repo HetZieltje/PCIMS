@@ -42,8 +42,32 @@ class InventoryServices:
         self,
         items: Iterable[NewExpense],
         proofs_by_item: Iterable[Iterable[NewProof]] | None = None,
+        *,
+        draft_token: str | None = None,
+        payload_sha256: str | None = None,
     ) -> list[int]:
-        return add_expenses(items, proofs_by_item, database=self.database)
+        return add_expenses(
+            items,
+            proofs_by_item,
+            draft_token=draft_token,
+            payload_sha256=payload_sha256,
+            database=self.database,
+        )
+
+    def purchase_draft_committed(self, draft_token: str, payload_sha256: str) -> bool:
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT payload_sha256 FROM purchase_commits WHERE draft_token=?",
+                (draft_token,),
+            ).fetchone()
+        if row is None:
+            return False
+        if str(row["payload_sha256"]) != payload_sha256:
+            raise ValueError(
+                "A saved purchase draft was changed after it had already been recorded. "
+                "The draft has been preserved; contact support before discarding it."
+            )
+        return True
 
     def list_expenses(self) -> tuple[Expense, ...]:
         with self.database.transaction() as connection:

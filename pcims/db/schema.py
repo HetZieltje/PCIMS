@@ -6,6 +6,7 @@ from contextlib import closing
 from datetime import date
 from typing import Literal
 
+from pcims.contracts import MAX_BACKUP_RETENTION
 from pcims.db.connection import Database
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.domain import ITEM_CONDITIONS, ITEM_TYPES, MAX_NAME_LENGTH, MAX_NOTES_LENGTH
@@ -17,7 +18,7 @@ from pcims.proofs import (
     NewProof,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _ALLOWED_TYPES_SQL = ",".join(f"'{item_type}'" for item_type in ITEM_TYPES)
 _ALLOWED_CONDITIONS_SQL = ",".join(f"'{condition}'" for condition in ITEM_CONDITIONS)
 _VALID_NAME_SQL = f"""length(trim(name)) BETWEEN 1 AND {MAX_NAME_LENGTH}
@@ -473,6 +474,21 @@ SCHEMA_DEFINITIONS[
         WHEN NOT COALESCE(date(NEW.sale_date,'+0 days')=NEW.sale_date,0)
         BEGIN SELECT RAISE(ABORT,'invalid sale date'); END"""
 
+# Revision six is the final date-validation revision. Preserve its exact shape
+# before adding internal write-idempotency metadata in revision seven.
+SCHEMA_V6_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+
+SCHEMA_DEFINITIONS = dict(SCHEMA_V6_DEFINITIONS)
+SCHEMA_DEFINITIONS[("table", "purchase_commits")] = """CREATE TABLE purchase_commits (
+        draft_token TEXT PRIMARY KEY CHECK (
+            length(draft_token)=32 AND draft_token NOT GLOB '*[^0-9a-f]*'),
+        payload_sha256 TEXT NOT NULL CHECK (
+            length(payload_sha256)=64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*'),
+        item_count INTEGER NOT NULL CHECK (item_count>0)
+    ) STRICT"""
+
+SCHEMA_V7_DEFINITIONS = dict(SCHEMA_DEFINITIONS)
+
 
 def _normalize_schema_sql(sql: object) -> str:
     return " ".join(str(sql).split()).casefold()
@@ -492,7 +508,9 @@ SCHEMA_V2_CHECKSUM = _schema_checksum(SCHEMA_V2_DEFINITIONS)
 SCHEMA_V3_CHECKSUM = _schema_checksum(SCHEMA_V3_DEFINITIONS)
 SCHEMA_V4_CHECKSUM = _schema_checksum(SCHEMA_V4_DEFINITIONS)
 SCHEMA_V5_CHECKSUM = _schema_checksum(SCHEMA_V5_DEFINITIONS)
-SCHEMA_CHECKSUM = _schema_checksum(SCHEMA_DEFINITIONS)
+SCHEMA_V6_CHECKSUM = _schema_checksum(SCHEMA_V6_DEFINITIONS)
+SCHEMA_V7_CHECKSUM = _schema_checksum(SCHEMA_V7_DEFINITIONS)
+SCHEMA_CHECKSUM = SCHEMA_V7_CHECKSUM
 SCHEMA_REVISIONS = {
     1: (
         "initial inventory baseline",
@@ -521,8 +539,13 @@ SCHEMA_REVISIONS = {
     ),
     6: (
         "normalize calendar date validation across SQLite versions",
-        SCHEMA_CHECKSUM,
-        SCHEMA_DEFINITIONS,
+        SCHEMA_V6_CHECKSUM,
+        SCHEMA_V6_DEFINITIONS,
+    ),
+    7: (
+        "make persisted purchase drafts idempotent after a crash",
+        SCHEMA_V7_CHECKSUM,
+        SCHEMA_V7_DEFINITIONS,
     ),
 }
 
@@ -929,6 +952,8 @@ def _upgrade_schema(connection: sqlite3.Connection, version: int) -> None:
                 "sale_date_valid_on_update",
             ):
                 connection.execute(SCHEMA_DEFINITIONS[("trigger", trigger)])
+        elif version == 6:
+            connection.execute(SCHEMA_V7_DEFINITIONS[("table", "purchase_commits")])
         else:  # pragma: no cover - every supported source has a registered step
             raise SchemaVersionError(
                 f"No database migration is registered after version {version}."
@@ -959,7 +984,9 @@ def _initialize_database(database: Database) -> None:
     # A verified snapshot is mandatory before modifying a recognized older revision.
     from pcims.db.backup import create_backup
 
-    create_backup(database=database)
+    # Settings are loaded only after schema initialization. Retain the maximum
+    # here so an upgrade cannot prune copies the user configured the UI to keep.
+    create_backup(keep=MAX_BACKUP_RETENTION, database=database)
     with database.transaction(write=True) as connection:
         _upgrade_schema(connection, state)
         validate_schema(connection)

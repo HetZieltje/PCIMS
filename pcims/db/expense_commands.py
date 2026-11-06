@@ -21,6 +21,28 @@ from pcims.proofs import (
     validate_proof_collection,
 )
 
+_DRAFT_TOKEN_LENGTH = 32
+_SHA256_LENGTH = 64
+
+
+def _purchase_commit_identity(
+    draft_token: str | None,
+    payload_sha256: str | None,
+) -> tuple[str, str] | None:
+    """Validate the opaque identity used to make persisted drafts replay-safe."""
+    if draft_token is None and payload_sha256 is None:
+        return None
+    if not isinstance(draft_token, str) or not isinstance(payload_sha256, str):
+        raise ValidationError("Purchase draft identity is invalid.")
+    if (
+        len(draft_token) != _DRAFT_TOKEN_LENGTH
+        or any(character not in "0123456789abcdef" for character in draft_token)
+        or len(payload_sha256) != _SHA256_LENGTH
+        or any(character not in "0123456789abcdef" for character in payload_sha256)
+    ):
+        raise ValidationError("Purchase draft identity is invalid.")
+    return draft_token, payload_sha256
+
 
 def insert_expense_record(
     connection: sqlite3.Connection,
@@ -125,12 +147,15 @@ def add_expenses(
     items: Iterable[NewExpense],
     proofs_by_item: Iterable[Iterable[NewProof]] | None = None,
     *,
+    draft_token: str | None = None,
+    payload_sha256: str | None = None,
     database: Database,
 ) -> list[int]:
-    """Record one or more purchased items atomically."""
+    """Record one or more purchased items atomically and optionally idempotently."""
     expenses = tuple(items)
     if not expenses:
         raise ValidationError("At least one purchase item is required.")
+    commit_identity = _purchase_commit_identity(draft_token, payload_sha256)
     proof_groups = (
         tuple(() for _expense in expenses)
         if proofs_by_item is None
@@ -144,6 +169,29 @@ def add_expenses(
     except (TypeError, ValueError) as error:
         raise ValidationError(str(error)) from error
     with database.transaction(write=True) as connection:
+        if commit_identity is not None:
+            token, digest = commit_identity
+            existing = connection.execute(
+                """SELECT payload_sha256,item_count FROM purchase_commits
+                   WHERE draft_token=?""",
+                (token,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["payload_sha256"]) != digest or int(
+                    existing["item_count"]
+                ) != len(expenses):
+                    raise ValidationError(
+                        "This saved purchase draft was already recorded with "
+                        "different contents. Discard it and start a new purchase."
+                    )
+                # The original transaction has already made the items durable.
+                # Callers only need confirmation to safely clear the local draft.
+                return []
+            connection.execute(
+                """INSERT INTO purchase_commits
+                   (draft_token,payload_sha256,item_count) VALUES (?,?,?)""",
+                (token, digest, len(expenses)),
+            )
         identifiers: list[int] = []
         proof_id_cache: dict[int, int] = {}
         for expense, proofs in zip(expenses, proof_groups, strict=True):

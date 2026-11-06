@@ -8,6 +8,7 @@ from pathlib import Path
 from time import perf_counter
 
 from pcims.contracts import (
+    DEFAULT_BACKUP_RETENTION,
     BackupResult,
     DiagnosticCheck,
     DiagnosticsSnapshot,
@@ -16,6 +17,7 @@ from pcims.contracts import (
 )
 from pcims.db.connection import Database
 from pcims.db.schema import (
+    SCHEMA_VERSION,
     initialize_database,
     validate_current_data,
     validate_proof_files,
@@ -35,7 +37,7 @@ class MaintenanceServices:
     def create_backup(
         self,
         destination_directory: str | os.PathLike[str] | None = None,
-        keep: int = 14,
+        keep: int = DEFAULT_BACKUP_RETENTION,
     ) -> BackupResult:
         from pcims.db.backup import create_backup
 
@@ -109,7 +111,8 @@ class MaintenanceServices:
             check(
                 "Schema",
                 lambda: _validated_detail(
-                    lambda: validate_schema(connection), "Schema v4 is current."
+                    lambda: validate_schema(connection),
+                    f"Schema v{SCHEMA_VERSION} is current.",
                 ),
             )
             check(
@@ -165,7 +168,7 @@ class MaintenanceServices:
         self,
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
-        keep: int = 14,
+        keep: int = DEFAULT_BACKUP_RETENTION,
     ) -> RestoreResult:
         from pcims.db.backup import restore_backup
 

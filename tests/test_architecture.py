@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 class ArchitectureTests(unittest.TestCase):
     def test_runtime_uses_one_collision_safe_package_namespace(self):
@@ -261,6 +263,36 @@ class ArchitectureTests(unittest.TestCase):
         package_workflow = (
             root / ".github" / "workflows" / "package-preview.yml"
         ).read_text(encoding="utf-8")
+        package_configuration = yaml.load(package_workflow, Loader=yaml.BaseLoader)
+        self.assertIsInstance(package_configuration, dict)
+        self.assertEqual(package_configuration["permissions"], {"contents": "read"})
+        self.assertEqual(
+            package_configuration["on"]["push"],
+            {"branches": ["pyside6-rewrite"], "tags": ["v*"]},
+        )
+        package_jobs = package_configuration["jobs"]
+        self.assertEqual(
+            package_jobs["gate"]["strategy"]["matrix"]["include"],
+            [{"os": "macos-15", "python-version": "3.13"}],
+        )
+        attestation_permissions = {
+            "contents": "read",
+            "id-token": "write",
+            "attestations": "write",
+            "artifact-metadata": "write",
+        }
+        self.assertEqual(
+            package_jobs["package"]["permissions"], attestation_permissions
+        )
+        self.assertEqual(
+            package_jobs["checksums"]["permissions"], attestation_permissions
+        )
+        self.assertEqual(
+            package_jobs["release"]["if"],
+            "startsWith(github.ref, 'refs/tags/')",
+        )
+        self.assertEqual(package_jobs["release"]["needs"], ["package", "checksums"])
+        self.assertEqual(package_jobs["release"]["permissions"], {"contents": "write"})
         verification = (root / "scripts" / "verify.py").read_text(encoding="utf-8")
         artifact = (root / "scripts" / "release_artifact.py").read_text(
             encoding="utf-8"
@@ -336,6 +368,27 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("release-artifacts/SHA256SUMS", package_workflow)
         self.assertIn("package:\n    needs: gate", package_workflow)
         self.assertIn("python scripts/verify.py --output-directory", package_workflow)
+        self.assertIn("os: [windows-latest, ubuntu-latest]", package_workflow)
+        self.assertIn('python-version: ["3.11", "3.13", "3.14"]', package_workflow)
+        self.assertIn(
+            '- os: macos-15\n            python-version: "3.13"', package_workflow
+        )
+        self.assertIn("Install the real Linux desktop application", package_workflow)
+        self.assertIn("Install the real Windows desktop application", package_workflow)
+        self.assertIn("branches-ignore: [pyside6-rewrite]", workflow)
+        self.assertIn('tags: ["v*"]', package_workflow)
+        self.assertIn("scripts/validate_release_tag.py", package_workflow)
+        self.assertIn("gh release create", package_workflow)
+        self.assertIn("needs: [package, checksums]", package_workflow)
+        self.assertIn("if: startsWith(github.ref, 'refs/tags/')", package_workflow)
+        self.assertIn('test "$tagged_commit" = "$GITHUB_SHA"', package_workflow)
+        self.assertIn(
+            'git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD',
+            package_workflow,
+        )
+        workflow_permissions = package_workflow.split("jobs:", maxsplit=1)[0]
+        self.assertNotIn("id-token: write", workflow_permissions)
+        self.assertGreaterEqual(package_workflow.count("id-token: write"), 2)
         self.assertIn(
             'package_version="${version}-preview.${GITHUB_SHA::7}"', package_workflow
         )

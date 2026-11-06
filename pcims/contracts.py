@@ -22,6 +22,9 @@ from pcims.proofs import NewProof
 
 RecordT = TypeVar("RecordT")
 
+DEFAULT_BACKUP_RETENTION = 14
+MAX_BACKUP_RETENTION = 30
+
 
 @dataclass(frozen=True, slots=True)
 class BackupResult(os.PathLike[str]):
@@ -179,10 +182,16 @@ class PurchaseOperations(Protocol):
     def database_path(self) -> Path: ...
 
     def purchases_snapshot(self) -> PurchasesSnapshot: ...
+    def purchase_draft_committed(
+        self, draft_token: str, payload_sha256: str
+    ) -> bool: ...
     def add_expenses(
         self,
         items: Iterable[NewExpense],
         proofs_by_item: Iterable[Iterable[NewProof]] | None = None,
+        *,
+        draft_token: str | None = None,
+        payload_sha256: str | None = None,
     ) -> list[int]: ...
 
 
@@ -207,6 +216,7 @@ class SalesOperations(Protocol):
     ) -> HistoryPage[Expense]: ...
     def undo_sale(self, sale_id: int) -> None: ...
     def update_sale(self, sale_id: int, terms: SaleTerms) -> None: ...
+    def update_expense(self, expense_id: int, replacement: NewExpense) -> None: ...
     def replace_expense_proofs(
         self,
         expense_id: int,
@@ -231,7 +241,7 @@ class MaintenanceOperations(Protocol):
     def create_backup(
         self,
         destination_directory: str | os.PathLike[str] | None = None,
-        keep: int = 14,
+        keep: int = DEFAULT_BACKUP_RETENTION,
     ) -> BackupResult: ...
 
     def storage_summary(self) -> StorageSummary: ...
@@ -242,7 +252,7 @@ class MaintenanceOperations(Protocol):
         self,
         backup_path: str | os.PathLike[str],
         pre_restore_directory: str | os.PathLike[str] | None = None,
-        keep: int = 14,
+        keep: int = DEFAULT_BACKUP_RETENTION,
     ) -> RestoreResult: ...
 
     def export_csv(self, directory: str | os.PathLike[str]) -> tuple[Path, Path]: ...

@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-import shutil
 import sqlite3
 import stat
 import uuid
@@ -10,7 +9,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pcims.contracts import BackupResult, RestoreResult
+from pcims.contracts import DEFAULT_BACKUP_RETENTION, BackupResult, RestoreResult
 from pcims.db.connection import Database, register_database_collations
 from pcims.db.errors import DatabaseIntegrityError, SchemaVersionError
 from pcims.db.schema import validate_current_data, validate_proof_files, validate_schema
@@ -66,13 +65,36 @@ def _identical_backup(
                 continue
             if not path.is_file() or path.stat().st_size != candidate_size:
                 continue
+            if _database_has_sidecars(path):
+                continue
             if candidate_hash is None:
                 candidate_hash = _file_hash(candidate)
-            if _file_hash(path) == candidate_hash:
+            if (
+                _file_hash(path) == candidate_hash
+                and _validated_reuse_candidate(path)
+                and not _database_has_sidecars(path)
+            ):
                 return path
-        except OSError:
+        except (OSError, sqlite3.DatabaseError, ValueError):
             continue
     return None
+
+
+def _database_has_sidecars(path: Path) -> bool:
+    return any(Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm"))
+
+
+def _validated_reuse_candidate(path: Path) -> bool:
+    """Accept only complete, current, application-created backup snapshots."""
+    # Bytes 18 and 19 in SQLite's database header are the persistent read and
+    # write versions: 1/1 is rollback journaling, 2/2 is WAL. An immutable
+    # connection always reports "delete", so inspect the actual header here.
+    with path.open("rb") as candidate:
+        header = candidate.read(20)
+    if len(header) != 20 or header[18:20] != b"\x01\x01":
+        return False
+    _validate_database(path, immutable=True)
+    return True
 
 
 def backup_usage(*, database: Database) -> tuple[int, int]:
@@ -182,12 +204,29 @@ def _prune_backups(
             old_backup.unlink()
         except OSError as error:
             warnings.append(f"{old_backup}: {error}")
+            continue
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(f"{old_backup}{suffix}")
+            try:
+                sidecar.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                warnings.append(f"{sidecar}: {error}")
     return tuple(warnings)
 
 
-def validate_database(path: str | os.PathLike[str]) -> None:
+def _validate_database(
+    path: str | os.PathLike[str], *, immutable: bool = False
+) -> None:
     resolved = Path(path).expanduser().resolve()
-    with closing(sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)) as database:
+    uri = f"{resolved.as_uri()}?mode=ro"
+    if immutable:
+        # Backup-API snapshots are complete main files. Telling SQLite that
+        # explicitly avoids creating persistent .tmp-wal/.tmp-shm sidecars
+        # merely to validate a file that will immediately be moved or removed.
+        uri += "&immutable=1"
+    with closing(sqlite3.connect(uri, uri=True)) as database:
         register_database_collations(database)
         integrity = database.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
@@ -207,9 +246,35 @@ def validate_database(path: str | os.PathLike[str]) -> None:
             raise sqlite3.DatabaseError(str(error)) from error
 
 
+def validate_database(path: str | os.PathLike[str]) -> None:
+    """Validate a database path, including any committed WAL contents."""
+    _validate_database(path)
+
+
+def _materialize_snapshot(source: sqlite3.Connection, destination_path: Path) -> None:
+    """Write a self-contained snapshot that never depends on WAL sidecars."""
+    with closing(sqlite3.connect(destination_path)) as destination:
+        register_database_collations(destination)
+        source.backup(destination)
+        journal_mode = str(
+            destination.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+        )
+        if journal_mode.casefold() != "delete":
+            raise sqlite3.DatabaseError(
+                "Snapshot could not be normalized to DELETE journal mode."
+            )
+
+
+def _snapshot_database(source_path: Path, destination_path: Path) -> None:
+    """Copy one consistent SQLite snapshot, including committed WAL contents."""
+    source_uri = f"{source_path.as_uri()}?mode=ro"
+    with closing(sqlite3.connect(source_uri, uri=True)) as source:
+        _materialize_snapshot(source, destination_path)
+
+
 def _create_backup(
     destination_directory: str | os.PathLike[str] | None = None,
-    keep: int = 14,
+    keep: int = DEFAULT_BACKUP_RETENTION,
     *,
     database: Database,
     protected_paths: tuple[Path, ...] = (),
@@ -232,14 +297,11 @@ def _create_backup(
     reused = False
     published_path = final_path
     try:
-        with (
-            database.transaction() as source,
-            closing(sqlite3.connect(temporary_path)) as target,
-        ):
-            source.backup(target)
+        with database.transaction() as source:
+            _materialize_snapshot(source, temporary_path)
         if os.name != "nt":
             temporary_path.chmod(0o600)
-        validate_database(temporary_path)
+        _validate_database(temporary_path, immutable=True)
         identical = _identical_backup(
             destination, prefix, temporary_path, protected_paths
         )
@@ -277,7 +339,7 @@ def _create_backup(
 
 def create_backup(
     destination_directory: str | os.PathLike[str] | None = None,
-    keep: int = 14,
+    keep: int = DEFAULT_BACKUP_RETENTION,
     *,
     database: Database,
 ) -> BackupResult:
@@ -294,7 +356,7 @@ def create_backup(
 def _restore_backup(
     backup_path: str | os.PathLike[str],
     pre_restore_directory: str | os.PathLike[str] | None = None,
-    keep: int = 14,
+    keep: int = DEFAULT_BACKUP_RETENTION,
     *,
     database: Database,
 ) -> RestoreResult:
@@ -311,10 +373,13 @@ def _restore_backup(
     )
     primary_error: BaseException | None = None
     try:
-        shutil.copy2(source_path, staged_path)
+        # A user-selected database may still have committed rows in its WAL.
+        # SQLite's backup API materializes those rows into a self-contained
+        # staged main file; a filesystem copy would silently omit them.
+        _snapshot_database(source_path, staged_path)
         if os.name != "nt":
             staged_path.chmod(0o600)
-        validate_database(staged_path)
+        _validate_database(staged_path, immutable=True)
         safety_backup = _create_backup(
             pre_restore_directory,
             keep,
@@ -360,7 +425,7 @@ def _restore_backup(
 def restore_backup(
     backup_path: str | os.PathLike[str],
     pre_restore_directory: str | os.PathLike[str] | None = None,
-    keep: int = 14,
+    keep: int = DEFAULT_BACKUP_RETENTION,
     *,
     database: Database,
 ) -> RestoreResult:

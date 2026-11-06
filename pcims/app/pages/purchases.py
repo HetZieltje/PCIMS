@@ -63,6 +63,7 @@ class PurchasesPage(AsyncCommandPage):
         self._draft_load_error: Exception | None = None
         self._draft_save_error: Exception | None = None
         self._staged: list[DraftPurchase] = []
+        self._draft_reconciled = True
         if self._draft_store is not None:
             try:
                 self._staged = list(self._draft_store.load())
@@ -72,6 +73,7 @@ class PurchasesPage(AsyncCommandPage):
         self._next_staged_id = 1
         if self._staged:
             self._next_staged_id = max(item.staged_id for item in self._staged) + 1
+            self._draft_reconciled = False
         self._pending_proofs: tuple[NewProof, ...] = ()
 
         self.name = QLineEdit()
@@ -137,6 +139,7 @@ class PurchasesPage(AsyncCommandPage):
         form.addRow("Notes", self.notes)
         form.addRow("Proofs of purchase", proof_widget)
         add_button = QPushButton("Add to purchase")
+        self._add_button = add_button
         add_button.clicked.connect(self.add_line)
         form.addRow("", add_button)
         form_box = QGroupBox("New purchase line")
@@ -191,6 +194,7 @@ class PurchasesPage(AsyncCommandPage):
         )
         self.table.setColumnHidden(0, True)
         remove_button = QPushButton("Remove selected")
+        self._remove_button = remove_button
         remove_button.clicked.connect(self.remove_selected)
         self.commit_button = QPushButton("Record purchase")
         self.commit_button.setDefault(True)
@@ -213,11 +217,47 @@ class PurchasesPage(AsyncCommandPage):
     def refresh(self) -> None:
         self.apply_snapshot(self.load_snapshot())
 
-    def load_snapshot(self) -> PurchasesSnapshot:
-        return self.services.purchases_snapshot()
+    def load_snapshot(self) -> tuple[PurchasesSnapshot, bool]:
+        snapshot = self.services.purchases_snapshot()
+        committed = False
+        if (
+            self._staged
+            and self._draft_store is not None
+            and self._draft_store.draft_token is not None
+            and self._draft_store.payload_sha256 is not None
+        ):
+            committed = self.services.purchase_draft_committed(
+                self._draft_store.draft_token,
+                self._draft_store.payload_sha256,
+            )
+        return snapshot, committed
 
-    def apply_snapshot(self, snapshot: PurchasesSnapshot) -> None:
+    def apply_snapshot(
+        self, result: tuple[PurchasesSnapshot, bool] | PurchasesSnapshot
+    ) -> None:
+        snapshot, already_recorded = (
+            result if isinstance(result, tuple) else (result, False)
+        )
         self._completion_model.setStringList(list(snapshot.expense_names))
+        if already_recorded:
+            count = len(self._staged)
+            try:
+                if self._draft_store is not None:
+                    self._draft_store.finalize()
+            except OSError as finalization_error:
+                self._draft_save_error = finalization_error
+                show_error(self, "Purchase was already recorded", finalization_error)
+            self._staged.clear()
+            self._render_staged(persist=False)
+            self.data_changed.emit()
+            QMessageBox.information(
+                self,
+                "Purchase recovered",
+                f"A saved purchase of {count} item(s) had already been recorded. "
+                "It was not recorded again.",
+            )
+        self._draft_reconciled = True
+        self._render_staged(persist=False)
         if self._draft_load_error is not None:
             error = self._draft_load_error
             self._draft_load_error = None
@@ -259,6 +299,8 @@ class PurchasesPage(AsyncCommandPage):
         self._render_pending_proofs()
 
     def add_line(self) -> None:
+        if not self._draft_reconciled:
+            return
         name = self.name.text().strip()
         if not name:
             QMessageBox.warning(self, "Missing name", "Enter an item name.")
@@ -329,11 +371,15 @@ class PurchasesPage(AsyncCommandPage):
         self._render_staged()
 
     def remove_selected(self) -> None:
+        if not self._draft_reconciled:
+            return
         ids = set(selected_ids(self.table))
         self._staged = [item for item in self._staged if item.staged_id not in ids]
         self._render_staged()
 
     def commit_purchase(self) -> None:
+        if not self._draft_reconciled:
+            return
         if not self._staged:
             QMessageBox.information(
                 self, "Nothing to record", "Add at least one item first."
@@ -342,11 +388,29 @@ class PurchasesPage(AsyncCommandPage):
         items = [item.expense for item in self._staged]
         proofs = [item.proofs for item in self._staged]
         count = len(items)
-        operation = (
-            (lambda: self.services.add_expenses(items, proofs))
-            if any(proofs)
-            else (lambda: self.services.add_expenses(items))
-        )
+        draft_token: str | None = None
+        payload_sha256: str | None = None
+        if self._draft_store is not None:
+            try:
+                draft_token, payload_sha256 = self._draft_store.prepare_submission(
+                    tuple(self._staged)
+                )
+            except (OSError, TypeError, ValueError) as error:
+                show_error(self, "Unable to prepare purchase", error)
+                return
+        if draft_token is None or payload_sha256 is None:
+            operation = (
+                (lambda: self.services.add_expenses(items, proofs))
+                if any(proofs)
+                else (lambda: self.services.add_expenses(items))
+            )
+        else:
+            operation = lambda: self.services.add_expenses(
+                items,
+                proofs if any(proofs) else None,
+                draft_token=draft_token,
+                payload_sha256=payload_sha256,
+            )
         self.run_command(
             operation,
             lambda: self._purchase_recorded(count),
@@ -354,16 +418,36 @@ class PurchasesPage(AsyncCommandPage):
         )
 
     def _purchase_recorded(self, count: int) -> None:
+        finalization_error: Exception | None = None
+        if self._draft_store is not None and self._draft_load_error is None:
+            try:
+                self._draft_store.finalize()
+            except OSError as error:
+                finalization_error = error
+                self._draft_save_error = error
+            else:
+                self._draft_save_error = None
         self._staged.clear()
-        self._render_staged()
+        # finalize() already removed the active draft path. Avoid a second
+        # unlink so cleanup failure cannot turn into a misleading save error.
+        self._render_staged(persist=False)
         self.data_changed.emit()
-        QMessageBox.information(self, "Purchase recorded", f"Recorded {count} item(s).")
+        if finalization_error is not None:
+            show_error(
+                self,
+                "Purchase recorded, but draft cleanup failed",
+                finalization_error,
+            )
+        else:
+            QMessageBox.information(
+                self, "Purchase recorded", f"Recorded {count} item(s)."
+            )
 
-    def _render_staged(self) -> None:
+    def _render_staged(self, *, persist: bool = True) -> None:
         # Do not turn a failed load into an implicit delete during construction.
         # The unreadable file remains available for inspection or recovery until
         # the user explicitly replaces or discards the pending work.
-        if self._draft_store is not None and self._draft_load_error is None:
+        if persist and self._draft_store is not None and self._draft_load_error is None:
             try:
                 self._draft_store.save(tuple(self._staged))
             except (OSError, TypeError, ValueError) as error:
@@ -377,6 +461,9 @@ class PurchasesPage(AsyncCommandPage):
             f"{format_cents(sum(item.expense.price_cents for item in self._staged))}"
         )
         self.commit_button.setEnabled(bool(self._staged))
+        self.commit_button.setEnabled(bool(self._staged) and self._draft_reconciled)
+        self._add_button.setEnabled(self._draft_reconciled)
+        self._remove_button.setEnabled(self._draft_reconciled and bool(self._staged))
 
     def _render_pending_proofs(self) -> None:
         count = len(self._pending_proofs)

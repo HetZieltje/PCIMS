@@ -2,6 +2,7 @@ import csv
 import gc
 import json
 import os
+import shutil
 import sqlite3
 import stat
 import tempfile
@@ -15,13 +16,18 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pcims.db.backup as backup_module
-from pcims.contracts import BackupResult
+from pcims.contracts import MAX_BACKUP_RETENTION, BackupResult
 from pcims.db.backup import (
     create_backup,
     restore_backup,
     validate_database,
 )
-from pcims.db.connection import Database, default_database, get_data_dir
+from pcims.db.connection import (
+    Database,
+    default_database,
+    get_data_dir,
+    register_database_collations,
+)
 from pcims.db.errors import (
     DatabaseIntegrityError,
     NotFoundError,
@@ -41,6 +47,7 @@ from pcims.db.schema import (
     SCHEMA_V3_DEFINITIONS,
     SCHEMA_V4_DEFINITIONS,
     SCHEMA_V5_DEFINITIONS,
+    SCHEMA_V6_DEFINITIONS,
     SCHEMA_VERSION,
     initialize_database,
 )
@@ -526,7 +533,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(store.load(), (line,))
         payload = json.loads(store.path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["version"], 2)
+        self.assertEqual(payload["version"], 3)
         self.assertEqual(len(payload["proof_files"]), 1)
         store.discard()
         self.assertEqual(store.load(), ())
@@ -641,6 +648,7 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 "laptops",
                 "laptop_slots",
                 "laptop_sales",
+                "purchase_commits",
             },
         )
         self.assertEqual(
@@ -863,7 +871,14 @@ class DatabaseWorkflowTests(unittest.TestCase):
             )
             database.commit()
 
-        initialize_database(migration_database)
+        with patch(
+            "pcims.db.backup.create_backup", wraps=backup_module.create_backup
+        ) as migration_backup:
+            initialize_database(migration_database)
+
+        self.assertEqual(
+            migration_backup.call_args.kwargs["keep"], MAX_BACKUP_RETENTION
+        )
 
         with migration_database.transaction() as database:
             tables = {
@@ -1055,6 +1070,69 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         with closing(sqlite3.connect(backups[0])) as backup:
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 5)
+
+    def test_v6_schema_adds_purchase_commit_guard_with_verified_backup(self):
+        migration_path = Path(self.temporary_directory.name) / "schema-v6.db"
+        migration_database = Database.at(migration_path)
+        with closing(migration_database.connect(create=True)) as database:
+            for statement in SCHEMA_V6_DEFINITIONS.values():
+                database.execute(statement)
+            database.executemany(
+                """INSERT INTO schema_migrations
+                   (version,name,checksum,applied_at) VALUES (?,?,?,?)""",
+                (
+                    (
+                        version,
+                        SCHEMA_REVISIONS[version][0],
+                        SCHEMA_REVISIONS[version][1],
+                        f"2026-08-14T12:00:0{version}Z",
+                    )
+                    for version in range(1, 7)
+                ),
+            )
+            database.execute("PRAGMA user_version=6")
+            database.commit()
+
+        initialize_database(migration_database)
+
+        with migration_database.transaction() as database:
+            self.assertEqual(
+                database.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+            )
+            columns = {
+                row[1]
+                for row in database.execute("PRAGMA table_info(purchase_commits)")
+            }
+        self.assertEqual(columns, {"draft_token", "payload_sha256", "item_count"})
+        backups = tuple((migration_path.parent / "backups").glob("pcims_*.db"))
+        self.assertEqual(len(backups), 1)
+        with closing(sqlite3.connect(backups[0])) as backup:
+            self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 6)
+
+    def test_purchase_commit_token_prevents_duplicate_batch_and_rejects_changes(self):
+        item = NewExpense.create("Idempotent purchase", "RAM", 25, TEST_DATE)
+        token = "a" * 32
+        digest = "b" * 64
+
+        first = self.services.add_expenses(
+            [item], draft_token=token, payload_sha256=digest
+        )
+        replay = self.services.add_expenses(
+            [item], draft_token=token, payload_sha256=digest
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(replay, [])
+        self.assertEqual(
+            [expense.name for expense in self.services.list_expenses()],
+            ["Idempotent purchase"],
+        )
+        with self.assertRaisesRegex(ValidationError, "different contents"):
+            self.services.add_expenses(
+                [NewExpense.create("Changed", "RAM", 25, TEST_DATE)],
+                draft_token=token,
+                payload_sha256="c" * 64,
+            )
 
     def test_current_schema_rejects_extra_tables_and_missing_triggers(self):
         with self.database.transaction() as database:
@@ -1283,6 +1361,20 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(
             all(item.is_available for item in self.services.list_inventory())
         )
+
+    def test_disassembly_never_uses_pc_id_as_an_inventory_item_id(self):
+        unrelated_cooler = self.buy("Unrelated Noctua cooler", "Cooler", 40)
+        target_part = self.buy("Target PC part", "CPU", 80)
+        target_pc = self.services.assemble_pc("Target PC", [target_part])
+        self.assertEqual(target_pc, unrelated_cooler)
+        other_pc = self.services.assemble_pc("Other PC", [unrelated_cooler])
+
+        self.services.disassemble_pc(target_pc)
+
+        items = {item.id: item for item in self.services.list_inventory()}
+        self.assertTrue(items[target_part].is_available)
+        self.assertEqual(items[unrelated_cooler].pc_id, other_pc)
+        self.assertFalse(items[unrelated_cooler].is_available)
 
     def test_membership_positions_are_unique_within_each_record(self):
         ids = [self.buy("RAM", "RAM", 40), self.buy("RAM", "RAM", 45)]
@@ -2081,6 +2173,27 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(warnings, ())
         self.assertEqual(tuple(backup_directory.glob(f"{prefix}*.db")), (protected,))
 
+    def test_backup_retention_removes_sidecars_with_pruned_database(self):
+        backup_directory = Path(self.temporary_directory.name) / "prune-sidecars"
+        backup_directory.mkdir()
+        prefix = "pcims_test_"
+        oldest = backup_directory / f"{prefix}old.db"
+        newest = backup_directory / f"{prefix}new.db"
+        oldest.write_bytes(b"old")
+        newest.write_bytes(b"new")
+        sidecars = tuple(Path(f"{oldest}{suffix}") for suffix in ("-wal", "-shm"))
+        for sidecar in sidecars:
+            sidecar.write_bytes(b"orphaned journal")
+        os.utime(oldest, ns=(1_000_000_000, 1_000_000_000))
+        os.utime(newest, ns=(2_000_000_000, 2_000_000_000))
+
+        warnings = backup_module._prune_backups(backup_directory, prefix, 1)
+
+        self.assertEqual(warnings, ())
+        self.assertFalse(oldest.exists())
+        self.assertTrue(newest.exists())
+        self.assertTrue(all(not sidecar.exists() for sidecar in sidecars))
+
     def test_restore_retention_never_prunes_the_selected_source(self):
         self.buy("Protected source", "CPU", 10)
         source = create_backup(keep=20, database=self.database)
@@ -2188,6 +2301,15 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertTrue(first.path.is_file())
         self.assertTrue(second.reused)
         self.assertEqual(len(tuple(first.path.parent.glob("pcims_*.db"))), 1)
+        self.assertEqual(tuple(first.path.parent.glob("*.tmp-*")), ())
+        validate_database(second)
+        self.assertTrue(
+            all(
+                not Path(f"{second.path}{suffix}").exists()
+                for suffix in ("-wal", "-shm")
+            )
+        )
+        self.assertEqual(second.path.read_bytes()[18:20], b"\x01\x01")
 
     def test_backup_reuse_hashes_large_candidate_at_most_once(self):
         directory = Path(self.temporary_directory.name) / "hash-scan"
@@ -2207,13 +2329,53 @@ class DatabaseWorkflowTests(unittest.TestCase):
                 candidate_hashes += 1
             return original_hash(path)
 
-        with patch("pcims.db.backup._file_hash", side_effect=observed_hash):
+        with (
+            patch("pcims.db.backup._file_hash", side_effect=observed_hash),
+            patch("pcims.db.backup._validated_reuse_candidate", return_value=True),
+        ):
             result = backup_module._identical_backup(
                 directory, "pcims_test_", candidate
             )
 
         self.assertEqual(result, match)
         self.assertEqual(candidate_hashes, 1)
+
+    def test_backup_never_reuses_candidate_with_committed_wal(self):
+        self.buy("Live state", "CPU", 10)
+        backup_directory = Path(self.temporary_directory.name) / "wal-candidate"
+        first = create_backup(backup_directory, keep=2, database=self.database)
+        modified = sqlite3.connect(first.path)
+        try:
+            register_database_collations(modified)
+            modified.execute("PRAGMA foreign_keys=ON")
+            modified.execute("PRAGMA journal_mode=WAL")
+            modified.execute("PRAGMA wal_autocheckpoint=0")
+            item = modified.execute(
+                """INSERT INTO inventory_items
+                   (name,item_type,price_cents,purchase_date)
+                   VALUES ('Only in backup WAL','RAM',100,'2026-08-14')"""
+            )
+            modified.execute(
+                "INSERT INTO item_costs (item_id,cash_paid_cents,origin) "
+                "VALUES (?,?,?)",
+                (item.lastrowid, 100, "purchase"),
+            )
+            modified.commit()
+            self.assertGreater(Path(f"{first.path}-wal").stat().st_size, 0)
+
+            second = create_backup(backup_directory, keep=2, database=self.database)
+        finally:
+            modified.close()
+
+        self.assertFalse(second.reused)
+        self.assertNotEqual(second.path, first.path)
+        with closing(sqlite3.connect(second.path)) as database:
+            self.assertEqual(
+                database.execute(
+                    "SELECT name FROM inventory_items ORDER BY id"
+                ).fetchall(),
+                [("Live state",)],
+            )
 
     def test_non_file_cannot_consume_a_backup_retention_slot(self):
         first = create_backup(keep=2, database=self.database)
@@ -2363,6 +2525,54 @@ class DatabaseWorkflowTests(unittest.TestCase):
             [item.name for item in self.services.list_expenses()], ["Restored state"]
         )
 
+    def test_restore_materializes_committed_source_wal_contents(self):
+        source_path = Path(self.temporary_directory.name) / "active-source.db"
+        source_database = Database.at(source_path)
+        initialize_database(source_database)
+        source_connection = source_database.connect()
+        try:
+            source_connection.execute("PRAGMA wal_autocheckpoint=0")
+            item = source_connection.execute(
+                """INSERT INTO inventory_items
+                   (name,item_type,price_cents,purchase_date)
+                   VALUES ('Committed in WAL','CPU',1000,'2026-08-14')"""
+            )
+            source_connection.execute(
+                "INSERT INTO item_costs (item_id,cash_paid_cents,origin) "
+                "VALUES (?,?,?)",
+                (item.lastrowid, 1000, "purchase"),
+            )
+            source_connection.commit()
+            self.assertGreater(Path(f"{source_path}-wal").stat().st_size, 0)
+
+            main_file_only = source_path.with_name("source-main-only.db")
+            shutil.copy2(source_path, main_file_only)
+            with closing(sqlite3.connect(main_file_only)) as main_database:
+                register_database_collations(main_database)
+                self.assertEqual(
+                    main_database.execute(
+                        "SELECT COUNT(*) FROM inventory_items"
+                    ).fetchone()[0],
+                    0,
+                )
+
+            restore_backup(source_path, database=self.database)
+        finally:
+            source_connection.close()
+
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()],
+            ["Committed in WAL"],
+        )
+        self.assertEqual(
+            tuple(
+                self.database_path.parent.glob(
+                    f".{self.database_path.name}.*.restore.tmp-*"
+                )
+            ),
+            (),
+        )
+
     def test_failed_restore_replace_leaves_live_database_self_contained(self):
         self.buy("Keep current state", "CPU", 10)
         source_database = Database.at(
@@ -2393,6 +2603,14 @@ class DatabaseWorkflowTests(unittest.TestCase):
         self.assertEqual(
             [item.name for item in self.services.list_expenses()],
             ["Keep current state"],
+        )
+        self.assertEqual(
+            tuple(
+                self.database_path.parent.glob(
+                    f".{self.database_path.name}.*.restore.tmp-*"
+                )
+            ),
+            (),
         )
 
     def test_post_replace_directory_failure_reports_completed_restore_warning(self):

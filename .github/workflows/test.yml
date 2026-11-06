@@ -2,6 +2,7 @@ name: Test
 
 on:
   push:
+    branches-ignore: [pyside6-rewrite]
   pull_request:
 
 permissions:

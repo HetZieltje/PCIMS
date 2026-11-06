@@ -5,6 +5,7 @@ import binascii
 import hashlib
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -15,7 +16,7 @@ from PySide6.QtCore import QStandardPaths
 from pcims.domain import ItemDetails, NewExpense
 from pcims.proofs import MAX_TOTAL_PROOF_BYTES, NewProof
 
-_DRAFT_VERSION = 2
+_DRAFT_VERSION = 3
 _MAX_DRAFT_JSON_BYTES = MAX_TOTAL_PROOF_BYTES * 2
 
 
@@ -35,6 +36,8 @@ class PurchaseDraftStore:
         )
         key = hashlib.sha256(str(database_path.resolve()).encode()).hexdigest()[:16]
         self.path = location / "drafts" / f"purchase-{key}.json"
+        self.draft_token: str | None = None
+        self.payload_sha256: str | None = None
 
     def load(self) -> tuple[DraftPurchase, ...]:
         if not self.path.exists():
@@ -42,7 +45,10 @@ class PurchaseDraftStore:
         if self.path.stat().st_size > _MAX_DRAFT_JSON_BYTES:
             raise ValueError("The saved purchase draft is too large.")
         payload: Any = json.loads(self.path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("version") != _DRAFT_VERSION:
+        if not isinstance(payload, dict) or payload.get("version") not in (
+            2,
+            _DRAFT_VERSION,
+        ):
             raise ValueError("The saved purchase draft uses an unsupported format.")
         lines = payload.get("lines")
         proof_files = payload.get("proof_files")
@@ -53,12 +59,27 @@ class PurchaseDraftStore:
         identifiers = tuple(line.staged_id for line in decoded)
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("Saved purchase draft line IDs must be unique.")
+        token = payload.get("draft_token")
+        if payload.get("version") == 2:
+            token = uuid.uuid4().hex
+        if (
+            not isinstance(token, str)
+            or len(token) != 32
+            or any(character not in "0123456789abcdef" for character in token)
+        ):
+            raise ValueError("Saved purchase draft identity is invalid.")
+        self.draft_token = token
+        self.payload_sha256 = self._fingerprint(decoded)
+        if payload.get("version") == 2:
+            self.save(decoded)
         return decoded
 
     def save(self, lines: tuple[DraftPurchase, ...]) -> None:
         if not lines:
             self.discard()
             return
+        if self.draft_token is None:
+            self.draft_token = uuid.uuid4().hex
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if os.name != "nt":
             self.path.parent.chmod(0o700)
@@ -81,6 +102,7 @@ class PurchaseDraftStore:
         payload = json.dumps(
             {
                 "version": _DRAFT_VERSION,
+                "draft_token": self.draft_token,
                 "proof_files": {
                     digest: {
                         "media_type": proof.media_type,
@@ -102,6 +124,7 @@ class PurchaseDraftStore:
                 draft_file.flush()
                 os.fsync(draft_file.fileno())
             os.replace(temporary, self.path)
+            self.payload_sha256 = self._fingerprint(lines)
             if os.name != "nt":
                 self.path.chmod(0o600)
                 descriptor = os.open(
@@ -123,6 +146,66 @@ class PurchaseDraftStore:
             self.path.unlink()
         except FileNotFoundError:
             pass
+        self.draft_token = None
+        self.payload_sha256 = None
+
+    def prepare_submission(self, lines: tuple[DraftPurchase, ...]) -> tuple[str, str]:
+        """Durably save and identify the exact batch before its database commit."""
+        if not lines:
+            raise ValueError("A purchase draft cannot be empty.")
+        self.save(lines)
+        if self.draft_token is None or self.payload_sha256 is None:
+            raise OSError("Purchase draft identity could not be saved.")
+        return self.draft_token, self.payload_sha256
+
+    @classmethod
+    def _fingerprint(cls, lines: tuple[DraftPurchase, ...]) -> str:
+        payload = json.dumps(
+            [
+                {
+                    **cls._encode_line(line),
+                    "proofs": [
+                        {
+                            "file_name": proof.file_name,
+                            "media_type": proof.media_type,
+                            "sha256": hashlib.sha256(proof.content).hexdigest(),
+                        }
+                        for proof in line.proofs
+                    ],
+                }
+                for line in lines
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def finalize(self) -> None:
+        """Make a committed draft impossible to reload before best-effort cleanup."""
+        quarantine = self.path.with_name(
+            f".{self.path.name}.{uuid.uuid4().hex}.committed"
+        )
+        try:
+            os.replace(self.path, quarantine)
+        except FileNotFoundError:
+            return
+        if os.name != "nt":
+            descriptor = os.open(
+                self.path.parent,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        try:
+            quarantine.unlink()
+        except OSError:
+            # The atomic rename is the safety boundary. A locked committed
+            # artifact may remain, but load() only ever reads the active path.
+            pass
+        self.draft_token = None
+        self.payload_sha256 = None
 
     @staticmethod
     def _encode_line(line: DraftPurchase) -> dict[str, Any]:

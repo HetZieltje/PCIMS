@@ -60,7 +60,7 @@ from pcims.app.tasks import TaskManager
 from pcims.contracts import BackupResult
 from pcims.db.connection import Database
 from pcims.db.errors import ValidationError
-from pcims.domain import NewExpense, SaleTerms
+from pcims.domain import ItemDetails, NewExpense, SaleTerms
 from pcims.drafts import PurchaseDraftStore
 from pcims.proofs import NewProof
 from pcims.services import ApplicationServices
@@ -543,6 +543,41 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertIn("simulated disk failure", str(show_error.call_args.args[2]))
         page.deleteLater()
 
+    def test_recorded_purchase_cannot_reload_when_draft_cleanup_is_locked(self):
+        store = PurchaseDraftStore(
+            self.database.path,
+            Path(self.temporary_directory.name) / "locked-draft-root",
+        )
+        page = PurchasesPage(self.services, tasks=self.tasks, draft_store=store)
+        page.refresh()
+        page.name.setText("Recorded once")
+        page.type.setCurrentText("RAM")
+        page.price.setText("25.00")
+        page.add_line()
+        self.assertTrue(store.path.exists())
+        real_unlink = Path.unlink
+
+        def fail_committed_cleanup(path, *args, **kwargs):
+            if path.name.endswith(".committed"):
+                raise PermissionError("committed draft is locked")
+            return real_unlink(path, *args, **kwargs)
+
+        with (
+            patch.object(Path, "unlink", new=fail_committed_cleanup),
+            patch("pcims.app.pages.purchases.QMessageBox.information"),
+        ):
+            page.commit_purchase()
+            self.wait_for_page(page)
+
+        self.assertFalse(page.has_staged_items)
+        self.assertFalse(store.path.exists())
+        self.assertEqual(store.load(), ())
+        self.assertEqual(
+            [item.name for item in self.services.list_expenses()],
+            ["Recorded once"],
+        )
+        page.deleteLater()
+
     def test_unreadable_purchase_draft_is_retained_until_explicit_discard(self):
         store = PurchaseDraftStore(
             self.database.path,
@@ -785,10 +820,10 @@ class QtWorkflowTests(unittest.TestCase):
         outcome = BackupResult(Path(self.temporary_directory.name) / "verified.db")
         original_add = ApplicationServices.add_expenses
 
-        def slow_add(services, items):
+        def slow_add(services, items, *args, **kwargs):
             mutation_started.set()
             release_mutation.wait(2)
-            return original_add(services, items)
+            return original_add(services, items, *args, **kwargs)
 
         def observed_backup(services, *_args, **_kwargs):
             backed_up_names.extend(item.name for item in services.list_expenses())
@@ -1098,11 +1133,32 @@ class QtWorkflowTests(unittest.TestCase):
         component_dialog.purchase_date.setDate(
             QDate(edited_date.year, edited_date.month, edited_date.day)
         )
+        component_dialog.vendor.setText("Edited vendor")
+        component_dialog.serial_number.setText("SERIAL-123")
+        component_dialog.storage_location.setText("Shelf B")
+        component_dialog.condition.setCurrentText("Refurbished")
+        component_dialog.has_warranty.setChecked(True)
+        warranty_date = TEST_DATE + timedelta(days=365)
+        component_dialog.warranty_until.setDate(
+            QDate(warranty_date.year, warranty_date.month, warranty_date.day)
+        )
+        component_dialog.notes.setPlainText("Tested and cleaned")
         component_dialog._validate()
         self.assertEqual(
             component_dialog._replacement,
             NewExpense.create(
-                "Edited RAM", "GPU", "123.45", TEST_DATE - timedelta(days=2)
+                "Edited RAM",
+                "GPU",
+                "123.45",
+                TEST_DATE - timedelta(days=2),
+                ItemDetails(
+                    vendor="Edited vendor",
+                    serial_number="SERIAL-123",
+                    storage_location="Shelf B",
+                    condition="Refurbished",
+                    warranty_until=warranty_date,
+                    notes="Tested and cleaned",
+                ),
             ),
         )
 
@@ -1858,6 +1914,61 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual(page.detail_model.index(0, 0).data(), str(first_item))
         page.deleteLater()
 
+    def test_loading_sale_details_cannot_edit_a_stale_previous_item(self):
+        first_item = self.purchase("First", "Extra", 1)
+        second_item = self.purchase("Second", "Extra", 1)
+        first_sale = self.services.sell_items(
+            [first_item], SaleTerms.create(2, TEST_DATE)
+        )
+        second_sale = self.services.sell_items(
+            [second_item], SaleTerms.create(2, TEST_DATE)
+        )
+        page = SalesPage(self.services, tasks=self.tasks)
+        page.refresh()
+        page.sale_table.selectRow(1)
+        self.wait_until(
+            lambda: (
+                page._detail_sale_id == first_sale and page.detail_model.rowCount() == 1
+            )
+        )
+        page.detail_table.selectRow(0)
+        slow_started = threading.Event()
+        release_slow = threading.Event()
+        original = ApplicationServices.sale_item_page
+
+        def delayed_details(services, sale_id, offset=0, page_size=500):
+            if sale_id == second_sale:
+                slow_started.set()
+                release_slow.wait(2)
+            return original(services, sale_id, offset, page_size)
+
+        try:
+            with (
+                patch.object(
+                    ApplicationServices, "sale_item_page", new=delayed_details
+                ),
+                patch.object(ExpenseEditDialog, "get_expense") as edit_dialog,
+                patch("pcims.app.pages.sales.QMessageBox.information") as information,
+            ):
+                page.sale_table.selectRow(0)
+                self.assertTrue(slow_started.wait(1))
+                self.assertEqual(page._detail_sale_id, second_sale)
+                self.assertEqual(page.detail_model.rowCount(), 0)
+                self.assertEqual(page.detail_page_label.text(), "Loading...")
+
+                page.edit_selected_detail()
+
+                edit_dialog.assert_not_called()
+                information.assert_called_once()
+                release_slow.set()
+                self.wait_until(lambda: not self.tasks.active)
+        finally:
+            release_slow.set()
+
+        self.assertEqual(page._detail_sale_id, second_sale)
+        self.assertEqual(page.detail_model.index(0, 0).data(), str(second_item))
+        page.deleteLater()
+
     def test_stale_table_selections_fail_closed(self):
         expense_id = self.purchase("Cable", "Extra", 5)
         inventory = InventoryPage(self.services, tasks=self.tasks)
@@ -2009,6 +2120,93 @@ class QtWorkflowTests(unittest.TestCase):
         self.assertEqual([proof.file_name for proof in sold.proofs], ["payment.png"])
         inventory.deleteLater()
         sales.deleteLater()
+
+    def test_sold_component_full_editing_refreshes_both_history_views(self):
+        expense_id = self.services.add_expenses(
+            [
+                NewExpense.create(
+                    "Original component",
+                    "Extra",
+                    10,
+                    TEST_DATE - timedelta(days=4),
+                )
+            ]
+        )[0]
+        self.services.sell_items([expense_id], SaleTerms.create(25, TEST_DATE))
+        history_edit = NewExpense.create(
+            "History-edited GPU",
+            "GPU",
+            "12.34",
+            TEST_DATE - timedelta(days=3),
+            ItemDetails(
+                vendor="History vendor",
+                serial_number="HISTORY-1",
+                storage_location="Sold shelf",
+                condition="Used",
+                warranty_until=TEST_DATE + timedelta(days=30),
+                notes="Edited from purchase history",
+            ),
+        )
+        detail_edit = NewExpense.create(
+            "Detail-edited SSD",
+            "SSD",
+            "15.67",
+            TEST_DATE - timedelta(days=2),
+            ItemDetails(
+                vendor="Detail vendor",
+                serial_number="DETAIL-2",
+                storage_location="Customer",
+                condition="Refurbished",
+                warranty_until=TEST_DATE + timedelta(days=60),
+                notes="Edited from sale details",
+            ),
+        )
+        window = MainWindow(self.services)
+        self.wait_for_window(window)
+        window.tabs.setCurrentWidget(window.sales_page)
+        self.wait_for_window(window)
+        page = window.sales_page
+
+        page.expense_table.selectRow(0)
+        with patch.object(
+            ExpenseEditDialog, "get_expense", return_value=history_edit
+        ) as dialog:
+            page.edit_selected_expense()
+        dialog.assert_called_once()
+        self.wait_until(lambda: not window.tasks.active)
+
+        history_edited = self.services.list_expenses()[0]
+        self.assertEqual(history_edited.name, history_edit.name)
+        self.assertEqual(history_edited.item_type, history_edit.item_type)
+        self.assertEqual(history_edited.price_cents, history_edit.price_cents)
+        self.assertEqual(history_edited.purchase_date, history_edit.purchase_date)
+        self.assertEqual(history_edited.details, history_edit.details)
+        self.assertEqual(page.expense_model.index(0, 1).data(), history_edit.name)
+        self.assertEqual(page.sale_model.index(0, 3).data(), history_edit.name)
+
+        page.sale_table.selectRow(0)
+        self.wait_until(lambda: page.detail_model.rowCount() == 1)
+        page.detail_table.selectRow(0)
+        with patch.object(
+            ExpenseEditDialog, "get_expense", return_value=detail_edit
+        ) as dialog:
+            page.edit_selected_detail()
+        dialog.assert_called_once()
+        self.wait_until(lambda: not window.tasks.active)
+
+        edited = self.services.list_expenses()[0]
+        self.assertEqual(edited.name, detail_edit.name)
+        self.assertEqual(edited.item_type, detail_edit.item_type)
+        self.assertEqual(edited.price_cents, detail_edit.price_cents)
+        self.assertEqual(edited.purchase_date, detail_edit.purchase_date)
+        self.assertEqual(edited.details, detail_edit.details)
+        self.assertEqual(page.expense_model.index(0, 1).data(), detail_edit.name)
+        self.assertEqual(page.sale_model.index(0, 3).data(), detail_edit.name)
+
+        page.sale_table.selectRow(0)
+        self.wait_until(lambda: page.detail_model.rowCount() == 1)
+        self.assertEqual(page.detail_model.index(0, 1).data(), detail_edit.name)
+        window.deleteLater()
 
     def test_pc_sale_and_undo_through_qt_pages(self):
         ids = [self.purchase("CPU", "CPU", 100), self.purchase("RAM", "RAM", 50)]

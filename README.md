@@ -80,6 +80,32 @@ layouts. Databases from the clean Qt baseline are upgraded through ordered,
 transactional migrations after a verified pre-upgrade backup. Modified, unknown,
 and legacy schemas are rejected without being changed.
 
+Transition from the final Tkinter build is an explicit, one-time operation; it
+is never attempted during application startup. Close the original application,
+make its normal backup, and import into a path that does not exist:
+
+```powershell
+.venv\Scripts\python -m pcims.legacy_import `
+  "$env:LOCALAPPDATA\PCIMS\pcims_db.db" `
+  "$env:LOCALAPPDATA\PCIMS\pcims-imported.db"
+```
+
+The importer opens the source read-only, preserves item and sale IDs, preserves
+every recorded component (including multiple parts of one type), and builds a
+current-schema database in a private staging file. It publishes the new file
+only after schema, relationship, date, money, foreign-key, and SQLite integrity
+checks all pass. Historical PC sales are recovered by cross-checking their typed
+legacy slots against the complete per-item PC assignments. It never overwrites
+a target. Only the final Tkinter schema
+(`user_version=2`) is accepted; ambiguous states such as an unsold item hidden
+from inventory or case-insensitively colliding PC names are rejected with a
+repair instruction instead of being guessed or silently discarded.
+
+To activate the imported data safely, open the Qt application, choose
+**Settings > Restore backup**, and select `pcims-imported.db`. The application
+first preserves its current database, then switches to the validated imported
+one. Do not rename over or manually delete an existing `pcims.db`.
+
 Components can be corrected in place, including after sale or while assigned to
 a PC. Editing an active PC atomically updates its name and complete ordered parts
 list, and each component has its own ID, so multiple parts of the same category
