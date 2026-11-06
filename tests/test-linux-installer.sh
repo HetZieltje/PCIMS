@@ -28,6 +28,8 @@ EOF
 chmod +x "$fake_python"
 
 data_home="$test_root/data"
+mkdir -p "$data_home"
+data_home=$(CDPATH= cd -- "$data_home" && pwd -P)
 install_root="$data_home/pcims/application"
 mkdir -p "$install_root"
 printf '%s\n' old > "$install_root/version-marker"
